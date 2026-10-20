@@ -794,6 +794,10 @@
   "tests/test_private_inputs.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"
+  },
+  "tests/test_public_ci_reliability.py": {
+   "status": "public",
+   "reason": "synthetic selector, deadline, telemetry and publication negative controls"
   }
  },
  "deselect": [

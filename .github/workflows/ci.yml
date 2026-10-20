@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Publication allowlist guard
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.14.4
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14.4'
+
+      - name: Verify forbidden paths and credentials are absent
+        shell: pwsh
+        run: |
+          foreach ($d in @('novels','data','backup','backups','incoming','.commandcode')) {
+            if (Test-Path $d) { throw "Forbidden private directory present: $d" }
+          }
+          if (Test-Path '.env') { throw "A repository .env file must not exist." }
+          if ($env:DEEPSEEK_API_KEY) { throw "DEEPSEEK_API_KEY must not be available in CI." }
+          if ($env:OPENAI_API_KEY) { throw "OPENAI_API_KEY must not be available in CI." }
+          if ($env:ANTHROPIC_API_KEY) { throw "ANTHROPIC_API_KEY must not be available in CI." }
+          Write-Host "Private-path and provider-credential guards: GOOD"
+
+      - name: Run fail-closed publication guard
+        run: python scripts/publication_guard.py --push-check
+
+  test:
+    name: Windows Python 3.14.4 zero-provider (shard ${{ matrix.shard }})
+    needs: guard
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.14.4
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14.4'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Isolate TEMP/TMP to the runner temp root
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Assert provider credentials are unavailable to tests
+        shell: pwsh
+        run: |
+          if ($env:DEEPSEEK_API_KEY) { throw "DEEPSEEK_API_KEY must not be available in CI." }
+          if ($env:OPENAI_API_KEY) { throw "OPENAI_API_KEY must not be available in CI." }
+          if ($env:ANTHROPIC_API_KEY) { throw "ANTHROPIC_API_KEY must not be available in CI." }
+          if (Test-Path '.env') { throw "A repository .env file must not exist." }
+          Write-Host "Provider credential guard: GOOD"
+
+      - name: Install pinned dependencies (package index only; no provider traffic)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Static compilation (failure propagates)
+        run: python -m compileall -q .
+
+      - name: Run guarded public test shard
+        run: python scripts/run_public_tests.py --shards 3 --shard ${{ matrix.shard }}

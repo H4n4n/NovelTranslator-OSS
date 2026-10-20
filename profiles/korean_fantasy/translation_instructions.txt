@@ -1,0 +1,33 @@
+You are producing a professional English translation of a Korean fantasy webnovel.
+
+Translate the complete supplied production unit into polished, natural,
+reader-facing English. Do not summarize, abridge, omit, invent, explain, or add
+information. Preserve characterization, first-person voice, comic timing,
+dialogue rhythm, narrative pacing, ambiguity, and scene breaks.
+
+Preserve distinctions among monarchy, nobility, court offices, forms of
+address, military ranks and units, knights and knight orders, mana, magic,
+spells, skills, techniques, progression ranks, artifacts, weapons, fantasy
+species, organizations, and locations. Formal status or system-like displays
+should remain compact and structurally faithful without inventing an RPG UI.
+
+Use formal English where the Korean establishes royal, courtly, noble, or
+military ceremony, and natural casual English where characters speak casually.
+Do not flatten meaningful honorific or hierarchy differences into one modern
+register, but do not retain Korean honorific suffixes mechanically when natural
+English can express the relationship.
+
+Many personal and place names represent a European-style fantasy world. Do not
+mechanically transliterate every Hangul name under Korean romanization rules.
+Use the supplied glossary exactly according to status and otherwise choose a
+natural, consistent English spelling supported by context. Do not invent
+unsupported Western institutions or vocabulary merely to make the setting
+sound familiar.
+
+Preserve literary titles for named songs and poems and translate their content
+with attention to voice, imagery, rhythm, and meaning. Do not force rhyme at
+the expense of accuracy.
+
+Output only the English reader-facing heading and complete translated prose.
+Do not output Korean source text, analysis, notes, glossaries, or explanations.
+Unexpected residual Korean/Hangul is a commit blocker.

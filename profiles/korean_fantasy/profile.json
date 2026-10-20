@@ -1,0 +1,149 @@
+{
+  "id": "korean_fantasy",
+  "display_name": "Korean Fantasy",
+  "description": "Korean fantasy fiction with stable monarchy, nobility, military, knight, magic, progression, and fantasy-world terminology.",
+  "translation_policy": {
+    "style": [
+      "Natural, polished English fantasy prose faithful to the Korean source.",
+      "Preserve narrator voice, humor, characterization, hierarchy, and shifts between courtly, military, and casual registers.",
+      "Use clear English fantasy terminology without mechanically romanizing names that represent European-style people or institutions."
+    ],
+    "terminology_preservation_rules": [
+      "Keep recurring royal titles, noble ranks, court offices, military ranks and units, knight orders, magic, mana mechanics, progression ranks, species, artifacts, weapons, skills, techniques, and system terms stable.",
+      "Distinguish formal named concepts from ordinary vocabulary and reject generic objects, actions, and one-off descriptions.",
+      "Preserve mechanically distinct progression and magic concepts rather than collapsing them into generic levels, ranks, power, or mana."
+    ],
+    "pinyin_preference": "Do not apply Chinese pinyin policy. Korean personal and place names use calibrated romanization, while fantasy-European names should use natural canonical-looking English spellings supported by context rather than mechanical Korean romanization.",
+    "semantic_translation_preference": "Prefer natural semantic English for descriptive institutions, titles, military formations, magic, skills, and artifacts where the source supports it; preserve established or calibrated proper-name spellings consistently."
+  },
+  "auxiliary_policy": {
+    "terminology_distinctions": [
+      "Keep royal and noble titles distinct from knight or magical progression ranks.",
+      "Keep mana structures, spell terminology, skills, and named techniques mechanically distinct.",
+      "Treat fantasy-European proper names as calibrated names, not automatic Korean transliterations."
+    ]
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "title",
+      "noble title",
+      "government office",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "location",
+      "species",
+      "artifact",
+      "weapon",
+      "magic",
+      "spell",
+      "skill",
+      "technique",
+      "progression rank",
+      "system term",
+      "song",
+      "poem",
+      "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "character",
+      "alias",
+      "title",
+      "noble title",
+      "government office",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "location",
+      "progression rank",
+      "system term",
+      "magic",
+      "spell",
+      "skill",
+      "technique",
+      "species",
+      "artifact",
+      "weapon"
+    ],
+    "review_priorities": [
+      "Character and fantasy-European proper-name spellings.",
+      "Royal, noble, court, military, and knight hierarchies.",
+      "Mana structures, magic, spells, skills, techniques, and progression ranks.",
+      "Organizations, factions, locations, species, named artifacts, and weapons.",
+      "Formal songs, poems, and system-like labels when recurring.",
+      "Reject generic vocabulary, ordinary objects, and one-off descriptions."
+    ],
+    "retroactive_safe_categories": [
+      "character",
+      "alias",
+      "title",
+      "noble title",
+      "government office",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "location",
+      "species",
+      "artifact",
+      "weapon",
+      "magic",
+      "spell",
+      "skill",
+      "technique",
+      "progression rank",
+      "system term",
+      "song",
+      "poem",
+      "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "government office",
+      "military unit",
+      "organization",
+      "magic",
+      "spell",
+      "skill",
+      "technique",
+      "system term",
+      "song",
+      "poem",
+      "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "artifact": ["ordinary object", "common object"],
+      "weapon": ["ordinary weapon", "common weapon"],
+      "magic": ["ordinary trick", "generic magic"],
+      "skill": ["ordinary skill", "generic ability"],
+      "technique": ["ordinary movement", "generic attack"],
+      "specialized recurring term": ["ordinary duty", "daily work", "generic action"]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "magic",
+      "spell",
+      "skill",
+      "technique",
+      "song",
+      "poem"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Character and fantasy-European proper-name consistency.",
+      "Royal, noble, court, military, and knight hierarchy consistency.",
+      "Magic, mana, spell, skill, technique, and progression terminology.",
+      "Organizations, factions, locations, species, artifacts, and weapons.",
+      "Formal song, poem, and system-display titles.",
+      "Register consistency across courtly, military, comic, and intimate scenes.",
+      "Residual Hangul or Korean source script in reader-facing English."
+    ]
+  }
+}

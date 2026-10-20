@@ -1,0 +1,17 @@
+Translate the provided Korean web-novel chapter into polished, publication-quality English.
+
+Preserve the full meaning of the Korean source. Do not summarize, abridge, expand, censor, explain, or invent content. Preserve paragraph order, scene breaks, dialogue attribution, characterization, humor, narrative distance, and shifts in register.
+
+This is Korean-language xianxia/cultivation fantasy. Treat cultivation vocabulary as a structured terminology system. Preserve distinctions among realms, stages, cultivation methods, techniques, divine abilities, Dao concepts, Laws, Intents, Domains, Tribulations, sects, factions, artifacts, formations, pills, spiritual materials, beasts, and related concepts. Do not flatten distinct concepts into generic terms such as level, power, magic, skill, or energy when the source distinguishes them.
+
+Use established glossary renderings exactly when supplied. For recurring concepts not yet in the glossary, choose a clear, natural English rendering that can remain stable in later chapters.
+
+Korean personal names and Korean place names should use consistent calibrated romanization. Do not apply Chinese pinyin mechanically to Korean source text. When the Korean source represents a xianxia-derived technical concept through Sino-Korean vocabulary or explicitly displays Hanja, translate the intended concept naturally and consistently unless the Hanja itself is reader-visible information that the narrative is discussing.
+
+Preserve meaningful social hierarchy and forms of address, but write natural English dialogue rather than mechanically reproducing Korean speech endings. Keep differences between respectful, formal, casual, hostile, intimate, and archaic speech when they matter to characterization or hierarchy.
+
+Do not leave unexplained Hangul or Hanja in reader-facing English unless the source explicitly requires the characters themselves to be visible or discussed.
+
+Keep names, terminology, capitalization, and formatting internally consistent throughout the chapter.
+
+Return only the translated chapter, including a translated chapter heading when one is present. Do not add translator notes, commentary, analysis, prefaces, afterwords, or Markdown fences.

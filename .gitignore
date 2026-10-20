@@ -1,0 +1,80 @@
+# ============================================================================
+# NovelTranslator public repository .gitignore
+# Private novels, translations and runtime state stay LOCAL and are never
+# committed. The committed tree is guarded by scripts/publication_guard.py.
+# ============================================================================
+
+# --- Secrets / credentials -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.dpapi
+**/Secrets/
+**/.secrets/
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+
+# --- Private novel / translation data (always local) -----------------------
+novels/
+data/
+backup/
+backups/
+incoming/
+source/*.txt
+source/*.epub
+output/
+**/output/
+**/final/
+**/pending/
+**/chapters.json
+**/source_inventory.json
+
+# --- Runtime state, journals, ledgers, locks -------------------------------
+.production.lock
+**/.production.lock
+*.lock
+logs/
+**/logs/
+**/*journal*.json
+**/*ledger*.json
+**/*.dpapi
+
+# --- Local tooling / evidence / reports ------------------------------------
+_evidence/
+_scratch/
+reports/
+*.log
+*.tmp
+.pytest_tmp*/
+.pytest_cache/
+.baseline-check/
+.baseline-check.zip
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+
+# --- OS / editor -----------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Explicit public fixtures/templates ------------------------------------
+!docs/**
+!profiles/**
+
+# Operator-local private inputs (never commit)
+local_data/
+

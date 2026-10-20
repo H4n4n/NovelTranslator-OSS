@@ -1,0 +1,126 @@
+{
+  "id": "historical_military",
+  "display_name": "Historical Military",
+  "description": "Chinese historical and military fiction with institutionally precise terminology and natural English prose.",
+  "translation_policy": {
+    "style": [
+      "Natural, polished English historical and genre prose.",
+      "Preserve character voice, hierarchy, cultural context, and authorial intent.",
+      "Avoid unnecessary embellishment or Westernization."
+    ],
+    "terminology_preservation_rules": [
+      "Use established glossary renderings exactly according to their status.",
+      "Preserve distinctions among historical offices, official titles, military ranks, military units, institutions, factions, geography, states, dynasties, and recurring historical or military terminology.",
+      "Do not replace Chinese institutions or titles with approximate Western equivalents merely for familiarity.",
+      "Do not admit ordinary vocabulary, generic objects, generic tactical phrases, or one-off descriptions into the glossary."
+    ],
+    "pinyin_preference": "Personal names normally use established romanization or pinyin; meaningful titles, aliases, and epithets may be translated when context requires it.",
+    "semantic_translation_preference": "Prefer readable semantic English for descriptive organizations, sects, locations, techniques, artifacts, and institutions when accurate and consistent; do not default automatically to pinyin."
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "historical person",
+      "historical office",
+      "military rank",
+      "military unit",
+      "state",
+      "organization",
+      "faction",
+      "sect",
+      "location",
+      "technique",
+      "artifact",
+      "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "character",
+      "alias",
+      "historical person",
+      "historical office",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "location",
+      "state",
+      "specialized recurring term"
+    ],
+    "review_priorities": [
+      "Character names, aliases, and proper-name romanization.",
+      "Official titles, government offices, military ranks, and military units.",
+      "Institutions, organizations, factions, sects, states, and dynasties.",
+      "Historical geography and recurring historical or military terminology.",
+      "Formal named techniques and artifacts where future consistency matters.",
+      "Reject ordinary vocabulary, generic objects, promotional language, and one-off descriptions."
+    ],
+    "retroactive_safe_categories": [
+      "character",
+      "alias",
+      "historical person",
+      "historical office",
+      "military rank",
+      "military unit",
+      "state",
+      "organization",
+      "faction",
+      "sect",
+      "location",
+      "technique",
+      "artifact",
+      "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "organization",
+      "military unit",
+      "historical office",
+      "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "artifact": [
+        "chair",
+        "table",
+        "mirror",
+        "bowl",
+        "cup",
+        "door",
+        "gate",
+        "box",
+        "basket",
+        "bed",
+        "lamp",
+        "lantern",
+        "pot",
+        "jar"
+      ],
+      "specialized recurring term": [
+        "duty",
+        "patrol",
+        "work",
+        "strategy",
+        "attack",
+        "retreat",
+        "guard duty",
+        "night patrol"
+      ]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "technique"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Character names and aliases.",
+      "Historical offices, official titles, military ranks, and military units.",
+      "Institutions, factions, states, dynasties, and historical geography.",
+      "Recurring historical and military terminology.",
+      "Formal technique capitalization and accidental synonym drift.",
+      "Removal of low-value ordinary vocabulary while preserving locked terms."
+    ]
+  }
+}

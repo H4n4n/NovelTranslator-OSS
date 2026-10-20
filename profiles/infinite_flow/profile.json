@@ -1,0 +1,303 @@
+{
+  "id": "infinite_flow",
+  "display_name": "Infinite Flow",
+  "description": "Chinese Infinite Flow fiction with stable overarching system mechanics and genre-appropriate terminology across changing scenario worlds.",
+  "translation_policy": {
+    "style": [
+      "Natural, polished English webnovel prose that preserves tension, horror, urgency, comedy, tactics, action, and character voice.",
+      "Preserve deliberate ambiguity and technically important explanations without adding explanations absent from the source.",
+      "Preserve each embedded world's genre and vocabulary instead of forcing every scenario into one stylistic register."
+    ],
+    "terminology_preservation_rules": [
+      "Use established glossary renderings according to their status, with special consistency for formal system labels, missions, objectives, rewards, currencies, attributes, stats, bloodlines, enhancements, abilities, skills, ranks, and difficulty levels.",
+      "Keep overarching Infinite Flow system terminology stable across transitions while preserving the distinct supernatural, technological, military, historical, wuxia, cultivation, fantasy, game, or other terminology of the current embedded world.",
+      "Distinguish formal mechanically significant labels from the same Chinese words used as ordinary vocabulary.",
+      "Keep named worlds, scenarios, organizations, teams, abilities, bloodlines, enhancements, equipment, creatures, species, monsters, and recurring mechanics stable when context establishes them as terminology.",
+      "Preserve clearly identifiable established franchise proper names only when the source reference is unambiguous; do not invent franchise terminology from uncertain evidence.",
+      "Do not admit ordinary verbs, body parts, clothing, generic weapons or monsters, ordinary locations, emotions, combat actions, or one-off descriptions merely because a related category is allowed."
+    ],
+    "pinyin_preference": "Chinese personal names normally use consistent romanization or pinyin; translate meaningful titles, aliases, epithets, team names, and descriptive proper names when the source and established novel style support it.",
+    "semantic_translation_preference": "Prefer clear semantic English for formal system mechanics and descriptive named terms when accurate, while preserving established proper names and the terminology conventions appropriate to each embedded world."
+  },
+  "auxiliary_policy": {
+    "terminology_distinctions": [
+      "Distinguish ordinary vocabulary from formal system labels, named mechanics, and mechanically significant recurring terms.",
+      "Keep overarching system terminology consistent across scenarios without importing one embedded world's vocabulary into another.",
+      "Keep worlds and scenario names distinct from generic references to a world, place, stage, or situation.",
+      "Keep missions, mission types, objectives, rewards, currencies, ranks, difficulty levels, rules, and penalties as separate mechanical concepts.",
+      "Keep bloodlines, enhancements, classes, professions, attributes, stats, skills, abilities, techniques, and cultivation concepts distinct unless the source explicitly equates them.",
+      "Keep named items, equipment, weapons, artifacts, consumables, and materials distinct from generic objects.",
+      "Preserve unambiguous established franchise proper names; treat uncertain references conservatively and leave resolution to novel-specific glossary review."
+    ]
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "organization",
+      "faction",
+      "team",
+      "title",
+      "location",
+      "world",
+      "scenario",
+      "system term",
+      "mission",
+      "mission type",
+      "objective",
+      "reward",
+      "currency",
+      "attribute",
+      "stat",
+      "skill",
+      "ability",
+      "technique",
+      "cultivation technique",
+      "cultivation realm",
+      "bloodline",
+      "enhancement",
+      "class",
+      "profession",
+      "item",
+      "equipment",
+      "weapon",
+      "artifact",
+      "consumable",
+      "material",
+      "creature",
+      "species",
+      "monster",
+      "status effect",
+      "rule",
+      "mechanic",
+      "rank",
+      "difficulty",
+      "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "character",
+      "alias",
+      "system term",
+      "mission",
+      "mission type",
+      "objective",
+      "reward",
+      "currency",
+      "world",
+      "scenario",
+      "organization",
+      "team",
+      "bloodline",
+      "enhancement",
+      "skill",
+      "ability",
+      "attribute",
+      "stat",
+      "equipment",
+      "rank",
+      "difficulty",
+      "rule",
+      "mechanic",
+      "class",
+      "profession",
+      "cultivation realm",
+      "cultivation technique",
+      "species",
+      "monster"
+    ],
+    "review_priorities": [
+      "Character names, aliases, forms of address, organizations, and teams must remain stable.",
+      "Formal system terminology must remain distinct from identical words used as ordinary vocabulary.",
+      "Mission names, mission types, objectives, rewards, currencies, ranks, difficulty levels, unlock conditions, penalties, rules, and mechanics require stable renderings when formally defined.",
+      "World and scenario names must remain consistent across transitions and must not be confused with generic descriptions.",
+      "Bloodlines, enhancements, classes, professions, attributes, stats, skills, abilities, techniques, and cultivation concepts must retain source distinctions.",
+      "Named items, equipment, weapons, artifacts, consumables, and materials enter the glossary when mechanically or narratively significant, not merely because they occur.",
+      "Recurring named creatures, species, and monsters require stable renderings; generic creatures do not.",
+      "Embedded-world terminology must follow that world's horror, science-fiction, military, historical, wuxia, cultivation, fantasy, game, or other genre context.",
+      "Unambiguous established franchise proper names should be preserved; uncertain identification should remain conservative and be flagged for review.",
+      "Reject ordinary vocabulary, mundane objects, generic actions, emotions, locations, weapons, monsters, and one-off descriptions."
+    ],
+    "retroactive_safe_categories": [
+      "character",
+      "alias",
+      "organization",
+      "faction",
+      "team",
+      "location",
+      "world",
+      "scenario",
+      "system term",
+      "mission",
+      "mission type",
+      "objective",
+      "reward",
+      "currency",
+      "attribute",
+      "stat",
+      "skill",
+      "ability",
+      "technique",
+      "cultivation technique",
+      "cultivation realm",
+      "bloodline",
+      "enhancement",
+      "class",
+      "profession",
+      "item",
+      "equipment",
+      "weapon",
+      "artifact",
+      "consumable",
+      "material",
+      "creature",
+      "species",
+      "monster",
+      "status effect",
+      "rule",
+      "mechanic",
+      "rank",
+      "difficulty",
+      "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "organization",
+      "team",
+      "world",
+      "scenario",
+      "system term",
+      "mission",
+      "mission type",
+      "objective",
+      "skill",
+      "ability",
+      "technique",
+      "cultivation technique",
+      "enhancement",
+      "equipment",
+      "rule",
+      "mechanic",
+      "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "location": [
+        "ordinary room",
+        "generic room",
+        "ordinary building",
+        "generic building"
+      ],
+      "world": [
+        "ordinary world",
+        "generic world"
+      ],
+      "scenario": [
+        "ordinary situation",
+        "generic situation"
+      ],
+      "system term": [
+        "ordinary instruction",
+        "generic instruction"
+      ],
+      "mission": [
+        "ordinary task",
+        "daily chore"
+      ],
+      "attribute": [
+        "ordinary characteristic",
+        "personality trait"
+      ],
+      "stat": [
+        "ordinary statistic",
+        "generic statistic"
+      ],
+      "skill": [
+        "ordinary skill",
+        "generic skill"
+      ],
+      "ability": [
+        "ordinary ability",
+        "generic ability"
+      ],
+      "item": [
+        "ordinary item",
+        "common object",
+        "ordinary clothing",
+        "generic body part"
+      ],
+      "equipment": [
+        "ordinary equipment",
+        "generic equipment"
+      ],
+      "weapon": [
+        "ordinary weapon",
+        "generic weapon",
+        "common weapon"
+      ],
+      "artifact": [
+        "ordinary object",
+        "common object"
+      ],
+      "material": [
+        "ordinary material",
+        "common material"
+      ],
+      "creature": [
+        "ordinary creature",
+        "generic creature"
+      ],
+      "species": [
+        "ordinary animal",
+        "generic animal"
+      ],
+      "monster": [
+        "ordinary monster",
+        "generic monster",
+        "random monster"
+      ],
+      "status effect": [
+        "ordinary fear",
+        "ordinary anger",
+        "generic emotion"
+      ],
+      "rule": [
+        "ordinary advice",
+        "common-sense rule"
+      ],
+      "mechanic": [
+        "ordinary action",
+        "generic action"
+      ],
+      "specialized recurring term": [
+        "generic combat action",
+        "ordinary movement",
+        "one-off description"
+      ]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "technique",
+      "cultivation technique"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Character-name consistency.",
+      "Alias consistency.",
+      "Formal system terminology versus generic vocabulary.",
+      "Mission names, mission types, objectives, rewards, rules, unlock conditions, and penalties.",
+      "World and scenario names.",
+      "Point and currency terminology.",
+      "Bloodline and enhancement terminology.",
+      "Named abilities, skills, and techniques.",
+      "Attributes and stats.",
+      "Named items, equipment, weapons, artifacts, consumables, and materials.",
+      "Ranks, evaluation labels, and difficulty levels.",
+      "Terminology carried consistently across scenario transitions.",
+      "Accidental terminology contamination between embedded worlds or genre registers.",
+      "Residual Chinese or CJK text in reader-facing English.",
+      "Inconsistent capitalization of formal names without indiscriminately capitalizing ordinary phrases."
+    ]
+  }
+}

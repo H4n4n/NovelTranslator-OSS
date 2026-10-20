@@ -1,0 +1,11 @@
+#!/bin/sh
+# Local pre-push publication guard (fail-closed).
+# Install once per clone:  git config core.hooksPath .githooks
+# This hook runs BEFORE upload; GitHub CI runs AFTER upload and cannot prevent
+# an accidental local disclosure.
+python "$(git rev-parse --show-toplevel)/scripts/publication_guard.py" --pre-push
+status=$?
+if [ "$status" -ne 0 ]; then
+  echo "pre-push: publication guard failed; push blocked." >&2
+fi
+exit "$status"

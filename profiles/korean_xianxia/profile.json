@@ -1,0 +1,72 @@
+{
+  "id": "korean_xianxia",
+  "display_name": "Korean Xianxia / Cultivation Fantasy",
+  "description": "Korean-language cultivation fantasy using xianxia-style realms, techniques, sects, artifacts, Dao concepts, and metaphysical terminology.",
+  "translation_policy": {
+    "style": [
+      "Natural, polished English fantasy prose faithful to the Korean source.",
+      "Preserve narrator voice, humor, characterization, hierarchy, and shifts between casual, formal, technical, and combat registers.",
+      "Preserve technical distinctions among cultivation, martial, social, magical, and metaphysical concepts rather than flattening them into generic fantasy vocabulary."
+    ],
+    "terminology_preservation_rules": [
+      "Keep recurring cultivation realms, stages, systems, techniques, sects, factions, artifacts, formations, pills, spiritual materials, beasts, Dao concepts, Laws, Intents, Domains, Tribulations, and related terminology stable.",
+      "Keep character names, aliases, forms of address, ranks, offices, organizations, locations, species, and recurring system-like terms stable.",
+      "Distinguish cultivation grades and metaphysical categories from social titles, political offices, military ranks, and personal names.",
+      "Do not admit ordinary weapons, medicine, clothing, food, furniture, mundane objects, generic actions, or one-off descriptions merely because their category is allowed."
+    ],
+    "pinyin_preference": "Do not apply Chinese pinyin policy to Korean source text. Korean personal and place names use calibrated romanization unless context establishes a canonical non-Korean name; xianxia-derived technical concepts should use stable, readable English renderings guided by context and the glossary rather than mechanically reproducing Korean readings of Chinese characters.",
+    "semantic_translation_preference": "Prefer readable semantic English for descriptive cultivation institutions, sects, techniques, realms, artifacts, formations, pills, and metaphysical concepts when supported by context; preserve established proper-name spellings consistently."
+  },
+  "auxiliary_policy": {
+    "terminology_distinctions": [
+      "Treat Korean-rendered xianxia terminology as concepts to translate consistently, not as automatic Korean-name romanization.",
+      "Keep cultivation realms and stages distinct from techniques, artifacts, Dao concepts, and social ranks.",
+      "Keep Chinese-character glosses or Hanja shown explicitly by the Korean source only when reader-visible meaning requires them; otherwise translate the intended concept into English.",
+      "Preserve meaningful hierarchy in forms of address without over-literalizing Korean speech levels."
+    ]
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character", "alias", "form of address", "state", "dynasty", "noble title", "government office", "historical office", "military rank", "military unit", "political institution", "divine office", "mythological figure", "mythological species", "sect", "clan", "faction", "organization", "location", "cultivation realm", "cultivation stage", "cultivation system", "cultivation technique", "martial technique", "movement technique", "sword technique", "secret art", "divine ability", "forbidden technique", "physique", "bloodline", "spiritual root", "constitution", "artifact", "weapon", "treasure", "talisman", "formation", "pill", "medicine", "spiritual herb", "material", "beast", "race", "species", "demon", "spirit", "energy", "dao concept", "law", "intent", "domain", "tribulation", "system term", "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "cultivation realm", "cultivation stage", "cultivation system", "character", "alias", "form of address", "sect", "clan", "faction", "organization", "location", "cultivation technique", "martial technique", "movement technique", "sword technique", "secret art", "divine ability", "forbidden technique", "physique", "bloodline", "spiritual root", "artifact", "treasure", "formation", "pill", "beast", "species", "energy", "dao concept", "law", "intent", "domain", "tribulation", "system term"
+    ],
+    "review_priorities": [
+      "Cultivation realms, stages, systems, techniques, and metaphysical concepts remain distinct and stable.",
+      "Character names, aliases, and forms of address use consistent calibrated renderings.",
+      "Sects, clans, factions, organizations, locations, artifacts, formations, pills, beasts, and recurring system terms remain consistent.",
+      "Korean dialogue hierarchy and character voice remain natural in English without invented honorific content.",
+      "Residual Hangul or Hanja in reader-facing English is allowed only when explicitly required by the source meaning."
+    ],
+    "retroactive_safe_categories": [
+      "character", "alias", "sect", "clan", "faction", "organization", "location", "cultivation realm", "cultivation stage", "cultivation system", "cultivation technique", "martial technique", "movement technique", "sword technique", "secret art", "divine ability", "forbidden technique", "physique", "bloodline", "spiritual root", "constitution", "artifact", "weapon", "treasure", "talisman", "formation", "pill", "medicine", "spiritual herb", "material", "beast", "race", "species", "demon", "spirit", "energy", "dao concept", "law", "intent", "domain", "tribulation", "system term", "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "organization", "cultivation system", "government office", "military unit", "political institution", "cultivation technique", "martial technique", "movement technique", "sword technique", "secret art", "divine ability", "forbidden technique", "formation", "system term", "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "artifact": ["ordinary object", "common object"],
+      "weapon": ["ordinary weapon", "common weapon"],
+      "medicine": ["ordinary medicine", "common medicine"],
+      "pill": ["ordinary pill", "common pill"],
+      "material": ["ordinary material", "common material"],
+      "specialized recurring term": ["ordinary duty", "daily work", "generic action"]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "cultivation technique", "martial technique", "movement technique", "sword technique", "secret art", "divine ability", "forbidden technique", "formation"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Cultivation realm, stage, system, technique, Dao, Law, Intent, Domain, and Tribulation consistency.",
+      "Character, alias, form-of-address, sect, faction, organization, and location consistency.",
+      "Artifacts, treasures, formations, pills, spiritual materials, beasts, species, and system-term consistency.",
+      "Natural English dialogue that preserves Korean hierarchy, humor, and character voice.",
+      "Residual Hangul or Hanja in reader-facing English and accidental untranslated source fragments."
+    ]
+  }
+}

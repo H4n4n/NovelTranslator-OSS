@@ -40,8 +40,22 @@ merge tree. The selector requires clean tracked sources before execution and
 verifies the same identity and cleanliness afterward, including failure paths.
 CI repeats the cleanliness check with `if: always()`.
 
-The pytest telemetry plugin emits flushed collection/test/phase start records
-and JSONL phase timings, plus a collected-node manifest and module totals.
+The pytest telemetry plugin emits sanitized, flushed records through a reporting
+pipe duplicated before pytest descriptor capture. It does not open or write
+any diagnostic files during test phases or session finalization. This preserves
+import-safety tests that forbid file I/O until monkeypatch fixture cleanup.
+Only the supervising process persists JSONL events, collected-node manifests
+and module totals. The pipe is not a filesystem handle or a credential access
+bypass; the zero-provider and import-safety protections remain unchanged.
+
+The supervisor accepts only reviewed metadata fields, public module identities,
+hashed parameter identities, finite durations and valid outcomes. Frames are
+limited to 64 KiB, collected nodes to 20,000, and the event stream to 100,000
+records / 64 MiB per run. Raw pytest output is forwarded to the console without
+being retained in diagnostic artifacts. Malformed/oversized frames, missing
+completion and receiver failures prevent a zero process exit from passing.
+Reporting exceptions inside pytest are sticky failures, not hook exceptions
+that interrupt fixture cleanup or obscure a primary assertion failure.
 A 60-second parent heartbeat remains visible during a stalled import or test.
 Parameter IDs are hashed; diagnostics do not retain captured output, fixtures,
 tracebacks, credential values, or arbitrary local paths. Test names and public

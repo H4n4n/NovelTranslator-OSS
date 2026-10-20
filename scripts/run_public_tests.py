@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import re
+import threading
 import os
 import subprocess
 import sys
@@ -17,6 +20,11 @@ REPO = Path(__file__).resolve().parents[1]
 CLASSIFICATION = REPO / 'tests/public_test_classification.json'
 SCHEDULE = REPO / 'tests/public_shard_schedule.json'
 WRAPPER = REPO / 'tests/zero_provider_validation.py'
+FRAME_PREFIX = b'[public-ci-record] '
+MAX_FRAME_BYTES = 65536
+MAX_EVENTS = 100000
+MAX_TELEMETRY_BYTES = 64 * 1024 * 1024
+
 DPAPI_NODE = 'tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip'
 
 
@@ -119,23 +127,165 @@ def stop_process(proc):
     proc.wait(timeout=15)
 
 
-def run_bounded(command, seconds):
+class MetadataReceiver:
+    """The supervisor owns persistence and accepts only bounded metadata schemas."""
+    def __init__(self, directory):
+        self.directory = external_directory(directory)
+        self.manifest = read_json(self.directory / 'selection.json')
+        self.selected = set(self.manifest['selected'])
+        self.nodes = {}
+        self.phases = set()
+        self.outcomes = {}
+        self.collection_valid = False
+        self.terminal = False
+        self.failed = False
+        self.events = 0
+        self.bytes = 0
+
+    def accept(self, record):
+        common = {'event', 'elapsed_seconds'}
+        node = {'module', 'function', 'node_sha256'}
+        schemas = {
+            'collection_start': {'module'},
+            'collection_end': {'module', 'seconds', 'outcome'},
+            'collection_node': node,
+            'collection_finish': {'tests', 'deselected', 'deselected_sha256', 'skipped_modules'},
+            'test_start': node,
+            'phase_start': node | {'phase'},
+            'phase_end': node | {'phase', 'seconds', 'outcome'},
+            'session_finish': {'source', 'complete', 'successful', 'collected', 'finished', 'exit_code', 'outcomes', 'modules'},
+        }
+        event = record.get('event')
+        if event not in schemas or set(record) != common | schemas[event] or self.terminal:
+            raise ValueError('invalid telemetry schema or event after completion')
+        for key in ('elapsed_seconds', 'seconds'):
+            if key in record and (type(record[key]) not in (int, float) or not math.isfinite(record[key]) or record[key] < 0):
+                raise ValueError('invalid telemetry duration')
+        for key in ('tests', 'deselected', 'collected', 'finished'):
+            if key in record and (type(record[key]) is not int or record[key] < 0):
+                raise ValueError('invalid telemetry count')
+        if 'module' in record and record['module'] not in self.selected:
+            raise ValueError('unexpected telemetry module')
+        if 'node_sha256' in record:
+            if not re.fullmatch(r'[a-f0-9]{64}', record['node_sha256']) or not re.fullmatch(r'[A-Za-z0-9_:]{1,200}', record['function']):
+                raise ValueError('invalid redacted node identity')
+        if 'phase' in record and record['phase'] not in {'setup', 'call', 'teardown'}:
+            raise ValueError('invalid telemetry phase')
+        if 'outcome' in record and record['outcome'] not in {'passed', 'failed', 'skipped'}:
+            raise ValueError('invalid telemetry outcome')
+        if event == 'collection_node':
+            digest = record['node_sha256']
+            if digest in self.nodes or len(self.nodes) >= 20000:
+                raise ValueError('duplicate or excessive collected nodes')
+            self.nodes[digest] = {k: record[k] for k in node}
+        elif event == 'collection_finish':
+            skipped = record['skipped_modules']
+            expected = [hashlib.sha256(n.encode()).hexdigest() for n in self.manifest['selected_deselect']]
+            if (self.collection_valid or not self.nodes or record['tests'] != len(self.nodes)
+                    or sorted(record['deselected_sha256']) != sorted(expected) or record['deselected'] != len(expected)
+                    or not isinstance(skipped, list) or not set(skipped) <= self.selected
+                    or {n['module'] for n in self.nodes.values()} | set(skipped) != self.selected):
+                raise ValueError('collection metadata mismatch')
+            self.collection_valid = True
+            write_json(self.directory / 'collected.json', {'source': self.manifest['source'],
+                       'nodes': list(self.nodes.values()), 'deselected_sha256': record['deselected_sha256'],
+                       'skipped_modules': skipped})
+        elif event in {'test_start', 'phase_start', 'phase_end'}:
+            digest = record['node_sha256']
+            if not self.collection_valid or self.nodes.get(digest) != {k: record[k] for k in node}:
+                raise ValueError('phase without matching collection')
+            if event == 'phase_end':
+                phase = (digest, record['phase'])
+                if phase in self.phases:
+                    raise ValueError('duplicate phase result')
+                self.phases.add(phase)
+                key = record['phase'] + ':' + record['outcome']
+                self.outcomes[key] = self.outcomes.get(key, 0) + 1
+        elif event == 'session_finish':
+            finished = sum(phase == 'teardown' for _, phase in self.phases)
+            complete = self.collection_valid and len(self.nodes) > 0 and finished == len(self.nodes)
+            if (record['source'] != self.manifest['source'] or type(record['exit_code']) is not int
+                    or type(record['complete']) is not bool or type(record['successful']) is not bool
+                    or record['collected'] != len(self.nodes) or record['finished'] != finished
+                    or record['complete'] != complete or record['outcomes'] != self.outcomes
+                    or record['successful'] != (complete and record['exit_code'] == 0)
+                    or not isinstance(record['modules'], dict) or not set(record['modules']) <= self.selected):
+                raise ValueError('completion metadata mismatch')
+            for value in record['modules'].values():
+                if (not isinstance(value, dict) or set(value) != {'phase_seconds', 'collection_seconds'}
+                        or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in value.values())):
+                    raise ValueError('invalid module timings')
+            self.terminal = True
+            write_json(self.directory / 'timings.json', {k: v for k, v in record.items() if k != 'event'})
+        encoded = json.dumps(record, sort_keys=True) + '\n'
+        self.events += 1
+        self.bytes += len(encoded.encode('utf-8'))
+        if self.events > MAX_EVENTS or self.bytes > MAX_TELEMETRY_BYTES:
+            raise ValueError('telemetry budget exceeded')
+        with (self.directory / 'events.jsonl').open('a', encoding='utf-8') as stream:
+            stream.write(encoded)
+        if event in {'collection_start', 'test_start', 'phase_start', 'session_finish'}:
+            print('[public-ci] ' + encoded.rstrip(), flush=True)
+
+    def read_output(self, stream):
+        continuation = False
+        try:
+            while True:
+                line = stream.readline(MAX_FRAME_BYTES + 1)
+                if not line:
+                    break
+                if not continuation and line.startswith(FRAME_PREFIX):
+                    if not self.failed:
+                        try:
+                            if len(line) > MAX_FRAME_BYTES or not line.endswith(b'\n'):
+                                raise ValueError('oversized or truncated telemetry frame')
+                            self.accept(json.loads(line[len(FRAME_PREFIX):], object_pairs_hook=unique_object))
+                        except Exception:
+                            self.failed = True
+                            print('[public-ci] metadata channel failed; completion cannot pass', flush=True)
+                else:
+                    # Preserve primary pytest failures even when metadata has failed.
+                    # Raw output is forwarded to the console, never to artifacts.
+                    print(line.decode('utf-8', errors='replace'), end='', flush=True)
+                continuation = not line.endswith(b'\n')
+        except Exception:
+            self.failed = True
+            print('[public-ci] output channel failed; completion cannot pass', flush=True)
+
+
+def run_bounded(command, seconds, diagnostics=None):
     start = time.monotonic()
-    proc = subprocess.Popen(command, cwd=REPO)
+    receiver = MetadataReceiver(diagnostics) if diagnostics is not None else None
+    options = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT} if receiver else {}
+    proc = subprocess.Popen(command, cwd=REPO, **options)
+    reader = None
+    if receiver:
+        reader = threading.Thread(target=receiver.read_output, args=(proc.stdout,), daemon=True)
+        reader.start()
+    code = None
     try:
-        while True:
+        while code is None:
             remaining = seconds - (time.monotonic() - start)
             if remaining <= 0:
                 stop_process(proc)
-                return 124
+                code = 124
+                break
             try:
-                return proc.wait(timeout=min(60, remaining))
+                code = proc.wait(timeout=min(60, remaining))
             except subprocess.TimeoutExpired:
                 print(f'[public-ci] heartbeat elapsed_seconds={int(time.monotonic() - start)}', flush=True)
     except BaseException:
         if proc.poll() is None:
             stop_process(proc)
         raise
+    finally:
+        if reader:
+            reader.join(timeout=15)
+            if reader.is_alive():
+                receiver.failed = True
+    if code == 0 and receiver and (receiver.failed or not receiver.terminal):
+        return 2
+    return code
 
 
 def main(argv=None):
@@ -180,7 +330,7 @@ def main(argv=None):
     write_json(diagnostics / 'result.json', result)
     start = time.monotonic()
     try:
-        code = run_bounded(command, args.timeout_seconds)
+        code = run_bounded(command, args.timeout_seconds, diagnostics=diagnostics)
         if code == 0:
             completed = read_json(diagnostics / 'timings.json')
             if (completed.get('source') != before or completed.get('successful') is not True

@@ -208,7 +208,10 @@ def meter(tmp_path):
     runner.write_json(directory / 'selection.json', {
         'source': {'commit': 'synthetic', 'tree': 'synthetic'},
         'selected': ['tests/test_synthetic.py'], 'selected_deselect': ['tests/test_synthetic.py::test_omitted']})
-    return telemetry.Telemetry(directory)
+    records = []
+    instance = telemetry.Telemetry(directory, send=records.append)
+    instance.records = records
+    return instance
 
 
 def test_telemetry_enforces_exact_collection_and_deselection(meter):
@@ -218,7 +221,7 @@ def test_telemetry_enforces_exact_collection_and_deselection(meter):
     meter.deselected = ['tests/test_synthetic.py::test_omitted']
     meter.pytest_collection_finish(session)
     assert meter.collection_valid
-    assert 'fixture' not in (meter.directory / 'collected.json').read_text(encoding='utf-8')
+    assert 'fixture' not in json.dumps(meter.records)
     with pytest.raises(pytest.UsageError):
         meter.safe_node('tests/test_unselected.py::test_x')
 
@@ -230,7 +233,7 @@ def test_incomplete_telemetry_cannot_pass(meter, missing):
     meter.finished = 0 if missing == 'teardown' else 1
     session = SimpleNamespace(exitstatus=0)
     meter.pytest_sessionfinish(session, 0)
-    result = runner.read_json(meter.directory / 'timings.json')
+    result = meter.records[-1]
     assert session.exitstatus != 0
     assert not result['successful']
 
@@ -239,7 +242,7 @@ def test_events_survive_incomplete_session_and_exclude_output(meter):
     node = 'tests/test_synthetic.py::test_x[fixture prose]'
     meter.pytest_runtest_logstart(node, None)
     meter.pytest_runtest_logreport(SimpleNamespace(nodeid=node, duration=1.25, when='call', outcome='skipped'))
-    events = (meter.directory / 'events.jsonl').read_text(encoding='utf-8')
+    events = '\n'.join(json.dumps(r) for r in meter.records)
     assert 'fixture prose' not in events
     assert [json.loads(line)['event'] for line in events.splitlines()] == ['test_start', 'phase_end']
     assert meter.outcomes['call:skipped'] == 1
@@ -295,7 +298,7 @@ def synthetic_repo(tmp_path):
     return repo, public[0]
 
 
-@pytest.mark.parametrize('mode', ['pass', 'failure', 'timeout', 'dirty'])
+@pytest.mark.parametrize('mode', ['pass', 'failure', 'timeout', 'dirty', 'abrupt', 'zero_exit', 'telemetry_failure'])
 def test_guarded_selector_end_to_end(synthetic_repo, tmp_path, mode):
     repo, selected = synthetic_repo
     body = '''import socket
@@ -319,12 +322,41 @@ def test_guards_and_capture(capsys):
 def test_skip():
     pass
 '''
+    body += '''
+
+def test_no_file_io(monkeypatch):
+    import builtins
+    import os
+    def forbidden(*args, **kwargs):
+        raise AssertionError('synthetic IO protection')
+    monkeypatch.setattr(builtins, 'open', forbidden)
+    monkeypatch.setattr(Path, 'open', forbidden)
+    monkeypatch.setattr(os, 'getenv', forbidden)
+    monkeypatch.setattr(os, 'environ', {})
+
+def test_after_cleanup(tmp_path):
+    path = tmp_path / 'synthetic.txt'
+    path.write_text('cleanup restored', encoding='utf-8')
+    assert path.read_text(encoding='utf-8') == 'cleanup restored'
+'''
     if mode == 'failure':
         body += '\ndef test_failure():\n    assert False\n'
     elif mode == 'timeout':
         body += '\ndef test_wait():\n    import time\n    time.sleep(30)\n'
     elif mode == 'dirty':
         body += '\ndef test_mutation():\n    Path("marker.txt").write_text("changed", encoding="utf-8")\n'
+    elif mode in {'abrupt', 'zero_exit'}:
+        body += '\ndef test_hard_exit():\n    import os\n    os._exit(' + ('0' if mode == 'zero_exit' else '7') + ')\n'
+    elif mode == 'telemetry_failure':
+        body += '''
+
+def test_reporting_failure(request):
+    plugin = request.config.pluginmanager.getplugin('public-ci-telemetry')
+    def broken(record):
+        raise OSError('synthetic channel failure')
+    plugin.send = broken
+    assert False, 'primary assertion preserved'
+'''
     (repo / selected).write_text(body, encoding='utf-8')
     def git(*args):
         subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, timeout=20)
@@ -347,15 +379,22 @@ def test_skip():
         assert result['status'] == 'passed' and result['source_unchanged']
         times = runner.read_json(diagnostics / 'timings.json')
         assert times['successful'] and times['outcomes']['setup:skipped'] == 1
-        assert times['collected'] == times['finished'] == 4
+        assert times['collected'] == times['finished'] == 6
         assert 'synthetic-output' not in (diagnostics / 'events.jsonl').read_text(encoding='utf-8')
     else:
         assert proc.returncode != 0
-        assert result['status'] == {'failure': 'failed', 'timeout': 'timeout', 'dirty': 'source_changed'}[mode]
+        assert result['status'] == {'failure': 'failed', 'timeout': 'timeout', 'dirty': 'source_changed', 'abrupt': 'failed', 'zero_exit': 'failed', 'telemetry_failure': 'failed'}[mode]
         assert result['source_unchanged'] == (mode != 'dirty')
         if mode == 'failure':
             assert proc.returncode == 1
             assert runner.read_json(diagnostics / 'timings.json')['complete']
+        if mode in {'abrupt', 'zero_exit'}:
+            assert not (diagnostics / 'timings.json').exists()
+            assert 'test_hard_exit' in (diagnostics / 'events.jsonl').read_text(encoding='utf-8')
+        if mode == 'telemetry_failure':
+            assert proc.returncode == 1
+            assert 'primary assertion preserved' in proc.stdout
+            assert 'INTERNALERROR' not in proc.stdout + proc.stderr
         if mode == 'timeout':
             assert result['exit_code'] == 124
             assert 'test_wait' in (diagnostics / 'events.jsonl').read_text(encoding='utf-8')
@@ -366,7 +405,7 @@ def test_zero_exit_without_matching_completion_is_refused(tmp_path, monkeypatch,
     before = {'commit': 'synthetic', 'tree': 'synthetic', 'index_tree': 'synthetic'}
     monkeypatch.setattr(runner, 'source_identity', lambda: before.copy())
     diagnostics = tmp_path / 'refused-evidence'
-    def fake_success(*args):
+    def fake_success(*args, **kwargs):
         if evidence != 'missing':
             runner.write_json(diagnostics / 'timings.json', {
                 'source': dict(before, tree='stale') if evidence == 'stale' else before,
@@ -378,3 +417,73 @@ def test_zero_exit_without_matching_completion_is_refused(tmp_path, monkeypatch,
     result = runner.read_json(diagnostics / 'result.json')
     assert result['status'] == 'incomplete'
     assert result['exit_code'] is None
+
+@pytest.mark.parametrize('exitstatus', [0, 1])
+def test_reporting_exception_never_masks_existing_status(meter, exitstatus):
+    def broken(record):
+        raise OSError('synthetic reporting exception')
+    meter.send = broken
+    meter.pytest_runtest_logstart('tests/test_synthetic.py::test_x', None)
+    assert meter.failed
+    session = SimpleNamespace(exitstatus=exitstatus)
+    meter.pytest_sessionfinish(session, exitstatus)
+    assert session.exitstatus == 1
+
+
+def test_receiver_rejects_unsanitized_metadata_and_preserves_primary_output(meter, capsys):
+    from io import BytesIO
+    receiver = runner.MetadataReceiver(meter.directory)
+    record = {'event': 'collection_start', 'elapsed_seconds': 0, 'module': 'tests/test_synthetic.py',
+              'fixture': 'synthetic fixture text must not be stored'}
+    stream = BytesIO(runner.FRAME_PREFIX + json.dumps(record).encode() + b'\nprimary assertion failure\n')
+    receiver.read_output(stream)
+    assert receiver.failed
+    assert not (meter.directory / 'events.jsonl').exists()
+    assert 'primary assertion failure' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('case', ['truncated', 'oversized', 'budget'])
+def test_receiver_rejects_incomplete_or_excessive_frames(meter, monkeypatch, case):
+    from io import BytesIO
+    receiver = runner.MetadataReceiver(meter.directory)
+    if case == 'truncated':
+        frame = runner.FRAME_PREFIX + b'{'
+    elif case == 'oversized':
+        frame = runner.FRAME_PREFIX + b'x' * runner.MAX_FRAME_BYTES + b'\n'
+    else:
+        monkeypatch.setattr(runner, 'MAX_EVENTS', 0)
+        frame = runner.FRAME_PREFIX + json.dumps({
+            'event': 'collection_start', 'elapsed_seconds': 0, 'module': 'tests/test_synthetic.py'}).encode() + b'\n'
+    receiver.read_output(BytesIO(frame))
+    assert receiver.failed
+    assert not (meter.directory / 'events.jsonl').exists()
+
+
+def test_phase_hooks_perform_no_filesystem_writes_before_cleanup(meter, monkeypatch):
+    import builtins
+    def forbidden(*args, **kwargs):
+        raise AssertionError('synthetic phase forbids filesystem I/O')
+    node = 'tests/test_synthetic.py::test_x'
+    with monkeypatch.context() as scope:
+        scope.setattr(builtins, 'open', forbidden)
+        scope.setattr(Path, 'open', forbidden)
+        meter.pytest_runtest_logstart(node, None)
+        meter.pytest_runtest_call(SimpleNamespace(nodeid=node))
+        meter.pytest_runtest_logreport(SimpleNamespace(nodeid=node, duration=1, when='call', outcome='passed'))
+        meter.pytest_runtest_teardown(SimpleNamespace(nodeid=node))
+        meter.pytest_sessionfinish(SimpleNamespace(exitstatus=1), 1)
+    assert not meter.failed
+    assert meter.records[-1]['event'] == 'session_finish'
+    assert not (meter.directory / 'timings.json').exists()
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_parent_persistence_failure_cannot_pass_or_hide_primary(meter, monkeypatch, capsys, exit_code):
+    def broken(self, record):
+        raise OSError('synthetic parent persistence failure')
+    monkeypatch.setattr(runner.MetadataReceiver, 'accept', broken)
+    record = {'event': 'collection_start', 'elapsed_seconds': 0, 'module': 'tests/test_synthetic.py'}
+    frame = '\n' + runner.FRAME_PREFIX.decode() + json.dumps(record) + '\n'
+    code = 'import sys; print(' + repr(frame) + "); print('primary failure retained'); sys.exit(" + str(exit_code) + ')'
+    result = runner.run_bounded([sys.executable, '-c', code], 20, diagnostics=meter.directory)
+    assert result == (exit_code or 2)
+    assert 'primary failure retained' in capsys.readouterr().out

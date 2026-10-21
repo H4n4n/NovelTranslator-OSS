@@ -816,6 +816,7 @@ def test_risk_workflow_always_gate_and_exact_attempt_artifacts():
     assert 'public-decision-${{ github.run_id }}-${{ github.run_attempt }}' in workflow
     assert workflow.count('--decision "${{ runner.temp }}/qualification/decision.json"') == 3
     assert 'paths-ignore' not in workflow and 'continue-on-error' not in workflow
+    assert workflow.count('name: Isolate TEMP/TMP to the runner temp root') == 5
 
 @pytest.mark.parametrize('tier', ['L1', 'L2', 'L3'])
 def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monkeypatch, tier):

@@ -33,6 +33,12 @@ jobs:
         with:
           python-version: '3.14.4'
 
+      - name: Isolate TEMP/TMP to the runner temp root
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Verify forbidden paths and credentials are absent
         shell: pwsh
         run: |
@@ -293,6 +299,12 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.14.4'
+
+      - name: Isolate TEMP/TMP to the runner temp root
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Download required guard evidence
         uses: actions/download-artifact@v4

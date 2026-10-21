@@ -111,6 +111,7 @@ docs/G11_BLIND_BUNDLE.md
 docs/G11_FINAL_FREEZE.md
 docs/GOAT_ACCOUNTING_EPOCH_MIGRATION.md
 docs/GOAT_BATCH_JOURNAL_B2B.md
+docs/GOAT_BATCH_SYNTHETIC_WITNESS.md
 docs/GOAT_RUNTIME_IMPLEMENTATION_CONTRACT.md
 docs/OPERATIONS.md
 docs/PRODUCTION_OPERATION_POLICY.md
@@ -252,6 +253,7 @@ strict_terminology_repair.py
 test_api.py
 tests/conftest.py
 tests/public_test_classification.json
+tests/synthetic_goat_batch_witness.py
 tests/public_test_support.py
 tests/test_apply_normalization_plan.py
 tests/test_apply_title_resolution_plan.py
@@ -406,6 +408,7 @@ tests/test_production_goat_batch_boundary.py
 tests/test_production_goat_batch_journal.py
 tests/test_production_goat_batch_ledger.py
 tests/test_production_goat_batch_witness.py
+tests/test_synthetic_goat_batch_witness.py
 tests/test_production_goat_runtime.py
 tests/test_production_launcher_provider_identity.py
 tests/test_production_launcher_shadow.py

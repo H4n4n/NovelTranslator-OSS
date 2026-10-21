@@ -288,6 +288,21 @@ def run_bounded(command, seconds, diagnostics=None):
     return code
 
 
+def selection_manifest(before, buckets, shard, selected, deselect, timeout_seconds, decision=None):
+    manifest = {'version': 1, 'source': before, 'shard': shard, 'shards': buckets,
+                'selected': selected, 'deselect': deselect, 'selected_deselect': [n for n in deselect if n.split('::', 1)[0] in selected],
+                'excluded': {p: v for p, v in load_classification()[0].items() if v['status'] != 'public'},
+                'strategy': read_json(SCHEDULE)['strategy'], 'timeout_seconds': timeout_seconds,
+                'github': {k: os.environ.get(k, '') for k in ('GITHUB_SHA', 'GITHUB_HEAD_REF', 'GITHUB_BASE_REF')},
+                'sha256': {p: hashlib.sha256((REPO / p).read_bytes()).hexdigest() for p in
+                           [*selected, 'tests/public_test_classification.json', 'tests/public_shard_schedule.json',
+                            'tests/zero_provider_validation.py', 'scripts/run_public_tests.py', 'scripts/public_test_telemetry.py']}}
+    if decision is not None:
+        from scripts.public_ci import digest
+        manifest['qualification_sha256'] = digest(decision)
+    return manifest
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--shards', type=int, default=1, choices=(1, 3))
@@ -295,25 +310,26 @@ def main(argv=None):
     parser.add_argument('--timeout-seconds', type=int, default=4500)
     parser.add_argument('--diagnostics')
     parser.add_argument('--plan-only', action='store_true')
+    parser.add_argument('--decision', help='exact source/run-bound risk decision; omitted means full suite')
     args = parser.parse_args(argv)
     if not 0 <= args.shard < args.shards or not 1 <= args.timeout_seconds <= 4500:
         parser.error('invalid shard or timeout (maximum 4500 seconds)')
     files, deselect = load_classification()
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
     buckets = balanced_shards(public, args.shards)
-    selected = buckets[args.shard]
+    decision = None
+    if args.decision:
+        sys.path.insert(0, str(REPO))
+        from scripts.public_ci import verified_decision, select
+        decision = verified_decision(args.decision)
+        buckets, selected = select(decision, args.shards, args.shard)
+    else:
+        selected = buckets[args.shard]
     selected_deselect = [n for n in deselect if n.split('::', 1)[0] in selected]
     before = source_identity()
     diagnostics = external_directory(args.diagnostics or (Path(tempfile.gettempdir()) / ('nt_public_ci_' + uuid.uuid4().hex)))
     diagnostics.mkdir(parents=True, exist_ok=False)
-    manifest = {'version': 1, 'source': before, 'shard': args.shard, 'shards': buckets,
-                'selected': selected, 'deselect': deselect, 'selected_deselect': selected_deselect,
-                'excluded': {p: v for p, v in files.items() if v['status'] != 'public'},
-                'strategy': read_json(SCHEDULE)['strategy'], 'timeout_seconds': args.timeout_seconds,
-                'github': {k: os.environ.get(k, '') for k in ('GITHUB_SHA', 'GITHUB_HEAD_REF', 'GITHUB_BASE_REF')},
-                'sha256': {p: hashlib.sha256((REPO / p).read_bytes()).hexdigest() for p in
-                           [*selected, 'tests/public_test_classification.json', 'tests/public_shard_schedule.json',
-                            'tests/zero_provider_validation.py', 'scripts/run_public_tests.py', 'scripts/public_test_telemetry.py']}}
+    manifest = selection_manifest(before, buckets, args.shard, selected, deselect, args.timeout_seconds, decision)
     write_json(diagnostics / 'selection.json', manifest)
     print(f'[public-ci] source={before["commit"]} tree={before["tree"]} shard={args.shard} modules={len(selected)}', flush=True)
     if args.plan_only:

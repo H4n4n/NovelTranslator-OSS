@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "non_normative_docs": ["docs/DEVELOPMENT_TIPS.md"],
+  "smoke": ["tests/test_public_ci_reliability.py", "tests/test_runtime_hardening_smoke.py"],
+  "impact": {
+    "source_language_filter.py": {
+      "modules": [
+        "tests/test_audit_semantic_completeness_all.py",
+        "tests/test_audit_semantic_completeness_candidates.py",
+        "tests/test_audit_semantic_kinship.py"
+      ],
+      "reason": "Pure language-tag discovery helper; these are all three direct callers and each module tests bare zh vs tagged zh-Hant discovery. No production writer or provider imports it."
+    }
+  }
+}

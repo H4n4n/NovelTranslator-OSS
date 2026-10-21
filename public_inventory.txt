@@ -479,3 +479,6 @@ scripts/public_test_telemetry.py
 tests/public_shard_schedule.json
 tests/test_public_ci_reliability.py
 docs/public_ci_reliability.md
+docs/DEVELOPMENT_TIPS.md
+scripts/public_ci.py
+scripts/public_ci_policy.json

@@ -487,3 +487,434 @@ def test_parent_persistence_failure_cannot_pass_or_hide_primary(meter, monkeypat
     result = runner.run_bounded([sys.executable, '-c', code], 20, diagnostics=meter.directory)
     assert result == (exit_code or 2)
     assert 'primary failure retained' in capsys.readouterr().out
+
+# PR B controls deliberately extend the existing public module so the frozen
+# 190-module three-shard partition and its exclusions remain unchanged.
+from scripts import public_ci as risk
+
+
+def _change(path, status='M', target=None):
+    return {'status': status, 'paths': [path] if target is None else [path, target]}
+
+
+def test_risk_policy_has_demonstrated_narrow_coverage():
+    files, _ = runner.load_classification()
+    policy = risk.load_policy(files)
+    assert set(policy['impact']) == {'source_language_filter.py'}
+    assert policy['non_normative_docs'] == ['docs/DEVELOPMENT_TIPS.md']
+    for caller in ('audit_semantic_completeness_all', 'audit_semantic_completeness_candidates', 'audit_semantic_kinship'):
+        assert 'from source_language_filter import source_language_matches' in (runner.REPO / (caller + '.py')).read_text(encoding='utf-8')
+        module = 'tests/test_' + caller + '.py'
+        assert module in policy['impact']['source_language_filter.py']['modules']
+        assert 'zh-Hant' in (runner.REPO / module).read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('paths,kind,expected', [
+    (['docs/DEVELOPMENT_TIPS.md'], 'pull_request', 'L1'),
+    (['source_language_filter.py'], 'pull_request', 'L2'),
+    (['source_language_filter.py', 'docs/DEVELOPMENT_TIPS.md'], 'pull_request', 'L3'),
+    (['README.md'], 'pull_request', 'L3'),
+    (['AGENTS.md'], 'pull_request', 'L3'),
+    (['docs/OPERATIONS.md'], 'pull_request', 'L3'),
+    (['docs/public_ci_reliability.md'], 'pull_request', 'L3'),
+    (['pyproject.toml'], 'pull_request', 'L3'),
+    (['pytest.ini'], 'pull_request', 'L3'),
+    (['.github/workflows/ci.yml'], 'pull_request', 'L3'),
+    (['scripts/public_ci.py'], 'pull_request', 'L3'),
+    (['scripts/public_ci_policy.json'], 'pull_request', 'L3'),
+    (['scripts/publication_guard.py'], 'pull_request', 'L3'),
+    (['scripts/public_test_telemetry.py'], 'pull_request', 'L3'),
+    (['tests/zero_provider_validation.py'], 'pull_request', 'L3'),
+    (['command_code_provider_credentials.py'], 'pull_request', 'L3'),
+    (['unclassified.py'], 'pull_request', 'L3'),
+    (['tests/test_new.py'], 'pull_request', 'L3'),
+    ([], 'pull_request', 'L3'),
+    (['docs/DEVELOPMENT_TIPS.md'], 'push', 'L3'),
+    (['source_language_filter.py'], 'workflow_dispatch', 'L3'),
+])
+def test_risk_tier_selection(paths, kind, expected):
+    policy = risk.load_policy(runner.load_classification()[0])
+    assert risk.classify([_change(p) for p in paths], kind, policy)[0] == expected
+
+
+@pytest.mark.parametrize('status', ['A', 'D', 'T', 'R100', 'C100', 'U'])
+def test_risk_non_modifications_always_full(status):
+    policy = risk.load_policy(runner.load_classification()[0])
+    change = _change('source_language_filter.py', status,
+                     'renamed.py' if status.startswith(('R', 'C')) else None)
+    assert risk.classify([change], 'pull_request', policy)[0] == 'L3'
+
+
+@pytest.mark.parametrize('case', ['absent', 'changed', 'version', 'empty', 'private', 'unknown', 'duplicate', 'rationale', 'risky', 'smoke', 'partial'])
+def test_risk_bad_policy_never_selects_lower_tier(monkeypatch, case):
+    files, _ = runner.load_classification()
+    original = risk.load_policy(files)
+    if case in {'absent', 'changed'}:
+        assert risk.classify([_change('source_language_filter.py')], 'pull_request',
+                             None if case == 'absent' else original, case != 'changed')[0] == 'L3'
+        return
+    policy = json.loads(json.dumps(original))
+    entry = policy['impact']['source_language_filter.py']
+    if case == 'version':
+        policy['version'] = 999
+    elif case == 'empty':
+        entry['modules'] = []
+    elif case in {'private', 'unknown'}:
+        entry['modules'] = [next(p for p, v in files.items() if v['status'] == 'private') if case == 'private' else 'tests/test_missing.py']
+    elif case == 'duplicate':
+        entry['modules'] *= 2
+    elif case == 'rationale':
+        entry['reason'] = ''
+    elif case == 'partial':
+        entry['modules'].pop()
+    elif case == 'risky':
+        policy['impact']['command_code_provider_credentials.py'] = entry
+    else:
+        policy['smoke'] = []
+    monkeypatch.setattr(runner, 'read_json', lambda p: policy)
+    with pytest.raises(ValueError):
+        risk.load_policy(files)
+
+
+@pytest.fixture
+def risk_identity(monkeypatch):
+    source = {'commit': 'a' * 40, 'tree': 'b' * 40, 'index_tree': 'b' * 40}
+    event = {'number': 7, 'repository': {'full_name': 'synthetic/public'},
+             'pull_request': {'head': {'sha': 'c' * 40}, 'base': {'sha': 'd' * 40, 'ref': 'main'}}}
+    env = {'GITHUB_SHA': source['commit'], 'GITHUB_EVENT_NAME': 'pull_request',
+           'GITHUB_REF': 'refs/pull/7/merge', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
+           'GITHUB_REPOSITORY': 'synthetic/public'}
+    original_git = runner.git
+    def fake_git(*args):
+        if args[0] == 'rev-list':
+            return ' '.join([source['commit'], event['pull_request']['base']['sha'], event['pull_request']['head']['sha']])
+        if args[0] == 'rev-parse':
+            return 'e' * 40
+        if args[0] == 'diff':
+            return 'M\0docs/DEVELOPMENT_TIPS.md\0'
+        return original_git(*args)
+    monkeypatch.setattr(runner, 'source_identity', lambda: dict(source))
+    monkeypatch.setattr(runner, 'git', fake_git)
+    return source, event, env
+
+
+@pytest.mark.parametrize('case', ['sha', 'tree', 'parents', 'base', 'head', 'ref', 'event', 'run', 'attempt', 'repository'])
+def test_risk_identity_rejects_conflicts(risk_identity, monkeypatch, case):
+    source, event, env = risk_identity
+    if case == 'sha':
+        env['GITHUB_SHA'] = 'f' * 40
+    elif case == 'tree':
+        source['index_tree'] = 'f' * 40
+    elif case == 'parents':
+        monkeypatch.setattr(runner, 'git', lambda *args: ' '.join(['a' * 40, 'c' * 40, 'd' * 40]))
+    elif case in {'head', 'base'}:
+        event['pull_request'][case]['sha'] = 'not-a-sha'
+    elif case == 'ref':
+        env['GITHUB_REF'] = 'refs/heads/topic'
+    elif case == 'event':
+        env['GITHUB_EVENT_NAME'] = 'pull_request_target'
+    elif case in {'run', 'attempt'}:
+        env['GITHUB_RUN_ID' if case == 'run' else 'GITHUB_RUN_ATTEMPT'] = ''
+    else:
+        env['GITHUB_REPOSITORY'] = 'other/repo'
+    with pytest.raises(ValueError):
+        risk.identity(event, env)
+
+
+@pytest.mark.parametrize('tier', ['L1', 'L2', 'L3'])
+def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatch, tier):
+    _, event, env = risk_identity
+    path = {'L1': 'docs/DEVELOPMENT_TIPS.md', 'L2': 'source_language_filter.py', 'L3': 'scripts/public_ci.py'}[tier]
+    calls = []
+    original = runner.git
+    def git(*args):
+        if args[0] == 'diff':
+            calls.append(args)
+            return 'M\0' + path + '\0'
+        return original(*args)
+    monkeypatch.setattr(runner, 'git', git)
+    decision = risk.decide(event, env)
+    assert decision['tier'] == tier
+    assert decision['identity']['head'] == 'c' * 40 and decision['identity']['base'] == 'd' * 40
+    assert calls == [('diff', '--name-status', '-z', '--find-renames', 'd' * 40, 'a' * 40)]
+    assert decision['l4'].startswith('NOT VERIFIED')
+    assert risk.select(decision, 3 if tier == 'L3' else 1, 0)[1]
+    with pytest.raises(ValueError):
+        risk.select(decision, 1 if tier == 'L3' else 3, 0)
+    assert set(risk.SMOKE) <= set(decision['selected'])
+    if tier == 'L3':
+        assert len(decision['selected']) == 190 and len(decision['deselect']) == 15
+    elif tier == 'L2':
+        assert len(decision['selected']) == 5
+
+
+@pytest.mark.parametrize('case', ['missing', 'invalid', 'stale'])
+def test_risk_decide_falls_back_for_unusable_policy(risk_identity, monkeypatch, case):
+    _, event, env = risk_identity
+    if case in {'missing', 'invalid'}:
+        def fail(files):
+            raise (OSError if case == 'missing' else ValueError)('synthetic policy failure')
+        monkeypatch.setattr(risk, 'load_policy', fail)
+    else:
+        original = runner.git
+        monkeypatch.setattr(runner, 'git', lambda *args: 'f' * 40 if args[0] == 'rev-parse' and args[1].startswith('d') else original(*args))
+    assert risk.decide(event, env)['tier'] == 'L3'
+
+
+@pytest.mark.parametrize('field', ['tier', 'identity', 'selected', 'policy_sha', 'excluded', 'changes'])
+def test_risk_tampered_decision_rejected(risk_identity, monkeypatch, tmp_path, field):
+    _, event, env = risk_identity
+    decision = risk.decide(event, env)
+    monkeypatch.setattr(risk, 'environment_decision', lambda: decision)
+    altered = dict(decision, **{field: None})
+    path = tmp_path / 'decision.json'
+    runner.write_json(path, altered)
+    with pytest.raises(ValueError, match='tampered'):
+        risk.verified_decision(path)
+
+
+def _risk_jobs(tier):
+    return {job: {'result': 'success' if job in {'guard', risk.JOBS[tier]} else 'skipped'}
+            for job in ('guard', 'l1', 'l2', 'test')}
+
+
+@pytest.mark.parametrize('tier', ['L1', 'L2', 'L3'])
+@pytest.mark.parametrize('bad', ['missing', 'cancelled', 'skipped', 'failure', 'timed_out', 'pending', None])
+def test_risk_required_job_negative_controls(tier, bad):
+    jobs = _risk_jobs(tier)
+    selected = risk.JOBS[tier]
+    if bad == 'missing':
+        jobs.pop(selected)
+    else:
+        jobs[selected]['result'] = bad
+    with pytest.raises(ValueError):
+        risk.verify_jobs(tier, jobs)
+
+
+@pytest.mark.parametrize('case', ['guard_skipped', 'extra', 'unexpected_success'])
+def test_risk_guard_and_unselected_jobs_checked(case):
+    jobs = _risk_jobs('L1')
+    if case == 'guard_skipped':
+        jobs['guard']['result'] = 'skipped'
+    elif case == 'extra':
+        jobs['l4'] = {'result': 'success'}
+    else:
+        jobs['l2']['result'] = 'success'
+    with pytest.raises(ValueError):
+        risk.verify_jobs('L1', jobs)
+
+
+@pytest.mark.parametrize('field', ['head', 'base', 'merge', 'state', 'number'])
+def test_risk_live_pr_staleness(risk_identity, field):
+    _, event, env = risk_identity
+    bound = risk.identity(event, env)
+    live = {'head': {'sha': bound['head']}, 'base': {'sha': bound['base']},
+            'merge_commit_sha': bound['commit'], 'state': 'open', 'number': 7}
+    risk.verify_live(bound, live)
+    if field in {'head', 'base'}:
+        live[field]['sha'] = 'f' * 40
+    else:
+        live[{'merge': 'merge_commit_sha', 'state': 'state', 'number': 'number'}[field]] = None
+    with pytest.raises(ValueError):
+        risk.verify_live(bound, live)
+
+
+def _risk_write_evidence(directory, manifest):
+    directory.mkdir()
+    runner.write_json(directory / 'selection.json', manifest)
+    receiver = runner.MetadataReceiver(directory)
+    def emit(event, **fields):
+        receiver.accept({'event': event, 'elapsed_seconds': 0, **fields})
+    nodes = [telemetry.node_identity(p + '::test_synthetic') for p in manifest['selected']]
+    for node in nodes:
+        emit('collection_node', **node)
+    emit('collection_finish', tests=len(nodes), deselected=len(manifest['selected_deselect']),
+         deselected_sha256=[hashlib.sha256(n.encode()).hexdigest() for n in manifest['selected_deselect']], skipped_modules=[])
+    for node in nodes:
+        for phase in ('setup', 'call', 'teardown'):
+            emit('phase_end', **node, phase=phase, seconds=0, outcome='passed')
+    emit('session_finish', source=manifest['source'], complete=True, successful=True,
+         collected=len(nodes), finished=len(nodes), exit_code=0, outcomes=receiver.outcomes,
+         modules={})
+    runner.write_json(directory / 'result.json', {'status': 'passed', 'exit_code': 0, 'source_unchanged': True})
+
+
+@pytest.mark.parametrize('tier', ['L1', 'L2', 'L3'])
+def test_risk_gate_integrated_happy_paths(risk_identity, monkeypatch, tmp_path, tier):
+    _, event, env = risk_identity
+    path = {'L1': 'docs/DEVELOPMENT_TIPS.md', 'L2': 'source_language_filter.py', 'L3': 'AGENTS.md'}[tier]
+    original = runner.git
+    monkeypatch.setattr(runner, 'git', lambda *args: 'M\0' + path + '\0' if args[0] == 'diff' else original(*args))
+    decision = risk.decide(event, env)
+    guard = {'version': 1, 'decision_sha256': risk.digest(decision), 'identity': decision['identity']}
+    evidence = tmp_path / 'evidence'
+    evidence.mkdir()
+    source = runner.source_identity()
+    for i, selected in enumerate(decision['shards']):
+        manifest = runner.selection_manifest(source, decision['shards'], i, selected, decision['deselect'], 4500, decision)
+        _risk_write_evidence(evidence / f'public-ci-123-1-{i}', manifest)
+    live = {'state': 'open', 'number': 7, 'head': {'sha': 'c' * 40}, 'base': {'sha': 'd' * 40}, 'merge_commit_sha': 'a' * 40}
+    risk.gate(decision, guard, _risk_jobs(tier), live, evidence)
+    # Every required shard must exist; even L1's smoke is mandatory.
+    (evidence / 'public-ci-123-1-0').rename(evidence / 'unexpected-shard')
+    with pytest.raises(ValueError, match='shard evidence'):
+        risk.gate(decision, guard, _risk_jobs(tier), live, evidence)
+
+
+@pytest.mark.parametrize('case', ['no_events', 'no_result', 'no_timings', 'no_collection', 'incomplete', 'exit', 'dirty', 'identity',
+                                  'selection', 'deselect', 'excluded', 'timings', 'collection', 'truncated', 'phase', 'no_terminal', 'extra_event', 'all_skipped'])
+def test_risk_gate_rejects_tampered_or_incomplete_evidence(meter, case):
+    directory = meter.directory.parent / ('evidence_' + case)
+    manifest = {'source': {'commit': 'a' * 40, 'tree': 'b' * 40}, 'selected': ['tests/test_synthetic.py'],
+                'selected_deselect': [], 'excluded': {'tests/test_private.py': {'status': 'private'}}}
+    _risk_write_evidence(directory, manifest)
+    if case.startswith('no_') and case != 'no_terminal':
+        filename = {'no_events': 'events.jsonl', 'no_result': 'result.json', 'no_timings': 'timings.json', 'no_collection': 'collected.json'}[case]
+        (directory / filename).unlink()
+    elif case in {'incomplete', 'exit', 'dirty'}:
+        result = runner.read_json(directory / 'result.json')
+        result[{'incomplete': 'status', 'exit': 'exit_code', 'dirty': 'source_unchanged'}[case]] = None
+        runner.write_json(directory / 'result.json', result)
+    elif case in {'identity', 'selection', 'deselect', 'excluded'}:
+        data = dict(manifest)
+        data[{'identity': 'source', 'selection': 'selected', 'deselect': 'selected_deselect', 'excluded': 'excluded'}[case]] = None
+        runner.write_json(directory / 'selection.json', data)
+    elif case in {'timings', 'collection'}:
+        filename = 'timings.json' if case == 'timings' else 'collected.json'
+        runner.write_json(directory / filename, {})
+    else:
+        path = directory / 'events.jsonl'
+        records = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        if case == 'truncated':
+            path.write_text('{', encoding='utf-8')
+        else:
+            if case == 'phase':
+                records[2]['node_sha256'] = 'f' * 64
+            elif case == 'no_terminal':
+                records.pop()
+            elif case == 'extra_event':
+                records.append(records[0])
+            elif case == 'all_skipped':
+                for record in records:
+                    if record.get('phase') == 'call':
+                        record['outcome'] = 'skipped'
+                records[-1]['outcomes'] = {'setup:passed': 1, 'call:skipped': 1, 'teardown:passed': 1}
+                times = {k: v for k, v in records[-1].items() if k != 'event'}
+                runner.write_json(directory / 'timings.json', times)
+            path.write_text(''.join(json.dumps(r) + '\n' for r in records), encoding='utf-8')
+    with pytest.raises((ValueError, OSError)):
+        risk.verify_evidence(directory, manifest, 'L2')
+
+
+def test_risk_workflow_always_gate_and_exact_attempt_artifacts():
+    workflow = (runner.REPO / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+    assert 'name: Public CI gate\n    if: always()' in workflow
+    assert 'needs: [guard, l1, l2, test]' in workflow
+    assert 'public_ci.py gate' in workflow
+    assert 'github.rest.pulls.get' in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    assert 'public-decision-${{ github.run_id }}-${{ github.run_attempt }}' in workflow
+    assert workflow.count('--decision "${{ runner.temp }}/qualification/decision.json"') == 3
+    assert 'paths-ignore' not in workflow and 'continue-on-error' not in workflow
+
+@pytest.mark.parametrize('tier', ['L1', 'L2', 'L3'])
+def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monkeypatch, tier):
+    """No provider calls: real Git parents, exact delta, real guarded child telemetry."""
+    repo, dpapi_file = synthetic_repo
+    for name in ('public_ci.py', 'public_ci_policy.json'):
+        (repo / 'scripts' / name).write_bytes((runner.REPO / 'scripts' / name).read_bytes())
+    modules = [dpapi_file, *risk.SMOKE, *risk.L2_MODULES]
+    for module in modules:
+        body = 'def test_one():\n    pass\n'
+        if module == dpapi_file:
+            body += '\ndef test_real_windows_dpapi_round_trip():\n    assert False\n'
+        (repo / module).write_text(body, encoding='utf-8')
+    for name in ('test_b.py', 'test_c.py', 'test_private.py', 'test_historical.py'):
+        (repo / 'tests' / name).unlink()
+    files = {p: {'status': 'public'} for p in modules}
+    runner.write_json(repo / 'tests/public_test_classification.json', {
+        'version': 2, 'files': files, 'deselect': [runner.DPAPI_NODE],
+        'deselect_reason': {runner.DPAPI_NODE: 'synthetic forbidden node'}})
+    runner.write_json(repo / 'tests/public_shard_schedule.json', {
+        'version': 1, 'strategy': 'synthetic', 'shards': [modules[0::3], modules[1::3], modules[2::3]]})
+    (repo / 'docs').mkdir()
+    (repo / 'docs/DEVELOPMENT_TIPS.md').write_text('Synthetic navigation tips\n', encoding='utf-8')
+    (repo / 'source_language_filter.py').write_text('# synthetic ordinary source\n', encoding='utf-8')
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(repo), *args], timeout=20).decode().strip()
+    git('init', '--quiet', '-b', 'main')
+    git('config', 'user.name', 'Synthetic CI')
+    git('config', 'user.email', 'synthetic@example.invalid')
+    git('add', 'scripts', 'tests', 'docs', 'source_language_filter.py', 'marker.txt', 'pytest.ini')
+    git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Synthetic base')
+    git('checkout', '--quiet', '-b', 'topic')
+    changed = {'L1': 'docs/DEVELOPMENT_TIPS.md', 'L2': 'source_language_filter.py', 'L3': 'scripts/public_ci.py'}[tier]
+    with (repo / changed).open('a', encoding='utf-8') as stream:
+        stream.write('\n# Synthetic change\n')
+    git('add', changed)
+    git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Synthetic change')
+    head = git('rev-parse', 'HEAD')
+    git('checkout', '--quiet', 'main')
+    (repo / 'marker.txt').write_text('Synthetic base advanced\n', encoding='utf-8')
+    git('add', 'marker.txt')
+    git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Synthetic base advance')
+    base = git('rev-parse', 'HEAD')
+    git('-c', 'commit.gpgsign=false', 'merge', '--quiet', '--no-ff', 'topic', '-m', 'Synthetic tested merge')
+    merge = git('rev-parse', 'HEAD')
+    event = {'number': 7, 'repository': {'full_name': 'synthetic/public'},
+             'pull_request': {'head': {'sha': head}, 'base': {'sha': base, 'ref': 'main'}}}
+    event_path = tmp_path / 'event.json'
+    runner.write_json(event_path, event)
+    env = dict(os.environ, GITHUB_SHA=merge, GITHUB_EVENT_NAME='pull_request', GITHUB_REF='refs/pull/7/merge',
+               GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1', GITHUB_REPOSITORY='synthetic/public',
+               GITHUB_EVENT_PATH=str(event_path), GITHUB_OUTPUT=str(tmp_path / 'github-output'))
+    diagnostic_root = Path(os.environ['TEMP']) / ('prb_real_' + tmp_path.name + tier)
+    diagnostic_root.mkdir()
+    qualification = diagnostic_root / 'qualification'
+    proc = subprocess.run([sys.executable, str(repo / 'scripts/public_ci.py'), 'decide', '--directory', str(qualification)],
+                          cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    decision = runner.read_json(qualification / 'decision.json')
+    assert decision['tier'] == tier
+    assert decision['changes'] == [_change(changed)]  # Excludes base-only advance.
+    evidence = diagnostic_root / 'evidence'
+    evidence.mkdir()
+    for shard in range(3 if tier == 'L3' else 1):
+        proc = subprocess.run([sys.executable, str(repo / 'scripts/run_public_tests.py'),
+                               '--decision', str(qualification / 'decision.json'), '--shards', '3' if tier == 'L3' else '1',
+                               '--shard', str(shard), '--diagnostics', str(evidence / f'public-ci-123-1-{shard}')],
+                              cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+    live = tmp_path / 'live.json'
+    runner.write_json(live, {'state': 'open', 'number': 7, 'head': {'sha': head}, 'base': {'sha': base}, 'merge_commit_sha': merge})
+    proc = subprocess.run([sys.executable, str(repo / 'scripts/public_ci.py'), 'gate', '--directory', str(qualification),
+                           '--needs', json.dumps(_risk_jobs(tier)), '--live', str(live), '--evidence', str(evidence)],
+                          cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert 'NOT VERIFIED' in proc.stdout
+    # Same head with a different tested merge tree cannot reuse this decision.
+    git('checkout', '--quiet', 'main')
+    (repo / 'marker.txt').write_text('Different merge tree\n', encoding='utf-8')
+    git('add', 'marker.txt')
+    git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Synthetic tree drift')
+    env['GITHUB_SHA'] = git('rev-parse', 'HEAD')
+    proc = subprocess.run([sys.executable, str(repo / 'scripts/public_ci.py'), 'gate', '--directory', str(qualification),
+                           '--needs', json.dumps(_risk_jobs(tier)), '--live', str(live), '--evidence', str(evidence)],
+                          cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+    assert proc.returncode != 0
+
+@pytest.mark.parametrize('case', ['digest', 'guard_identity', 'source_tree', 'attempt'])
+def test_risk_gate_rejects_guard_and_run_conflicts(risk_identity, tmp_path, case):
+    source, event, env = risk_identity
+    decision = risk.decide(event, env)
+    proof = {'version': 1, 'decision_sha256': risk.digest(decision), 'identity': decision['identity']}
+    if case == 'digest':
+        proof['decision_sha256'] = 'f' * 64
+    elif case == 'guard_identity':
+        proof['identity'] = {}
+    elif case == 'source_tree':
+        source['tree'] = source['index_tree'] = 'f' * 40
+    else:
+        proof['identity'] = dict(decision['identity'], run={})
+    with pytest.raises(ValueError, match='identity'):
+        risk.gate(decision, proof, _risk_jobs('L1'), {}, tmp_path)

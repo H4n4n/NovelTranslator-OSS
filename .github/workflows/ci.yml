@@ -50,7 +50,7 @@ jobs:
     name: Windows Python 3.14.4 zero-provider (shard ${{ matrix.shard }})
     needs: guard
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -95,4 +95,20 @@ jobs:
         run: python -m compileall -q .
 
       - name: Run guarded public test shard
-        run: python scripts/run_public_tests.py --shards 3 --shard ${{ matrix.shard }}
+        run: python scripts/run_public_tests.py --shards 3 --shard ${{ matrix.shard }} --timeout-seconds 4500 --diagnostics "${{ runner.temp }}/public-ci-${{ matrix.shard }}"
+
+      - name: Assert tracked source cleanliness
+        if: always()
+        shell: pwsh
+        run: |
+          $state = git status --porcelain --untracked-files=no
+          if ($LASTEXITCODE -ne 0 -or $state) { throw "Tracked source changed during validation." }
+
+      - name: Retain bounded public timing and coverage diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/public-ci-${{ matrix.shard }}/*.json*
+          if-no-files-found: error
+          retention-days: 14

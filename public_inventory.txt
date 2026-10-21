@@ -475,3 +475,7 @@ uncertain_request_disposition_execute.py
 uncertain_request_disposition_plan.py
 upgrade_glossary.py
 validate_project.py
+scripts/public_test_telemetry.py
+tests/public_shard_schedule.json
+tests/test_public_ci_reliability.py
+docs/public_ci_reliability.md

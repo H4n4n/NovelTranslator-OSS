@@ -1,4 +1,5 @@
 """Synthetic NO_SEND controls for public CI selection and diagnostics."""
+import ast
 import hashlib
 import json
 import os
@@ -14,13 +15,19 @@ from scripts import public_test_telemetry as telemetry
 from scripts import publication_guard as guard
 
 
-NEW_MODULE = 'tests/test_public_ci_reliability.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
-BASELINE_PARTITIONS = (
-    'e66a6222b9ad4dfd31b4d6b9c50d1be1d7a6022bee01466868578571bc83c74e',
-    '70554ac08d00cfd0fa8cf31daea187ba46a51e2b1926cc8cab069124c60f0051',
-    '56a565b299e24e2c348f3ae6398ffd241b52607af9ac5f97b17136bf7ee0990d',
+MEASURED_PARTITIONS = (
+    '7f8125143233c0081f85b901d8ff9f7c061eb3e35b1e9c9b62dfa553938d01bd',
+    '27cbbd54ce6731b68f0589861ee3ce0243d80cb8e0c59040cacd68ae25be8dac',
+    'e72f6cde6c708676e6090ad2314875a161055761c2dca6f52e1068f809573c1a',
 )
+
+
+def _synthetic_schedule(public):
+    weights = {p: 1 for p in public}
+    return {'version': 2, 'strategy': 'measured-module-lpt-39696534289',
+            'measurement_source': runner.TIMING_SOURCE, 'module_seconds': weights,
+            'shards': runner.measured_shards(weights)}
 
 
 def test_exact_public_partition_and_reviewed_deselections():
@@ -30,16 +37,22 @@ def test_exact_public_partition_and_reviewed_deselections():
     flat = sum(buckets, [])
     assert len(flat) == len(set(flat)) == len(public) == 191
     assert set(flat) == set(public)
-    assert SYNTHETIC_WITNESS_MODULE in buckets[2]
+    assert SYNTHETIC_WITNESS_MODULE in flat
     assert runner.balanced_shards(list(reversed(public)), 3) == buckets
     assert runner.balanced_shards(public, 1) == [public]
     assert sum(v['status'] == 'private' for v in files.values()) == 2
     assert sum(v['status'] == 'historical' for v in files.values()) == 7
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
-    for bucket, expected in zip(buckets, BASELINE_PARTITIONS, strict=True):
-        old = sorted(p for p in bucket if p not in {NEW_MODULE, SYNTHETIC_WITNESS_MODULE})
-        assert len(old) == 63
-        assert hashlib.sha256('\n'.join(old).encode()).hexdigest() == expected
+    schedule = runner.read_json(runner.SCHEDULE)
+    assert schedule['measurement_source'] == runner.TIMING_SOURCE
+    assert risk.digest(schedule['module_seconds']) == '83ebfddccc07f990a7f10d81215abac9627e8c820a9a76eb616d2670771c5368'
+    for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
+        assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
+    assert [len(b) for b in buckets] == [61, 64, 66]
+    assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
+        [1541.8520148, 1541.8507243, 1541.8441506])
+    assert 'tests/test_goat_periodic_audit_finalization.py' in buckets[0]
+    assert 'tests/test_completed_uncertain_history.py' in buckets[1]
     assert len(deselect) == 15
     assert hashlib.sha256(json.dumps(deselect, separators=(',', ':')).encode()).hexdigest() == (
         '792817b3b0524eb25d6bb0e9267327ce85911c5c7ea9058cda53b979f708fc32')
@@ -103,10 +116,10 @@ def test_missing_classification_refused(tmp_path, monkeypatch):
         runner.load_classification()
 
 
-@pytest.mark.parametrize('case', ['empty', 'duplicate', 'missing', 'extra', 'bad_shards', 'empty_bucket'])
+@pytest.mark.parametrize('case', ['empty', 'duplicate', 'missing', 'extra', 'bad_shards', 'empty_bucket', 'stale', 'tampered', 'weight', 'unknown_weight', 'nan', 'private'])
 def test_partition_negative_controls(tmp_path, monkeypatch, case):
     public = ['tests/test_a.py', 'tests/test_b.py', 'tests/test_c.py']
-    data = {'version': 1, 'shards': [[public[0]], [public[1]], [public[2]]]}
+    data = _synthetic_schedule(public)
     shards = 3
     if case == 'empty':
         public = []
@@ -118,8 +131,20 @@ def test_partition_negative_controls(tmp_path, monkeypatch, case):
         data['shards'][0].append('tests/test_excluded.py')
     elif case == 'bad_shards':
         shards = 2
-    else:
+    elif case == 'empty_bucket':
         data['shards'][0] = []
+    elif case == 'stale':
+        data['measurement_source'] = dict(runner.TIMING_SOURCE, tree='f' * 40)
+    elif case == 'tampered':
+        data['shards'][0], data['shards'][1] = data['shards'][1], data['shards'][0]
+    elif case == 'weight':
+        data['module_seconds'].pop(public[0])
+    elif case == 'unknown_weight':
+        data['module_seconds']['tests/test_unknown.py'] = 1
+    elif case == 'nan':
+        data['module_seconds'][public[0]] = float('nan')
+    else:
+        data['shards'][0].append('tests/test_private.py')
     path = tmp_path / 'schedule.json'
     path.write_text(json.dumps(data), encoding='utf-8')
     monkeypatch.setattr(runner, 'SCHEDULE', path)
@@ -289,8 +314,7 @@ def synthetic_repo(tmp_path):
         (repo / rel).write_text('raise AssertionError("excluded module collected")\n', encoding='utf-8')
     (repo / 'marker.txt').write_text('original', encoding='utf-8')
     (repo / 'pytest.ini').write_text('[pytest]\ntestpaths = tests\n', encoding='utf-8')
-    (repo / 'tests/public_shard_schedule.json').write_text(json.dumps({
-        'version': 1, 'strategy': 'synthetic', 'shards': [[p] for p in public]}), encoding='utf-8')
+    (repo / 'tests/public_shard_schedule.json').write_text(json.dumps(_synthetic_schedule(public)), encoding='utf-8')
     files = {p: {'status': 'public'} for p in public}
     files.update({'tests/test_private.py': {'status': 'private'},
                   'tests/test_historical.py': {'status': 'historical'}})
@@ -490,8 +514,7 @@ def test_parent_persistence_failure_cannot_pass_or_hide_primary(meter, monkeypat
     assert result == (exit_code or 2)
     assert 'primary failure retained' in capsys.readouterr().out
 
-# PR B controls extend this existing module. Original shard membership and
-# exclusions remain pinned; B2B2B-2 adds one public module.
+# Qualification controls retain the exact public exclusions and deselections.
 from scripts import public_ci as risk
 
 
@@ -502,7 +525,7 @@ def _change(path, status='M', target=None):
 def test_risk_policy_has_demonstrated_narrow_coverage():
     files, _ = runner.load_classification()
     policy = risk.load_policy(files)
-    assert set(policy['impact']) == {'source_language_filter.py'}
+    assert set(policy['impact']) == set(risk.L2_IMPACT)
     assert policy['non_normative_docs'] == ['docs/DEVELOPMENT_TIPS.md']
     for caller in ('audit_semantic_completeness_all', 'audit_semantic_completeness_candidates', 'audit_semantic_kinship'):
         assert 'from source_language_filter import source_language_matches' in (runner.REPO / (caller + '.py')).read_text(encoding='utf-8')
@@ -547,7 +570,7 @@ def test_risk_non_modifications_always_full(status):
     assert risk.classify([change], 'pull_request', policy)[0] == 'L3'
 
 
-@pytest.mark.parametrize('case', ['absent', 'changed', 'version', 'empty', 'private', 'unknown', 'duplicate', 'rationale', 'risky', 'smoke', 'partial'])
+@pytest.mark.parametrize('case', ['absent', 'changed', 'version', 'empty', 'private', 'unknown', 'duplicate', 'rationale', 'risky', 'smoke', 'partial', 'missing_source'])
 def test_risk_bad_policy_never_selects_lower_tier(monkeypatch, case):
     files, _ = runner.load_classification()
     original = risk.load_policy(files)
@@ -569,6 +592,8 @@ def test_risk_bad_policy_never_selects_lower_tier(monkeypatch, case):
         entry['reason'] = ''
     elif case == 'partial':
         entry['modules'].pop()
+    elif case == 'missing_source':
+        policy['impact'].pop('semantic_kinship.py')
     elif case == 'risky':
         policy['impact']['command_code_provider_credentials.py'] = entry
     else:
@@ -721,7 +746,7 @@ def test_risk_live_pr_staleness(risk_identity, field):
         risk.verify_live(bound, live)
 
 
-def _risk_write_evidence(directory, manifest):
+def _risk_write_evidence(directory, manifest, skipped_module=None):
     directory.mkdir()
     runner.write_json(directory / 'selection.json', manifest)
     receiver = runner.MetadataReceiver(directory)
@@ -734,7 +759,8 @@ def _risk_write_evidence(directory, manifest):
          deselected_sha256=[hashlib.sha256(n.encode()).hexdigest() for n in manifest['selected_deselect']], skipped_modules=[])
     for node in nodes:
         for phase in ('setup', 'call', 'teardown'):
-            emit('phase_end', **node, phase=phase, seconds=0, outcome='passed')
+            emit('phase_end', **node, phase=phase, seconds=0,
+                 outcome='skipped' if phase == 'call' and node['module'] == skipped_module else 'passed')
     emit('session_finish', source=manifest['source'], complete=True, successful=True,
          collected=len(nodes), finished=len(nodes), exit_code=0, outcomes=receiver.outcomes,
          modules={})
@@ -826,7 +852,7 @@ def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monk
     repo, dpapi_file = synthetic_repo
     for name in ('public_ci.py', 'public_ci_policy.json'):
         (repo / 'scripts' / name).write_bytes((runner.REPO / 'scripts' / name).read_bytes())
-    modules = [dpapi_file, *risk.SMOKE, *risk.L2_MODULES]
+    modules = sorted({dpapi_file, *risk.SMOKE, *(p for tests in risk.L2_IMPACT.values() for p in tests)})
     for module in modules:
         body = 'def test_one():\n    pass\n'
         if module == dpapi_file:
@@ -838,17 +864,17 @@ def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monk
     runner.write_json(repo / 'tests/public_test_classification.json', {
         'version': 2, 'files': files, 'deselect': [runner.DPAPI_NODE],
         'deselect_reason': {runner.DPAPI_NODE: 'synthetic forbidden node'}})
-    runner.write_json(repo / 'tests/public_shard_schedule.json', {
-        'version': 1, 'strategy': 'synthetic', 'shards': [modules[0::3], modules[1::3], modules[2::3]]})
+    runner.write_json(repo / 'tests/public_shard_schedule.json', _synthetic_schedule(modules))
     (repo / 'docs').mkdir()
     (repo / 'docs/DEVELOPMENT_TIPS.md').write_text('Synthetic navigation tips\n', encoding='utf-8')
-    (repo / 'source_language_filter.py').write_text('# synthetic ordinary source\n', encoding='utf-8')
+    for source_path in risk.L2_IMPACT:
+        (repo / source_path).write_bytes((runner.REPO / source_path).read_bytes())
     def git(*args):
         return subprocess.check_output(['git', '-C', str(repo), *args], timeout=20).decode().strip()
     git('init', '--quiet', '-b', 'main')
     git('config', 'user.name', 'Synthetic CI')
     git('config', 'user.email', 'synthetic@example.invalid')
-    git('add', 'scripts', 'tests', 'docs', 'source_language_filter.py', 'marker.txt', 'pytest.ini')
+    git('add', 'scripts', 'tests', 'docs', *risk.L2_IMPACT, 'marker.txt', 'pytest.ini')
     git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Synthetic base')
     git('checkout', '--quiet', '-b', 'topic')
     changed = {'L1': 'docs/DEVELOPMENT_TIPS.md', 'L2': 'source_language_filter.py', 'L3': 'scripts/public_ci.py'}[tier]
@@ -921,3 +947,102 @@ def test_risk_gate_rejects_guard_and_run_conflicts(risk_identity, tmp_path, case
         proof['identity'] = dict(decision['identity'], run={})
     with pytest.raises(ValueError, match='identity'):
         risk.gate(decision, proof, _risk_jobs('L1'), {}, tmp_path)
+
+
+@pytest.mark.parametrize('path', sorted(risk.L2_IMPACT))
+def test_each_reviewed_source_selects_exact_tests(risk_identity, monkeypatch, path):
+    _, event, env = risk_identity
+    original = runner.git
+    monkeypatch.setattr(runner, 'git', lambda *args: 'M\0' + path + '\0' if args[0] == 'diff' else original(*args))
+    decision = risk.decide(event, env)
+    assert decision['tier'] == 'L2'
+    assert decision['selected'] == sorted(set(risk.SMOKE + risk.L2_IMPACT[path]))
+    assert decision['shards'] == [decision['selected']]
+
+
+def test_reviewed_l2_reverse_dependency_closure_is_complete():
+    # Scan actual source and tests without importing production code. The audits
+    # are CLI leaves; the two helpers have only these reviewed advisory callers.
+    paths = [*runner.REPO.glob('*.py'), *(runner.REPO / 'scripts').glob('*.py'),
+             *(runner.REPO / 'tests').glob('test_*.py')]
+    graph = {}
+    for path in paths:
+        rel = path.relative_to(runner.REPO).as_posix()
+        graph[rel] = set(risk.import_footprint(path)) if path.name in risk.L2_IMPACT else set()
+        if path.name not in risk.L2_IMPACT:
+            tree = ast.parse(path.read_text(encoding='utf-8-sig'))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    graph[rel].update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    graph[rel].add(node.module)
+    for source, tests in risk.L2_IMPACT.items():
+        affected = {source}
+        while True:
+            names = {Path(p).stem for p in affected if '/' not in p}
+            callers = {p for p, deps in graph.items() if names & deps}
+            if callers <= affected:
+                break
+            affected |= callers
+        assert {p for p in affected if p.startswith('tests/')} == set(tests)
+        expected_callers = ({'audit_semantic_kinship.py'} if source == 'semantic_kinship.py' else
+                            {'audit_semantic_completeness_all.py', 'audit_semantic_completeness_candidates.py',
+                             'audit_semantic_kinship.py'} if source == 'source_language_filter.py' else set())
+        assert affected - set(tests) - {source} == expected_callers
+
+
+@pytest.mark.parametrize('path', sorted(risk.L2_IMPACT))
+@pytest.mark.parametrize('addition', ['\nimport production_paid_request_journal\n',
+                                      "\n__import__('production_paid_request_journal')\n",
+                                      "\nloader.import_module('production_paid_request_journal')\n",
+                                      '\nfrom . import unknown\n', '\ndef invalid(\n'])
+def test_new_dependency_or_unparseable_source_requires_l3(risk_identity, monkeypatch, tmp_path, path, addition):
+    _, event, env = risk_identity
+    altered = tmp_path / path
+    altered.write_text((runner.REPO / path).read_text(encoding='utf-8') + addition, encoding='utf-8')
+    original_footprint, original_git = risk.import_footprint, runner.git
+    monkeypatch.setattr(risk, 'import_footprint', lambda p: original_footprint(altered if p.name == path else p))
+    monkeypatch.setattr(runner, 'git', lambda *args: 'M\0' + path + '\0' if args[0] == 'diff' else original_git(*args))
+    assert risk.decide(event, env)['tier'] == 'L3'
+
+
+@pytest.mark.parametrize('unsafe', ['novel_project.py', 'chapter_library.py', 'semantic_completeness.py',
+    'semantic_integrity_audit.py', 'command_code_provider_credentials.py', 'production_paid_request_journal.py',
+    'production_accounting.py', 'production_chapter_commit.py', 'production_rolling_continuity.py',
+    'retroactive_transactions.py', 'glossary_audit.py', 'scripts/public_ci_policy.json',
+    'tests/public_shard_schedule.json', 'tests/test_semantic_kinship.py', 'unknown.py'])
+def test_mapped_source_with_dependency_or_unsafe_delta_requires_l3(unsafe):
+    policy = risk.load_policy(runner.load_classification()[0])
+    for paths in ([unsafe], ['semantic_kinship.py', unsafe]):
+        assert risk.classify([_change(p) for p in paths], 'pull_request', policy)[0] == 'L3'
+
+
+def test_multiple_reviewed_sources_select_union(risk_identity, monkeypatch):
+    _, event, env = risk_identity
+    original = runner.git
+    monkeypatch.setattr(runner, 'git', lambda *args: ''.join('M\0' + p + '\0' for p in risk.L2_IMPACT)
+                        if args[0] == 'diff' else original(*args))
+    decision = risk.decide(event, env)
+    assert decision['tier'] == 'L2'
+    assert decision['selected'] == sorted(set(risk.SMOKE + [p for tests in risk.L2_IMPACT.values() for p in tests]))
+
+
+@pytest.mark.parametrize('module', sorted(set(risk.SMOKE + [p for tests in risk.L2_IMPACT.values() for p in tests])))
+def test_l2_requires_actual_passing_call_in_every_selected_module(tmp_path, module):
+    directory = tmp_path / 'proof'
+    manifest = {'source': {'commit': 'a' * 40, 'tree': 'b' * 40},
+                'selected': sorted(set(risk.SMOKE + [p for tests in risk.L2_IMPACT.values() for p in tests])),
+                'selected_deselect': [], 'excluded': {}}
+    _risk_write_evidence(directory, manifest, skipped_module=module)
+    with pytest.raises(ValueError, match='mapped/smoke coverage'):
+        risk.verify_evidence(directory, manifest, 'L2')
+
+
+@pytest.mark.parametrize('path', sorted(risk.L2_IMPACT))
+def test_every_source_mapping_must_be_complete(monkeypatch, path):
+    files, _ = runner.load_classification()
+    policy = risk.load_policy(files)
+    policy['impact'][path]['modules'].pop()
+    monkeypatch.setattr(runner, 'read_json', lambda p: policy)
+    with pytest.raises(ValueError, match='impact coverage'):
+        risk.load_policy(files)

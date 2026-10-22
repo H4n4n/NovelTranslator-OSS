@@ -5,22 +5,60 @@ historical modules remain excluded, not passed. The zero-provider wrapper,
 explicit DPAPI deselection, external temporary roots, publication history gate,
 credential exclusion and read-only workflow permissions are retained.
 
-## Interim scheduling and limits
+## Measured scheduling and limits
 
-The prior source-byte heuristic did not measure execution cost. Whole-shard
-observations from run 39363803488 were approximately 2m13s, 39m34s and 8m19s;
-run 39372349993 exceeded the 60-minute cap in shard 1. These observations do not
-identify the slow module or explain runtime variation.
+The version-2 `tests/public_shard_schedule.json` uses complete per-module
+collection + setup/call/teardown seconds from successful hosted run
+[39696534289, attempt 1](https://github.com/H4n4n/NovelTranslator-OSS/actions/runs/39696534289).
+Its tested merge commit was `ff7e0975dcf172038b2376e3b3c5730b37cfff56`, tree
+`e80c1515fdf8d621dc02848de141f7d053609a6a`. That tree equals verified main
+`2776ab2c4f106cdd0d2f295576df6e8f13849772`; the PR head SHA alone is not the
+tested merge identity. The schedule retains only bounded public metadata:
+per-module costs, artifact-file hashes, exact source/run identity, old shard
+summaries and the proposed allocation. Original downloaded artifacts and
+historical benchmark evidence are untouched.
 
-`tests/public_shard_schedule.json` freezes the canonical Git-blob allocation at
-baseline commit `2967422172c42f30611d3ad574634541323b0615`, tree
-`47c488d15235cd94e8ab4f66186e5a8ec1af5ad3`. Its original 189 modules remain in
-three sets of 63; the new synthetic reliability module is added to shard 0.
-This is an **interim schedule with no per-module timing weights**. It deliberately
-does not claim a measured rebalance. Windows newline conversion changed the old
-on-disk heuristic to 64/63/62 in the development checkout, so the explicit schedule
-also removes checkout-format dependence. Historical hosted membership has not
-been independently reconstructed from a module manifest.
+Before using the measurements, all three `selection.json` files were reconciled
+against that baseline's source hashes (allowing Windows LF/CRLF conversion),
+classification and frozen schedule. `events.jsonl` was replayed through the bounded
+receiver and compared with `collected.json` and `timings.json`; terminal success,
+all node phases, exactly-once membership, exclusions and deselections passed.
+The run reports 5,327 passing tests, 12 skips and 15 reviewed deselections.
+
+| Shard | Old session seconds | Measured module seconds | Unattributed session seconds | New projected module seconds | New modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | 428.647 | 425.177 | 3.470 | 1541.852 | 61 |
+| 1 | 3631.409 | 3627.432 | 3.977 | 1541.851 | 64 |
+| 2 | 576.966 | 572.938 | 4.029 | 1541.844 | 66 |
+
+Shard 1's largest measured costs were:
+
+| Module (`tests/`) | Collection + phase seconds | New shard |
+| --- | ---: | ---: |
+| `test_goat_periodic_audit_finalization.py` | 1433.518 | 0 |
+| `test_completed_uncertain_history.py` | 1131.631 | 1 |
+| `test_production_goat_batch_journal.py` | 369.178 | 2 |
+| `test_production_goat_batch_ledger.py` | 281.030 | 2 |
+| `test_experimental_goat.py` | 278.197 | 2 |
+
+Allocation sorts modules by descending measured cost, with path ties, then puts
+each module in the least-loaded bucket, with bucket-index ties. The selector
+recomputes that allocation and rejects missing/unknown/invalid weights, stale
+measurement identity or altered membership/order. It never measures file sizes.
+Regression assertions pin the measured-weight digest and reviewed partitions.
+All 191 public modules, 2 private / 7 historical exclusions and all 15 node
+deselections are preserved. No test body, workload or safety guard is shortened.
+
+The projected maximum is **25m42s**, plus unallocated session overhead (about
+four seconds in the old run), versus the measured old **60m31s** session. That is
+about a **57.5% reduction** under the same-cost assumption, not a measured new
+hosted runtime. Costs come from one Windows run. Runner variation, import caching,
+fixture ownership and changed order can alter them; module collection costs can
+include imports first encountered there. The expanded synthetic CI controls also
+add some work to their module. Dependency installation, job queue/setup and the
+final gate are outside these session projections. No independence or repeat-run
+variance bound is claimed. One hosted full L3 on the final candidate merge tree
+is required before accepting this projection; independent review owns that check.
 
 The test process has a 4,500-second (75-minute) wall-clock deadline. The finite
 90-minute job cap allows 15 minutes for setup, dependency installation, cleanup
@@ -70,23 +108,6 @@ artifact upload. Flushed progress still remains in Actions logs when available.
 Missing artifacts or a missing terminal result is incomplete evidence, never a
 passing run. No job uses `continue-on-error`.
 
-## Measured rebalance procedure
-
-After an approved complete three-shard run, independently reconcile all three
-selection manifests and exact tested source identities. Check that every public
-module appears once, all exclusions and 15 node deselections match, and every
-required shard finished successfully. Use `timings.json` module collection and
-setup/call/teardown totals, examining `events.jsonl` for outliers and shared-fixture
-costs. Incomplete modules provide lower bounds only, never final timing weights.
-
-For a later reviewed schedule update, sort complete module measurements by
-measured descending duration (path breaks ties), then allocate each module to
-the currently least-loaded of three buckets (bucket index breaks ties). Retain
-measurement source SHA/tree/run and repeat on independent Windows runs to assess
-variance and order effects. New or unmeasured modules require explicit review;
-they must not silently get invented costs or disappear. Keep finite caps and
-full coverage until the replacement schedule actually completes.
-
 ## Risk-based public qualification
 
 `scripts/public_ci.py` and `scripts/public_ci_policy.json` implement a deliberately
@@ -98,15 +119,43 @@ The default `run_public_tests.py` invocation still runs the complete public suit
 | Tier | Eligible delta | Required tests |
 | --- | --- | --- |
 | L1 | Only modifications to `docs/DEVELOPMENT_TIPS.md`, a navigation-only page | Public CI synthetic controls and runtime hardening smoke |
-| L2 | Only modifications to `source_language_filter.py` | The same smoke plus all three direct callers' public test modules |
-| L3 | Every other case | Existing 190-module three-shard partition, exactly once |
+| L2 | Only modifications to the five reviewed paths below | The same smoke plus the union of their exact affected public test modules |
+| L3 | Every other case | All 191 public modules in the measured three-shard partition, exactly once |
 
-The L2 helper is a pure language-tag predicate used by
-`audit_semantic_completeness_all.py`, `audit_semantic_completeness_candidates.py`
-and `audit_semantic_kinship.py`. Their three test modules exercise bare-language
-and tagged-language discovery. No production writer imports this helper. The
-policy and validator both require that exact nonempty module set; broad source
-coverage is not claimed. Adding mappings requires an explicit policy/code review.
+The impact map is deliberately confined to advisory, read-only calibration:
+
+| Source path | Complete affected tests (`tests/`) |
+| --- | --- |
+| `source_language_filter.py` (existing) | `test_audit_semantic_completeness_all.py`, `test_audit_semantic_completeness_candidates.py`, `test_audit_semantic_kinship.py` |
+| `semantic_kinship.py` | `test_semantic_kinship.py`, `test_audit_semantic_kinship.py` |
+| `audit_semantic_kinship.py` | `test_audit_semantic_kinship.py` |
+| `audit_semantic_completeness_all.py` | `test_audit_semantic_completeness_all.py` |
+| `audit_semantic_completeness_candidates.py` | `test_audit_semantic_completeness_candidates.py` |
+
+The three audit CLIs have no downstream source callers. Their tests call the
+actual per-project and aggregate functions using synthetic projects and verify
+protected state is unchanged. The source-language predicate has only those three
+callers. The pure kinship detector has only the kinship audit as a source caller;
+its direct tests exercise extraction, window/classification behavior and the
+non-blocking result. Repository import/use inspection and a reverse-transitive
+import-closure regression verify those complete source-to-test sets. These paths
+support translation-quality calibration without changing commit QA policy.
+
+The policy validator requires the exact hardcoded source set and each nonempty
+complete test set. An AST-only check of each mapped source's reviewed import
+footprint rejects new dependencies, relative/dynamic imports or unparseable
+source to L3 without executing it. Changes to any dependency itself, including
+`novel_project.py`, `chapter_library.py`, `semantic_integrity_audit.py`,
+`semantic_completeness.py` or the underlying completeness audit, still take L3;
+adding a mapped source to that delta cannot lower it. Every L2 selection includes
+the invariant two smoke modules and every affected public module, deduplicated.
+Every selected module must supply an actual passing call phase at the gate.
+
+This is a bounded expansion from one to five source paths, not a claim that all
+translation maintenance is low risk. Production QA, paid-request handling,
+credentials, recovery, accounting, state authority, glossary mutation and
+historical writers are intentionally outside L2. Imports and tests are review
+evidence, not a sandbox proving arbitrary replacement Python is harmless.
 
 Unknown or mixed paths, added/renamed/deleted/type-changed files, dependencies,
 configuration, tests, infrastructure, credentials/security, publication policy,
@@ -114,8 +163,9 @@ CI policy and normative documentation (including README and AGENTS) take L3.
 Pushes to main and manual runs also take L3. A missing, malformed, or changed
 impact policy falls back to L3. Missing or stale test classification/scheduling
 blocks qualification entirely; new tests cannot disappear from the public
-partition. This PR itself takes L3. The original classification, schedule,
-2 private + 7 historical module exclusions and 15 node deselections are unchanged.
+partition. This PR itself takes L3. The classification, 2 private + 7 historical
+module exclusions and 15 node deselections are unchanged; only the measured
+allocation changes.
 
 ## Exact evidence and stable gate
 
@@ -163,7 +213,7 @@ on the affected tests (choose a fresh external temp child):
 
 ```powershell
 python -m py_compile scripts/public_ci.py scripts/run_public_tests.py tests/test_public_ci_reliability.py
-python tests/zero_provider_validation.py --basetemp "$env:TEMP/nt-focused-unique" --deselect tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip -- -q -p no:cacheprovider tests/test_public_ci_reliability.py tests/test_runtime_hardening_smoke.py
+python tests/zero_provider_validation.py --basetemp "$env:TEMP/nt-focused-unique" --deselect tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip -- -q -p no:cacheprovider tests/test_public_ci_reliability.py tests/test_runtime_hardening_smoke.py tests/test_semantic_kinship.py tests/test_audit_semantic_kinship.py tests/test_audit_semantic_completeness_all.py tests/test_audit_semantic_completeness_candidates.py
 ```
 
 Synthetic tests cover tier happy paths, risky/unknown/mixed/rename/delete fallback,
@@ -173,7 +223,7 @@ Real temporary Git repositories exercise all three tiers through decision,
 guarded child execution and the gate, including base-only changes and merge-tree
 drift. Existing complete-runner negative controls remain intact. These local
 checks do not replace the one required hosted L3 on this CI change's final
-candidate. Measured shard rebalancing remains separate.
+candidate. Local focused tests do not establish the new hosted shard runtimes.
 
 L4 stays separately authorized, off-public and source-pinned. Every decision
 and successful PUBLIC gate explicitly report L4 as **NOT VERIFIED**. No private

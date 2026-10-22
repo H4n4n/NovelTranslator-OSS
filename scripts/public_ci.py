@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import json
@@ -21,6 +22,26 @@ JOBS = {'L1': 'l1', 'L2': 'l2', 'L3': 'test'}
 L2_MODULES = ['tests/test_audit_semantic_completeness_all.py',
               'tests/test_audit_semantic_completeness_candidates.py',
               'tests/test_audit_semantic_kinship.py']
+# Reviewed reverse-use closure, including the tests of each advisory caller.
+L2_IMPACT = {
+    'source_language_filter.py': L2_MODULES,
+    'semantic_kinship.py': ['tests/test_audit_semantic_kinship.py', 'tests/test_semantic_kinship.py'],
+    'audit_semantic_kinship.py': ['tests/test_audit_semantic_kinship.py'],
+    'audit_semantic_completeness_all.py': ['tests/test_audit_semantic_completeness_all.py'],
+    'audit_semantic_completeness_candidates.py': ['tests/test_audit_semantic_completeness_candidates.py'],
+}
+# A new static or dynamic import requires L3 and review of the impact closure.
+L2_IMPORTS = {
+    'source_language_filter.py': [],
+    'semantic_kinship.py': ['re'],
+    'audit_semantic_kinship.py': ['argparse', 'chapter_library', 'collections', 'json', 'novel_project',
+                                'pathlib', 'semantic_integrity_audit', 'semantic_kinship', 'source_language_filter'],
+    'audit_semantic_completeness_all.py': ['argparse', 'audit_semantic_completeness', 'json',
+                                         'novel_project', 'pathlib', 'source_language_filter'],
+    'audit_semantic_completeness_candidates.py': ['argparse', 'chapter_library', 'collections', 'json',
+                                                'novel_project', 'pathlib', 're', 'semantic_completeness',
+                                                'semantic_integrity_audit', 'source_language_filter'],
+}
 SHA = re.compile(r'[a-f0-9]{40}')
 
 
@@ -72,6 +93,22 @@ def changed_paths(base, commit):
     return changes
 
 
+def import_footprint(path):
+    """Inspect source without importing it or executing project/provider code."""
+    tree = ast.parse(path.read_text(encoding='utf-8-sig'))
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            require(node.level == 0 and node.module, 'unreviewed relative import')
+            imports.add(node.module)
+        elif isinstance(node, ast.Call):
+            name = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)
+            require(name not in {'__import__', 'import_module'}, 'unreviewed dynamic import')
+    return sorted(imports)
+
+
 def load_policy(files):
     policy = runner.read_json(runner.REPO / POLICY)
     require(set(policy) == {'version', 'non_normative_docs', 'smoke', 'impact'}, 'invalid policy fields')
@@ -80,15 +117,16 @@ def load_policy(files):
     require(docs == ['docs/DEVELOPMENT_TIPS.md'], 'unreviewed docs policy')
     require(all(isinstance(p, str) and p.startswith('docs/') and p.endswith('.md')
                 and (runner.REPO / p).is_file() for p in docs), 'invalid docs policy')
-    require(isinstance(impact, dict) and impact, 'empty impact mapping')
+    require(isinstance(impact, dict) and set(impact) == set(L2_IMPACT), 'inexact reviewed source mapping')
     for path, entry in impact.items():
-        require(path == 'source_language_filter.py', 'unreviewed L2 source')
+        require(path in L2_IMPACT, 'unreviewed L2 source')
         require(set(entry) == {'modules', 'reason'} and isinstance(entry['reason'], str)
                 and entry['reason'].strip(), 'missing impact rationale')
         modules = entry['modules']
-        require(isinstance(modules, list) and sorted(modules) == L2_MODULES, 'inexact reviewed impact coverage')
+        require(isinstance(modules, list) and sorted(modules) == L2_IMPACT[path], 'inexact reviewed impact coverage')
         require(all(files.get(p, {}).get('status') == 'public' for p in modules + SMOKE), 'non-public impact/smoke')
         require((runner.REPO / path).is_file(), 'stale source mapping')
+        require(import_footprint(runner.REPO / path) == L2_IMPORTS[path], 'changed L2 dependencies')
     return policy
 
 
@@ -119,7 +157,7 @@ def decide(event, env):
         policy = load_policy(files)
         policy_sha = runner.git('rev-parse', f"HEAD:{POLICY}")
         unchanged = policy_sha == runner.git('rev-parse', f"{bound['base']}:{POLICY}")
-    except (ValueError, OSError, runner.subprocess.SubprocessError, TypeError, KeyError):
+    except (ValueError, OSError, runner.subprocess.SubprocessError, TypeError, KeyError, SyntaxError):
         unchanged = False
     tier, reason = classify(changes, bound['event'], policy, unchanged)
     if tier == 'L3':

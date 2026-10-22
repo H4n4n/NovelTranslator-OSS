@@ -25,6 +25,10 @@ MAX_FRAME_BYTES = 65536
 MAX_EVENTS = 100000
 MAX_TELEMETRY_BYTES = 64 * 1024 * 1024
 
+TIMING_SOURCE = {'run_id': 39696534289, 'attempt': 1,
+                 'commit': 'ff7e0975dcf172038b2376e3b3c5730b37cfff56',
+                 'tree': 'e80c1515fdf8d621dc02848de141f7d053609a6a'}
+
 DPAPI_NODE = 'tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip'
 
 
@@ -68,24 +72,37 @@ def load_classification():
     return files, deselect
 
 
-def balanced_shards(public, shards):
-    """Frozen interim allocation; no source-size or invented duration weights.
+def measured_shards(weights):
+    """Longest measured module first; path and bucket index break ties."""
+    buckets, loads = [[], [], []], [0.0, 0.0, 0.0]
+    for path in sorted(weights, key=lambda p: (-weights[p], p)):
+        shard = min(range(3), key=lambda i: (loads[i], i))
+        buckets[shard].append(path)
+        loads[shard] += weights[path]
+    return buckets
 
-    Keep the canonical baseline membership until complete per-module measurements
-    on Windows justify a reviewed rebalance. A single-shard local run remains
-    available; CI always runs all three buckets.
-    """
+
+def balanced_shards(public, shards):
+    """Replay the reviewed Windows module timings; never infer costs from size."""
     if shards not in (1, 3) or not public or len(set(public)) != len(public):
         raise ValueError('invalid or empty public partition')
     schedule = read_json(SCHEDULE)
     buckets = schedule.get('shards')
-    if schedule.get('version') != 1 or not isinstance(buckets, list) or len(buckets) != 3:
-        raise ValueError('invalid schedule schema')
+    if (schedule.get('version') != 2 or schedule.get('strategy') != 'measured-module-lpt-39696534289'
+            or schedule.get('measurement_source') != TIMING_SOURCE
+            or not isinstance(buckets, list) or len(buckets) != 3):
+        raise ValueError('invalid or stale measured schedule')
     if not all(isinstance(b, list) and b and all(isinstance(p, str) for p in b) for b in buckets):
         raise ValueError('empty or malformed scheduled shard')
     flat = [p for bucket in buckets for p in bucket]
     if len(flat) != len(set(flat)) or set(flat) != set(public):
         raise ValueError('schedule must partition every public module exactly once')
+    weights = schedule.get('module_seconds')
+    if (not isinstance(weights, dict) or set(weights) != set(public)
+            or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in weights.values())):
+        raise ValueError('missing or invalid measured module timings')
+    if buckets != measured_shards(weights):
+        raise ValueError('schedule differs from measured allocation')
     return buckets if shards == 3 else [sorted(public)]
 
 

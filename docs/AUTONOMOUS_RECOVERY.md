@@ -26,7 +26,10 @@ publication reconciliation in the same run. It adds no paid send authorization.
 `production_autonomous_recovery.py` is import-inert and has no client, filesystem,
 credentials, schedule or transport capability. The maintained production adapter
 supplies existing callbacks and a hash of novel/chapter/source/model/profile/
-operation-policy context. Successful pending/checkpoint results also contribute
+operation-policy context for chapter processing. Audit diagnostics use only the
+novel and explicit audit range, with no chapter-source lookup or fabricated source
+hash; source/intent/transaction proof remains in the existing domain finalizer.
+Successful pending/checkpoint results also contribute
 hashed translation/checkpoint evidence. Exact payload/model/source matching,
 durable attempt counters and local replay still belong to domain journals and
 validators; supervisor hashes are diagnostic bindings, never proof substitutes.

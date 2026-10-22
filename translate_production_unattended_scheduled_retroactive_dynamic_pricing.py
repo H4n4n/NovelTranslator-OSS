@@ -3156,7 +3156,7 @@ def run_periodic_audit(
 
     from production_periodic_audit_finalization import load_intent
     from types import SimpleNamespace
-    recovery = autonomous_recovery_supervisor(start_chapter, end_chapter=end_chapter)
+    recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
         audit_result, audit_stats, chunking = (intent["audit_result"], intent["audit_stats"], intent["chunking"])
@@ -3782,12 +3782,28 @@ def reconcile_reviewed_partial_commit_tail(chapter_number):
     return True
 
 
-def autonomous_recovery_supervisor(chapter_number, *, end_chapter=None):
+def autonomous_audit_recovery_supervisor(start_chapter, end_chapter):
+    # Diagnostic range identity is not a source proof or a grant to publish.
+    # Historical ranges need not start in the current chapter map. Acquisition
+    # and the durable finalizer retain exact source/intent/transaction proofs.
+    return RecoverySupervisor(
+        identity={
+            "scope": "audit_range_diagnostics",
+            "novel": ACTIVE_NOVEL_CONFIG.id if ACTIVE_NOVEL_CONFIG else "legacy_single_novel",
+            "start_chapter": start_chapter, "end_chapter": end_chapter,
+        },
+        emit=lambda event, **fields: log_event(event, audit_start_chapter=start_chapter,
+            audit_end_chapter=end_chapter, last_completed=progress.get("last_completed"),
+            next_chapter=progress.get("next_chapter"), **fields),
+    )
+
+
+def autonomous_recovery_supervisor(chapter_number):
     source = chapter_map[chapter_number]["text"]
     return RecoverySupervisor(
         identity={
             "novel": ACTIVE_NOVEL_CONFIG.id if ACTIVE_NOVEL_CONFIG else "legacy_single_novel",
-            "chapter": chapter_number, "end_chapter": end_chapter,
+            "chapter": chapter_number, "end_chapter": None,
             "source_sha256": identity_sha256(source),
             "model": MODEL, "profile": ACTIVE_PROFILE.id,
             "policy_sha256": current_production_operation_policy().identity_sha256(),

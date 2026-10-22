@@ -1,3 +1,4 @@
+from public_test_support import supervised_callback_source
 from pathlib import Path
 
 import pytest
@@ -195,6 +196,14 @@ def test_legacy_process_orders_repairs_checkpoint_state_and_commit():
         repo_root
         / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
     ).read_text(encoding="utf-8")
+    source = supervised_callback_source(source, "process_chapter", {
+        'strict_micro_repair': ('strict_micro', 'maybe_repair_strict_terminology'),
+        'micro_repair': ('residual_cjk', 'maybe_repair_residual_cjk'),
+        'qa_checkpoint': ('commit_qa', 'run_commit_qa_checkpoint'),
+        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
+        'glossary_changes': ('reviewed_state', 'finalize_reviewed_chapter_state'),
+        'chapter_stats': ('chapter_commit', 'commit_reviewed_chapter'),
+    })
     process = source[source.index("def process_chapter("):]
 
     strict_repair = process.index(
@@ -238,3 +247,45 @@ def test_legacy_process_orders_repairs_checkpoint_state_and_commit():
     )
     assert "persist_meta=lambda value: save_json(" in checkpoint_block
     assert 'if not qa_checkpoint["commit_allowed"]:' in checkpoint_block
+
+
+@pytest.mark.parametrize("dispatch", [
+    'run_commit_qa_checkpoint()',
+    'recovery.run("wrong_stage", lambda: run_commit_qa_checkpoint())',
+    'other.run("commit_qa", lambda: run_commit_qa_checkpoint())',
+    'recovery.run("commit_qa", lambda: skip_required_qa())',
+    'recovery.run("commit_qa", run_commit_qa_checkpoint())',
+    'recovery.run("commit_qa", lambda ignored=run_commit_qa_checkpoint(): run_commit_qa_checkpoint())',
+    'recovery.run("commit_qa", lambda: run_commit_qa_checkpoint(), recover_local=resend)',
+])
+def test_structure_guard_rejects_changed_or_eager_supervisor_dispatch(dispatch):
+    source = 'def process_chapter():\n    qa_checkpoint = ' + dispatch + '\n'
+    with pytest.raises(AssertionError):
+        supervised_callback_source(source, "process_chapter", {
+            "qa_checkpoint": ("commit_qa", "run_commit_qa_checkpoint"),
+        })
+
+
+def test_structure_guard_preserves_callback_arguments_and_qa_gate():
+    source = '''def process_chapter():
+    """Synthetic Unicode: 青."""
+    qa_checkpoint = recovery.run("commit_qa", lambda: run_commit_qa_checkpoint(
+        qa_checker=local_qa, reset_failed_meta=pending_meta_after_commit_qa_failure))
+    if not qa_checkpoint["commit_allowed"]:
+        return False
+'''
+    projected = supervised_callback_source(source, "process_chapter", {
+        "qa_checkpoint": ("commit_qa", "run_commit_qa_checkpoint"),
+    })
+    assert projected == source.replace('recovery.run("commit_qa", lambda: ', '').replace(
+        'pending_meta_after_commit_qa_failure))', 'pending_meta_after_commit_qa_failure)')
+    hidden = 'def process_chapter():\n    def unused():\n        qa_checkpoint = recovery.run("commit_qa", lambda: run_commit_qa_checkpoint())\n'
+    with pytest.raises(AssertionError):
+        supervised_callback_source(hidden, "process_chapter", {
+            "qa_checkpoint": ("commit_qa", "run_commit_qa_checkpoint"),
+        })
+    duplicate = source + '    qa_checkpoint = recovery.run("commit_qa", lambda: run_commit_qa_checkpoint())\n'
+    with pytest.raises(AssertionError):
+        supervised_callback_source(duplicate, "process_chapter", {
+            "qa_checkpoint": ("commit_qa", "run_commit_qa_checkpoint"),
+        })

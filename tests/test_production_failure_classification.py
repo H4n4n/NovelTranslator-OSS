@@ -1,3 +1,4 @@
+from public_test_support import supervised_callback_source
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,11 @@ def test_active_runtime_provider_tuples_exclude_generic_runtime_and_journal_erro
         / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
     ).read_text(encoding="utf-8")
 
+    source = supervised_callback_source(source, "process_chapter", {
+        'selected': ('translation', 'obtain_translation'),
+        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
+        'review_checkpoint': ('glossary_review', 'run_glossary_review_checkpoint'),
+    })
     lifecycle_call = source[source.rindex("return run_unattended_lifecycle("):]
     assert "handled_error_types=(" in lifecycle_call
     handled = lifecycle_call[

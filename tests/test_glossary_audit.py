@@ -1,3 +1,4 @@
+from public_test_support import supervised_callback_source
 import ast
 import copy
 import hashlib
@@ -1235,6 +1236,10 @@ def test_production_applies_only_after_chunked_audit_returns_complete():
         Path(__file__).resolve().parents[1]
         / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
     ).read_text(encoding="utf-8")
+    source = supervised_callback_source(source, "run_periodic_audit", {
+        ('audit_result', 'audit_stats', 'chunking'): ('audit_acquisition', 'call_periodic_audit'),
+        'result': ('audit_publication', 'finalize_periodic_audit'),
+    })
     run_block = source[source.index("def run_periodic_audit("):source.index("def describe_api_error(")]
     assert run_block.index("call_periodic_audit(") < run_block.index("result = finalize_periodic_audit(")
     finalizer = (Path(__file__).resolve().parents[1] / "production_periodic_audit_finalization.py").read_text(encoding="utf-8")

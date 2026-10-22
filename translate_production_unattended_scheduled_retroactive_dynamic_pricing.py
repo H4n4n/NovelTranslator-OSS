@@ -117,6 +117,7 @@ from production_failure_classification import (
     ProductionIntegrityError,
     describe_non_provider_error,
 )
+from production_autonomous_recovery import RecoverySupervisor, identity_sha256
 from production_commit_qa_checkpoint import run_commit_qa_checkpoint
 from production_operation_policy import (
     OperationRequestPolicy,
@@ -1038,6 +1039,11 @@ def reprice_saved_stats_if_needed(stats):
     Calls that failed before their usage was saved cannot be reconstructed;
     the DeepSeek billing dashboard is authoritative for those.
     """
+    if isinstance(stats, dict) and "state_accepted_operations" in stats:
+        from noveltranslator_core import validate_stats_record
+        if validate_stats_record(stats, "saved state recovery accounting"):
+            raise ProductionIntegrityError("saved state recovery accounting failed validation")
+        return copy.deepcopy(stats)
     if isinstance(stats, dict) and "translation_accepted_operations" in stats:
         # Each durable accepted operation retains its actual historical price.
         # Repricing the sum at either request's rate would lose mixed-window cost.
@@ -3150,13 +3156,26 @@ def run_periodic_audit(
 
     from production_periodic_audit_finalization import load_intent
     from types import SimpleNamespace
+    recovery = autonomous_recovery_supervisor(start_chapter, end_chapter=end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
         audit_result, audit_stats, chunking = (intent["audit_result"], intent["audit_stats"], intent["chunking"])
     else:
-        audit_result, audit_stats, chunking = call_periodic_audit(start_chapter, end_chapter)
+        audit_result, audit_stats, chunking = recovery.run("audit_acquisition",
+            lambda: call_periodic_audit(start_chapter, end_chapter))
 
-    result = finalize_periodic_audit(start_chapter, end_chapter, audit_result, audit_stats, chunking)
+    def reconcile_local_publication():
+        saved = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
+        if saved is None:
+            raise ProductionIntegrityError("AUT-1 audit finalization has no durable intent")
+        # The finalizer proves exact novel/range, old/new state, accounting,
+        # policy and transaction prefixes before any local write.
+        return finalize_periodic_audit(start_chapter, end_chapter,
+            saved["audit_result"], saved["audit_stats"], saved["chunking"])
+
+    result = recovery.run("audit_publication",
+        lambda: finalize_periodic_audit(start_chapter, end_chapter, audit_result, audit_stats, chunking),
+        recover_local=reconcile_local_publication)
     changes = result["audit_record"]["changes"]
     retroactive_result = result["audit_record"]["retroactive"]
 
@@ -3763,6 +3782,22 @@ def reconcile_reviewed_partial_commit_tail(chapter_number):
     return True
 
 
+def autonomous_recovery_supervisor(chapter_number, *, end_chapter=None):
+    source = chapter_map[chapter_number]["text"]
+    return RecoverySupervisor(
+        identity={
+            "novel": ACTIVE_NOVEL_CONFIG.id if ACTIVE_NOVEL_CONFIG else "legacy_single_novel",
+            "chapter": chapter_number, "end_chapter": end_chapter,
+            "source_sha256": identity_sha256(source),
+            "model": MODEL, "profile": ACTIVE_PROFILE.id,
+            "policy_sha256": current_production_operation_policy().identity_sha256(),
+        },
+        emit=lambda event, **fields: log_event(event, chapter=chapter_number,
+            last_completed=progress.get("last_completed"),
+            next_chapter=progress.get("next_chapter"), **fields),
+    )
+
+
 def process_chapter(chapter_number):
     chapter_started = time.perf_counter()
     chapter = chapter_map[chapter_number]
@@ -3777,12 +3812,13 @@ def process_chapter(chapter_number):
         # review work in that state; the reviewed commit-tail reconciler proves
         # the stronger metadata/QA/associated-state contract before any write.
         return reconcile_reviewed_partial_commit_tail(chapter_number)
+    recovery = autonomous_recovery_supervisor(chapter_number)
     try:
-        selected = obtain_translation(
+        selected = recovery.run("translation", lambda: obtain_translation(
             chapter_number,
             PENDING_DIR,
             lambda: translate_chapter(chapter),
-        )
+        ))
     except (
         APIError,
         APIConnectionError,
@@ -3892,7 +3928,7 @@ def process_chapter(chapter_number):
                 api_cost=0,
             )
 
-    strict_repair = perform_deterministic_strict_terminology_repair(
+    strict_repair = recovery.run("strict_deterministic", lambda: perform_deterministic_strict_terminology_repair(
         chapter_number=chapter_number,
         source_text=chinese_text,
         translation=translation,
@@ -3908,7 +3944,7 @@ def process_chapter(chapter_number):
         log_event=lambda event, **fields: log_event(
             event, chapter=chapter_number, stage="local_qa", **fields
         ),
-    )
+    ))
     if strict_repair["repairs_applied"]:
         meta = strict_repair["meta"]
         translation = strict_repair["translation"]
@@ -3918,7 +3954,7 @@ def process_chapter(chapter_number):
                 f"{repair['old_variant']} â†’ {repair['canonical_english']}"
             )
 
-    recorded_strict_recovery = maybe_revalidate_recorded_strict_terminology(
+    recorded_strict_recovery = recovery.run("strict_recorded", lambda: maybe_revalidate_recorded_strict_terminology(
         chapter_number,
         chinese_text,
         translation,
@@ -3926,7 +3962,7 @@ def process_chapter(chapter_number):
         pending_file,
         pending_meta_file,
         finish_reason,
-    )
+    ))
     if recorded_strict_recovery["status"].startswith(
         "succeeded_from_revalidated_recorded_candidate"
     ):
@@ -3934,7 +3970,7 @@ def process_chapter(chapter_number):
         meta = recorded_strict_recovery["meta"]
         print("Recovered and revalidated the recorded strict-term patches locally.")
 
-    strict_micro_repair = maybe_repair_strict_terminology(
+    strict_micro_repair = recovery.run("strict_micro", lambda: maybe_repair_strict_terminology(
         chapter_number,
         chinese_text,
         translation,
@@ -3942,7 +3978,7 @@ def process_chapter(chapter_number):
         pending_file,
         pending_meta_file,
         finish_reason,
-    )
+    ))
     translation = strict_micro_repair["translation"]
     meta = strict_micro_repair["meta"]
 
@@ -3955,7 +3991,7 @@ def process_chapter(chapter_number):
         "succeeded_from_recorded_candidate_with_unrelated_blockers",
         "succeeded_from_revalidated_recorded_candidate_with_unrelated_blockers",
     }:
-        micro_repair = maybe_repair_residual_cjk(
+        micro_repair = recovery.run("residual_cjk", lambda: maybe_repair_residual_cjk(
             chapter_number,
             chinese_text,
             translation,
@@ -3963,11 +3999,11 @@ def process_chapter(chapter_number):
             pending_file,
             pending_meta_file,
             finish_reason,
-        )
+        ))
         translation = micro_repair["translation"]
         meta = micro_repair["meta"]
 
-    qa_checkpoint = run_commit_qa_checkpoint(
+    qa_checkpoint = recovery.run("commit_qa", lambda: run_commit_qa_checkpoint(
         chapter_number=chapter_number,
         source_text=chinese_text,
         translation=translation,
@@ -3976,7 +4012,7 @@ def process_chapter(chapter_number):
         qa_checker=local_qa,
         reset_failed_meta=pending_meta_after_commit_qa_failure,
         persist_meta=lambda value: save_json(pending_meta_file, value),
-    )
+    ))
     qa = qa_checkpoint["qa"]
     meta = qa_checkpoint["meta"]
     if not qa_checkpoint["commit_allowed"]:
@@ -4027,7 +4063,7 @@ def process_chapter(chapter_number):
         )
         if state_checkpoint_identity["prior_continuity"]["latest_chapter"] != progress.get("last_completed"):
             raise SavedCheckpointIdentityError("prior continuity does not match committed progress")
-        state_checkpoint = run_state_extraction_checkpoint(
+        state_checkpoint = recovery.run("state", lambda: run_state_extraction_checkpoint(
             meta=meta,
             validate_saved_state=validate_state,
             extract_state=lambda: extract_state(
@@ -4047,7 +4083,7 @@ def process_chapter(chapter_number):
                 RateLimitError,
                 ProviderResponseError,
             ),
-        )
+        ))
     except SavedCheckpointIdentityError as exc:
         log_error(
             exc,
@@ -4115,7 +4151,7 @@ def process_chapter(chapter_number):
             **stats_event_fields(state_stats),
         )
 
-    candidate_checkpoint = run_candidate_preparation_checkpoint(
+    candidate_checkpoint = recovery.run("candidates", lambda: run_candidate_preparation_checkpoint(
         prepare_candidates=lambda: prefilter_candidates(
             state.get("new_terms", []),
             chinese_text,
@@ -4133,7 +4169,7 @@ def process_chapter(chapter_number):
             pending_meta_file,
             conflict,
         ),
-    )
+    ))
     if candidate_checkpoint["status"] == "resolution_failed":
         return stop_for_glossary_candidate_resolution_error(
             chapter_number, candidate_checkpoint["error"], pending_file
@@ -4165,7 +4201,7 @@ def process_chapter(chapter_number):
     )
 
     try:
-        review_checkpoint = run_glossary_review_checkpoint(
+        review_checkpoint = recovery.run("glossary_review", lambda: run_glossary_review_checkpoint(
             meta=meta,
             eligible_candidates=eligible_candidates,
             candidate_preparation=candidate_preparation,
@@ -4198,7 +4234,7 @@ def process_chapter(chapter_number):
                 pending_meta_file,
                 value,
             ),
-        )
+        ))
     except SavedCheckpointIdentityError as exc:
         log_error(
             exc,
@@ -4284,7 +4320,7 @@ def process_chapter(chapter_number):
             **stats_event_fields(review_stats),
         )
 
-    glossary_changes = finalize_reviewed_chapter_state(
+    glossary_changes = recovery.run("reviewed_state", lambda: finalize_reviewed_chapter_state(
         chapter_number=chapter_number,
         eligible_candidates=eligible_candidates,
         review_result=review_result,
@@ -4295,8 +4331,8 @@ def process_chapter(chapter_number):
         issues_data=issues_data,
         apply_term_review=apply_term_review,
         replace_chapter_issues=replace_chapter_issues,
-    )
-    chapter_stats = commit_reviewed_chapter(
+    ))
+    chapter_stats = recovery.run("chapter_commit", lambda: commit_reviewed_chapter(
         chapter_number=chapter_number,
         translation=translation,
         qa=qa,
@@ -4321,7 +4357,7 @@ def process_chapter(chapter_number):
         atomic_write_text=atomic_write_text,
         save_json=save_json,
         commit_chapter_accounting=commit_chapter_accounting,
-    )
+    ))
 
     print(f"\nChapter {chapter_number} fully committed.")
     print(f"Glossary accepted: {len(glossary_changes['added'])}")

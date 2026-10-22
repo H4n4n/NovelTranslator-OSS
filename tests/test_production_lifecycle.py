@@ -49,9 +49,8 @@ def test_final_audit_runs_only_for_completed_tail():
     run_final_audit_if_needed(
         progress=progress,
         final_chapter=5,
-        run_periodic_audit=lambda start, end: calls.append(
-            (start, end)
-        ),
+        run_periodic_audit=lambda start, end: (calls.append((start, end)),
+            progress.update(last_audited_chapter=end)),
     )
 
     assert calls == [(4, 5)]
@@ -418,3 +417,466 @@ def test_all_lifecycle_output_uses_injected_print(monkeypatch):
     run_unattended_lifecycle(**kwargs)
 
     assert output
+
+# AUT-1 tests extend this already-classified lifecycle module. All state is
+# disposable and every transport below is a Python fake under the public guard.
+import copy
+import json
+from pathlib import Path
+from types import SimpleNamespace as NS
+
+from production_autonomous_recovery import RecoverySupervisor, decide_recovery, classify_exception
+from production_failure_classification import ProductionIntegrityError, ProductionControlError
+from production_paid_request_journal import PaidRequestUncertainError, PaidRequestJournalError, _with_record_hash
+from production_saved_checkpoint_identity import SavedCheckpointIdentityError
+
+
+def test_aut1_no_duplicate_dispatch_or_invented_route():
+    calls, events = [], []
+    supervisor = RecoverySupervisor(identity={"novel": "fixture", "chapter": 1},
+                                    emit=lambda *a, **k: events.append(k))
+    supervisor.run("state", lambda: calls.append(1) or {"status": "extracted"})
+    with pytest.raises(ProductionControlError):
+        supervisor.run("state", lambda: calls.append(2))
+    with pytest.raises(ProductionControlError):
+        supervisor.run("goat_lifetime_batch", lambda: calls.append(3))
+    assert calls == [1]
+    assert events[-1]["reason_code"] == "DUPLICATE_OR_UNSUPPORTED_DISPATCH"
+
+
+@pytest.mark.parametrize("exc,reason", [
+    (PaidRequestUncertainError("do not echo source"), "AMBIGUOUS_PAID_REQUEST"),
+    (PaidRequestJournalError("request/model/source mismatch"), "IDENTITY_OR_PROOF_MISMATCH"),
+    (SavedCheckpointIdentityError("stale policy"), "IDENTITY_OR_PROOF_MISMATCH"),
+    (RuntimeError("try again length"), "UNCLASSIFIED_FAILURE"),
+])
+def test_aut1_typed_failure_never_retries_or_echoes_prose(exc, reason):
+    calls, events = [], []
+    def fail():
+        calls.append(1)
+        raise exc
+    supervisor = RecoverySupervisor(identity={}, emit=lambda *a, **k: events.append(k))
+    with pytest.raises(type(exc)):
+        supervisor.run("translation", fail)
+    assert calls == [1]
+    assert events[-1]["reason_code"] == reason
+    assert str(exc) not in json.dumps(events)
+
+
+@pytest.mark.parametrize("stage,result,reason", [
+    ("strict_micro", {"status": "attempt_limit_reached"}, "REPAIR_BUDGET_EXHAUSTED"),
+    ("residual_cjk", {"status": "ineligible"}, "REPAIR_NOT_PROVEN"),
+    ("commit_qa", {"commit_allowed": False}, "MANDATORY_QA_UNRESOLVED"),
+    ("candidates", {"status": "identity_failed"}, "GLOSSARY_IDENTITY_UNRESOLVED"),
+])
+def test_aut1_known_blockers_have_machine_readable_reasons(stage, result, reason):
+    decision = decide_recovery(stage, result)
+    assert decision.disposition == "BLOCKED_UNVERIFIED"
+    assert decision.reason == reason
+
+
+@pytest.mark.parametrize("action", ["missing", "divergent", "spent"])
+def test_aut1_local_audit_recovery_is_once_and_never_acquires(action):
+    calls = []
+    supervisor = RecoverySupervisor(identity={}, emit=lambda *a, **k: None)
+    def publish():
+        calls.append("publish")
+        raise OSError("synthetic interrupted write")
+    def local():
+        calls.append("prove_intent")
+        if action != "spent":
+            raise ProductionIntegrityError("proof incomplete")
+        raise OSError("still unavailable")
+    with pytest.raises((OSError, ProductionIntegrityError)):
+        supervisor.run("audit_publication", publish, recover_local=local)
+    assert calls == ["publish", "prove_intent"]
+
+
+def test_aut1_local_recovery_cannot_be_attached_to_paid_stage():
+    supervisor = RecoverySupervisor(identity={}, emit=lambda *a, **k: None)
+    with pytest.raises(ProductionControlError):
+        supervisor.run("translation", lambda: pytest.fail("send"), recover_local=lambda: pytest.fail("retry"))
+
+
+def test_aut1_lifecycle_refuses_uncommitted_success_and_nonadvancing_audit():
+    progress, events, _, _, kwargs = _fixture()
+    kwargs["process_chapter"] = lambda chapter: True
+    with pytest.raises(SystemExit) as stopped:
+        run_unattended_lifecycle(**kwargs)
+    assert stopped.value.code == 1
+    assert progress["next_chapter"] == 2
+    assert "process:3" not in events
+    with pytest.raises(ProductionIntegrityError):
+        run_due_audits(progress={"last_completed": 25, "last_audited_chapter": 0},
+                       audit_interval=25, run_periodic_audit=lambda *a: None)
+
+
+@pytest.fixture
+def aut1_engine(monkeypatch, tmp_path):
+    import translate_production_unattended_scheduled_retroactive_dynamic_pricing as engine
+    from novel_project import NovelConfig, ResidualCJKMicroRepairConfig
+    from translation_profile import load_translation_profile
+    from translation_model_config import resolve_translation_model
+    from production_state_extraction import DEFAULT_STATE_POLICY
+    monkeypatch.chdir(tmp_path)
+    paths = {"OUTPUT_DIR": "output/chapters", "PENDING_DIR": "output/pending",
+             "QA_DIR": "output/qa", "AUDIT_DIR": "output/audits", "BACKUP_DIR": "backup",
+             "RETROACTIVE_DIR": "output/retroactive_fixes", "PAID_REQUEST_JOURNAL_DIR": "data/provider_request_journal",
+             "GLOSSARY_FILE": "data/glossary.json", "PROGRESS_FILE": "data/progress.json",
+             "CONTINUITY_FILE": "data/continuity.json", "ISSUES_FILE": "data/issues.json",
+             "AUDIT_HISTORY_FILE": "data/audit_history.json"}
+    for name, rel in paths.items():
+        path = tmp_path / rel
+        (path.parent if path.suffix else path).mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(engine, name, path)
+    config = NovelConfig(id="aut1_fixture", title="Synthetic", source_language="zh", target_language="en",
+        profile="xianxia_xuanhuan", final_chapter=26,
+        residual_cjk_micro_repair=ResidualCJKMicroRepairConfig(enabled=True))
+    model = resolve_translation_model("v41-flash")
+    progress = _fixture(next_chapter=1)[0]
+    progress.update(total_cache_hit_tokens=0, total_cache_miss_tokens=0)
+    chapters = {n: {"chapter": n, "text": "青雲宗的弟子回家。", "title": "Synthetic"} for n in range(1, 27)}
+    values = {"ACTIVE_NOVEL_CONFIG": config, "ACTIVE_PROFILE": load_translation_profile("xianxia_xuanhuan", Path(__file__).resolve().parents[1]),
+        "ACTIVE_NOVEL_POLICY": None, "MODEL": model.model,
+        "PRODUCTION_TRANSLATION_MAX_TOKENS": 12000, "PRODUCTION_TRANSLATION_THINKING": "disabled",
+        "STATE_EXTRACTION_POLICY": DEFAULT_STATE_POLICY,
+        "V4_PRO_PRICES": model.prices, "PRICING_VERSION": model.pricing_version,
+        "chapters": list(chapters.values()), "chapter_map": chapters, "progress": progress,
+        "glossary": {"entries": {"青雲宗": {"english": "Azure Cloud Sect", "category": "sect", "status": "locked",
+                                                "strict_qa": True, "repair_aliases": ["Blue Cloud Sect"]}}},
+        "continuity": {"latest_chapter": 0, "summary": ""}, "issues_data": {"issues": []},
+        "audit_history": {"audits": []}, "system_prompt": "Synthetic translation policy.",
+        "STATE_PROMPT": "Synthetic state policy.", "TERM_REVIEW_MODEL_PROMPT": "Synthetic review policy.",
+        "GENERIC_JSON_REPAIR_PROMPT": "Synthetic JSON policy.", "FINAL_CHAPTER": 26, "AUDIT_INTERVAL": 25,
+        "RUN_LOGGER": NS(path=None), "AUTO_OFF_PEAK_ONLY": False}
+    for name, value in values.items():
+        monkeypatch.setattr(engine, name, value)
+    calls, events, queue, audits = [], [], [], []
+    monkeypatch.setattr(engine, "log_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(engine, "log_error", lambda *a, **k: None)
+    monkeypatch.setattr(engine, "wait_for_api_permission", lambda: None)
+    def response(content, finish="stop"):
+        return NS(model=model.model, id="synthetic", choices=[NS(message=NS(content=content), finish_reason=finish)],
+                  usage=NS(prompt_tokens=20, completion_tokens=30, prompt_cache_hit_tokens=0, prompt_cache_miss_tokens=20))
+    def send(**kwargs):
+        # All requests originate in the current chronological chapter.
+        assert engine.continuity["latest_chapter"] == engine.progress["last_completed"]
+        if engine.progress["next_chapter"] == 26:
+            assert engine.progress["last_audited_chapter"] == 25
+        calls.append(copy.deepcopy(kwargs))
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+    monkeypatch.setattr(engine, "send_api_request_once", send)
+    for name in ("progress", "glossary", "continuity", "issues_data", "audit_history"):
+        path = {"progress": engine.PROGRESS_FILE, "glossary": engine.GLOSSARY_FILE, "continuity": engine.CONTINUITY_FILE,
+                "issues_data": engine.ISSUES_FILE, "audit_history": engine.AUDIT_HISTORY_FILE}[name]
+        engine.save_json(path, getattr(engine, name))
+    def audit(start, end):
+        assert engine.progress["last_completed"] == end
+        audits.append((start, end))
+        engine.progress["last_audited_chapter"] = end
+        engine.save_json(engine.PROGRESS_FILE, engine.progress)
+        engine.create_checkpoint(end)
+    real_audit = engine.run_periodic_audit
+    monkeypatch.setattr(engine, "run_periodic_audit", audit)
+    return NS(real_audit=real_audit, engine=engine, calls=calls, events=events, queue=queue, audits=audits,
+              response=response, root=tmp_path)
+
+
+def _aut1_queue(h, count=26):
+    text = "The Azure Cloud Sect gate opened. The disciple returned home."
+    for n in range(1, count + 1):
+        state = json.dumps({"new_terms": [], "continuity_summary": f"The disciple returned in chapter {n}.", "issues": []})
+        if n == 1:
+            h.queue.extend([h.response("The disciple crossed the valley and saw the gate", "length"),
+                            h.response("The Blue Cloud Sect (青雲宗) gate opened. The disciple returned home."),
+                            h.response('{"new_terms": [] "continuity_summary": "He returned.", "issues": []}'), h.response(state)])
+        elif n == 2:
+            h.queue.extend([h.response(text), h.response("", "length"), h.response(state)])
+        else:
+            h.queue.extend([h.response(text), h.response(state)])
+
+
+def test_aut1_real_chapters_recover_and_continue_through_25_and_final_audits(aut1_engine):
+    h = aut1_engine
+    _aut1_queue(h)
+    h.engine.run_unattended_production()
+    assert h.engine.progress["completed"] == list(range(1, 27))
+    assert h.audits == [(1, 25), (26, 26)]
+    assert h.engine.continuity["latest_chapter"] == 26
+    assert not list(h.engine.PENDING_DIR.iterdir())
+    assert len(list(h.engine.OUTPUT_DIR.glob("*.md"))) == 26
+    assert len(h.calls) == 55
+    assert [call["max_tokens"] for call in h.calls[:4]] == [12000, 24000, 4000, 5000]
+    first = (h.engine.OUTPUT_DIR / "0001.md").read_text(encoding="utf-8")
+    assert "Azure Cloud Sect" in first and "青" not in first and "Blue Cloud" not in first
+    assert (h.engine.BACKUP_DIR / "checkpoint_0025/progress.json").is_file()
+    for path in h.engine.QA_DIR.glob("*.json"):
+        assert json.loads(path.read_text(encoding="utf-8"))["commit_allowed"]
+    status = [fields for event, fields in h.events if event == "autonomous_recovery"]
+    assert all("青雲宗" not in json.dumps(item, ensure_ascii=False) for item in status)
+    assert any(item["reason_code"] == "QA_PASSED" for item in status)
+    before = len(h.calls)
+    h.engine.run_unattended_production()
+    assert len(h.calls) == before and h.audits == [(1, 25), (26, 26)]
+
+
+def _aut1_reload_durable(h, monkeypatch):
+    for name, path in (("progress", h.engine.PROGRESS_FILE), ("glossary", h.engine.GLOSSARY_FILE),
+                       ("continuity", h.engine.CONTINUITY_FILE), ("issues_data", h.engine.ISSUES_FILE),
+                       ("audit_history", h.engine.AUDIT_HISTORY_FILE)):
+        monkeypatch.setattr(h.engine, name, json.loads(path.read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize("boundary", ["before_state", "after_state", "before_final", "after_final",
+                                     "before_glossary", "before_progress", "after_progress"])
+def test_aut1_crash_resume_commits_next_chapter_without_duplicate_requests(aut1_engine, monkeypatch, boundary):
+    h = aut1_engine
+    _aut1_queue(h, count=3)
+    monkeypatch.setattr(h.engine, "FINAL_CHAPTER", 3)
+    save, write = h.engine.save_json, h.engine.atomic_write_text
+    failed = []
+    def checkpoint(path, value):
+        trigger = ((boundary.endswith("state") and Path(path) == h.engine.PENDING_DIR / "0001.json" and value.get("stage") == "state_extracted")
+                   or (boundary.endswith("progress") and Path(path) == h.engine.PROGRESS_FILE and value.get("last_completed") == 1)
+                   or (boundary == "before_glossary" and Path(path) == h.engine.GLOSSARY_FILE))
+        if trigger and not failed:
+            failed.append(True)
+            if boundary.startswith("after"):
+                save(path, value)
+            raise OSError("synthetic crash at checkpoint")
+        return save(path, value)
+    def prose(path, value):
+        if boundary.endswith("final") and Path(path) == h.engine.OUTPUT_DIR / "0001.md" and not failed:
+            failed.append(True)
+            if boundary.startswith("after"):
+                write(path, value)
+            raise OSError("synthetic crash at final")
+        return write(path, value)
+    monkeypatch.setattr(h.engine, "save_json", checkpoint)
+    monkeypatch.setattr(h.engine, "atomic_write_text", prose)
+    if boundary.endswith("state"):
+        assert h.engine.process_chapter(1) is False
+    else:
+        with pytest.raises(OSError):
+            h.engine.process_chapter(1)
+    assert failed and len(h.calls) == 4
+    assert (h.engine.PENDING_DIR / "0001.md").is_file()
+    _aut1_reload_durable(h, monkeypatch)
+    h.engine.run_unattended_production()
+    assert h.engine.progress["completed"] == [1, 2, 3]
+    assert h.engine.continuity["latest_chapter"] == 3
+    assert len(h.calls) == 9 and not h.queue
+    assert not list(h.engine.PENDING_DIR.iterdir())
+
+
+@pytest.mark.parametrize("mutation", ["uncertain", "started", "source", "model", "policy"])
+def test_aut1_ambiguous_or_mismatched_state_stops_without_resend(aut1_engine, monkeypatch, mutation):
+    h = aut1_engine
+    h.queue.extend([h.response("The Azure Cloud Sect disciple returned home."), TimeoutError("synthetic timeout")])
+    with pytest.raises(TimeoutError):
+        h.engine.process_chapter(1)
+    pending = h.engine.PENDING_DIR / "0001.md"
+    original = pending.read_bytes()
+    if mutation == "started":
+        path = h.engine.PAID_REQUEST_JOURNAL_DIR / "0001.state_extraction.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["status"] = "started"
+        h.engine.save_json(path, _with_record_hash(record))
+    elif mutation == "source":
+        h.engine.chapter_map[1]["text"] += "他停下。"
+    elif mutation == "model":
+        monkeypatch.setattr(h.engine, "MODEL", "deepseek-pro")
+    elif mutation == "policy":
+        monkeypatch.setattr(h.engine, "STATE_PROMPT", "Changed synthetic policy")
+    assert h.engine.process_chapter(1) is False
+    assert len(h.calls) == 2 and not h.queue
+    assert pending.read_bytes() == original
+    assert h.engine.progress["completed"] == [] and not list(h.engine.OUTPUT_DIR.iterdir())
+    assert any(fields.get("reason_code") in {"AMBIGUOUS_PAID_REQUEST", "IDENTITY_OR_PROOF_MISMATCH"}
+               for event, fields in h.events if event == "autonomous_recovery")
+
+
+@pytest.mark.parametrize("failure", ["cap", "unproven_truncation", "cjk", "terminology"])
+def test_aut1_spent_or_ineligible_recovery_preserves_pending_and_never_advances(aut1_engine, failure):
+    h = aut1_engine
+    if failure == "cap":
+        h.queue.extend([h.response("The disciple crossed the valley and saw the gate", "length"),
+                        h.response("The disciple crossed the valley and saw the gate", "length")])
+    elif failure == "unproven_truncation":
+        h.queue.append(h.response("...", "length"))
+    elif failure == "cjk":
+        h.queue.append(h.response("The Azure Cloud Sect disciple spoke 未知陌生文字從未出現在來源文字中。"))
+    else:
+        h.engine.glossary["entries"]["青雲宗"].update(auto_repair=False)
+        h.engine.glossary["entries"]["青雲宗"].pop("repair_aliases")
+        h.queue.append(h.response("The wrong organization opened its gate."))
+    for _ in range(2):
+        assert h.engine.process_chapter(1) is False
+    assert len(h.calls) == (2 if failure == "cap" else 1)
+    assert not h.queue and h.engine.progress["completed"] == []
+    assert not list(h.engine.OUTPUT_DIR.iterdir())
+    if failure in {"cjk", "terminology"}:
+        assert (h.engine.PENDING_DIR / "0001.md").is_file()
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_aut1_real_audit_publication_reconciles_once_without_reacquisition(aut1_engine, monkeypatch, drift):
+    h = aut1_engine
+    h.engine.glossary["entries"].clear()
+    h.engine.save_json(h.engine.GLOSSARY_FILE, h.engine.glossary)
+    h.queue.extend([h.response("The disciple returned home."), h.response(json.dumps(
+        {"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    assert h.engine.process_chapter(1)
+    # A zero-candidate audit uses the actual acquisition/finalization protocol
+    # and creates the real durable intent/transaction/backups, with zero sends.
+    save = h.engine.save_json
+    failures = []
+    def fail_once(path, value):
+        if Path(path) == h.engine.AUDIT_HISTORY_FILE and not failures:
+            failures.append(True)
+            if drift:
+                (h.engine.OUTPUT_DIR / "0001.md").write_text("Unexpected historic mutation.", encoding="utf-8")
+            raise OSError("synthetic local publication failure")
+        return save(path, value)
+    monkeypatch.setattr(h.engine, "save_json", fail_once)
+    before = (h.engine.OUTPUT_DIR / "0001.md").read_bytes()
+    if drift:
+        with pytest.raises(ProductionIntegrityError):
+            h.real_audit(1, 1)
+        assert h.engine.progress["last_audited_chapter"] == 0
+    else:
+        h.real_audit(1, 1)
+        assert h.engine.progress["last_audited_chapter"] == 1
+        assert (h.engine.OUTPUT_DIR / "0001.md").read_bytes() == before
+        assert any(fields.get("reason_code") == "LOCAL_AUDIT_RECONCILED" for _, fields in h.events)
+        assert (h.engine.BACKUP_DIR / "checkpoint_0001/progress.json").is_file()
+    assert failures == [True] and len(h.calls) == 2 and not h.queue
+
+
+def test_aut1_korean_three_chapter_sequence(aut1_engine, monkeypatch):
+    from dataclasses import replace
+    h = aut1_engine
+    monkeypatch.setattr(h.engine, "ACTIVE_NOVEL_CONFIG", replace(h.engine.ACTIVE_NOVEL_CONFIG,
+        source_language="ko", final_chapter=3))
+    monkeypatch.setattr(h.engine, "FINAL_CHAPTER", 3)
+    for n in (1, 2, 3):
+        h.engine.chapter_map[n]["text"] = "청운종의 제자가 집으로 돌아왔다."
+    term = h.engine.glossary["entries"].pop("青雲宗")
+    h.engine.glossary["entries"]["청운종"] = term
+    h.engine.save_json(h.engine.GLOSSARY_FILE, h.engine.glossary)
+    _aut1_queue(h, count=3)
+    for response in h.queue:
+        response.choices[0].message.content = response.choices[0].message.content.replace("青雲宗", "청운종")
+    h.engine.run_unattended_production()
+    assert h.engine.progress["completed"] == [1, 2, 3]
+    assert len(h.calls) == 9
+    assert "청운종" not in (h.engine.OUTPUT_DIR / "0001.md").read_text(encoding="utf-8")
+
+
+def test_aut1_logging_failure_never_resets_or_retries_a_stage():
+    calls = []
+    def broken_log(*args, **kwargs):
+        raise OSError("synthetic log unavailable")
+    supervisor = RecoverySupervisor(identity={}, emit=broken_log)
+    assert supervisor.run("state", lambda: calls.append(1) or {"status": "extracted"}) == {"status": "extracted"}
+    with pytest.raises(ProductionControlError):
+        supervisor.run("state", lambda: calls.append(2))
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("drift", ["count", "fragment", "missing_inventory", "new_blocker"])
+def test_aut1_deterministic_alias_never_changes_unrelated_qa_inventory(aut1_engine, drift):
+    from strict_terminology_repair import perform_deterministic_strict_terminology_repair
+    h = aut1_engine
+    text = "The Blue Cloud Sect (青雲宗) gate opened."
+    writes = []
+    def qa(candidate):
+        value = h.engine.local_qa(1, h.engine.chapter_map[1]["text"], candidate, "stop")
+        if "Azure" in candidate:
+            if drift == "count":
+                value["commit_blockers"][0]["count"] += 1
+            elif drift == "fragment":
+                value["commit_blockers"][0]["fragments"] = ["不同"]
+            elif drift == "missing_inventory":
+                value.pop("commit_blockers")
+            else:
+                value["commit_blockers"].append({"type": "synthetic_new_blocker"})
+        return value
+    result = perform_deterministic_strict_terminology_repair(chapter_number=1,
+        source_text=h.engine.chapter_map[1]["text"], translation=text, meta={},
+        glossary_entries=h.engine.glossary["entries"], high_priority_categories=h.engine.ACTIVE_PROFILE.high_priority_categories,
+        persist_meta=writes.append, persist_translation=writes.append, qa_checker=qa)
+    assert result["status"] == "qa_rejected" and result["translation"] == text
+    assert writes == [] and not h.calls
+
+
+@pytest.mark.parametrize("tamper", [None, "sum", "duplicate", "order", "nested", "rate", "nonfinite", "provider", "component_provider"])
+def test_aut1_state_recovery_retains_exact_mixed_window_prices(aut1_engine, monkeypatch, tamper):
+    from datetime import datetime, timezone
+    import noveltranslator_core as core
+    h = aut1_engine
+    moments = iter([datetime(2026, 10, 22, 2, tzinfo=timezone.utc), datetime(2026, 10, 22, 12, tzinfo=timezone.utc)])
+    monkeypatch.setattr(h.engine, "pricing_snapshot", lambda: core.pricing_snapshot(next(moments)))
+    h.queue.extend([h.response('{"new_terms": [] "continuity_summary": "He returned.", "issues": []}'),
+                    h.response(json.dumps({"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    _, stats = h.engine.extract_state(1, h.engine.chapter_map[1]["text"], "The disciple returned home.")
+    operations = stats["state_accepted_operations"]
+    assert [item["stats"]["pricing_period"] for item in operations] == ["peak", "off_peak"]
+    assert stats["cost_usd"] == sum(item["stats"]["cost_usd"] for item in operations)
+    assert core.validate_stats_record(stats, "state") == []
+    if tamper is None:
+        assert h.engine.reprice_saved_stats_if_needed(stats) == stats
+    else:
+        if tamper == "sum": stats["cost_usd"] += 1
+        elif tamper == "duplicate": operations[1]["operation_id"] = operations[0]["operation_id"]
+        elif tamper == "order": operations.reverse()
+        elif tamper == "nested": operations[0]["stats"]["state_accepted_operations"] = []
+        elif tamper == "rate": operations[0]["stats"]["output_rate_per_million"] += 1
+        elif tamper == "provider": stats["provider"] = "command_code_provider"
+        elif tamper == "component_provider": operations[0]["stats"]["provider"] = "command_code_provider"
+        else: stats["cost_usd"] = float("nan")
+        with pytest.raises(ProductionIntegrityError):
+            h.engine.reprice_saved_stats_if_needed(stats)
+    assert len(h.calls) == 2
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_aut1_glossary_semantic_correction_commits_then_next_chapter(aut1_engine, monkeypatch, crash):
+    h = aut1_engine
+    monkeypatch.setattr(h.engine, "FINAL_CHAPTER", 3)
+    h.engine.chapter_map[2]["text"] = "青雲宗的弟子見到紫雲門。"
+    h.engine.chapter_map[3]["text"] = "青雲宗的弟子再次見到紫雲門。"
+    _aut1_queue(h, count=3)
+    state = {"new_terms": [{"chinese": "紫雲門", "english": "Violet Cloud Gate", "category": "sect", "notes": ""}],
+             "continuity_summary": "The disciple saw Violet Cloud Gate.", "issues": []}
+    h.queue[6] = h.response(json.dumps(state))
+    h.queue[7:7] = [h.response(json.dumps({"decisions": [{"candidate_id": "c01", "action": ""}], "issues": []})),
+                     h.response(json.dumps({"decisions": [{"candidate_id": "c01", "action": "accept"}], "issues": []}))]
+    save = h.engine.save_json
+    failures, reviewed = [], []
+    def fail_glossary(path, value):
+        if Path(path) == h.engine.PENDING_DIR / "0002.json" and value.get("stage") == "reviewed":
+            reviewed.append(copy.deepcopy(value))
+        if crash and Path(path) == h.engine.GLOSSARY_FILE and "紫雲門" in value["entries"] and not failures:
+            failures.append(True)
+            raise OSError("synthetic interrupted glossary commit")
+        return save(path, value)
+    monkeypatch.setattr(h.engine, "save_json", fail_glossary)
+    if crash:
+        with pytest.raises(OSError):
+            h.engine.run_unattended_production()
+        assert len(h.calls) == 9
+        assert h.engine.progress["last_completed"] == 1
+        assert (h.engine.PENDING_DIR / "0002.md").is_file()
+        _aut1_reload_durable(h, monkeypatch)
+    h.engine.run_unattended_production()
+    assert len(h.calls) == 11 and not h.queue
+    assert h.engine.progress["completed"] == [1, 2, 3]
+    assert h.engine.glossary["entries"]["紫雲門"]["english"] == "Violet Cloud Gate"
+    assert "Violet Cloud Gate" in h.calls[-2]["messages"][-1]["content"]
+    from chapter_glossary_review import CHAPTER_REVIEW_RECOVERY_KEY
+    assert reviewed[-1][CHAPTER_REVIEW_RECOVERY_KEY]["semantic_correction"]["attempted"] is True
+    assert reviewed[-1]["review_result"]["decisions"][0]["action"] == "accept"

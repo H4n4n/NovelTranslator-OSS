@@ -1,4 +1,5 @@
 """Bounded state extraction, independent of transport and novel filesystem state."""
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 import json
 import re
@@ -166,8 +167,26 @@ def parse_state_response(*, envelope, stats, repair, clean_text, salvage,
 
 
 def run_state_extraction(*, emit, **kwargs):
+    # Retain each accepted direct response's actual rate window. The numeric
+    # combiner intentionally has no single pricing period for multiple calls.
+    # Without components, a saved recovered state fails startup validation or
+    # is incorrectly repriced at one rate. Domain journals remain authoritative.
+    operations = []
+    request, repair = kwargs["request"], kwargs["repair"]
+
+    def observed(kind, callback, *args):
+        result = callback(*args)
+        operations.append({"operation_kind": kind, "operation_id": result["operation_id"],
+                           "stats": deepcopy(result["response"]["stats"])})
+        return result
+
+    kwargs["request"] = lambda kind, ceiling: observed(kind, request, kind, ceiling)
+    kwargs["repair"] = lambda content, ceiling: observed("state_json_repair", repair, content, ceiling)
     try:
-        return _run_state_extraction(emit=emit, **kwargs)
+        state, stats = _run_state_extraction(emit=emit, **kwargs)
+        if len(operations) > 1 and stats.get("provider") != "command_code_provider":
+            stats = {**stats, "state_accepted_operations": operations}
+        return state, stats
     except StateExtractionError as exc:
         emit("state_extraction_blocked", failure_category=exc.category,
              health_status="blocked")

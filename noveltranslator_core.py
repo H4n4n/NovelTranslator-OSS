@@ -2635,19 +2635,39 @@ def validate_stats_record(stats, label, allow_unpriced_zero=False):
     if hits + misses != prompt:
         errors.append(f"{label} cache hit + miss tokens do not equal prompt tokens")
     if (allow_unpriced_zero and "translation_accepted_operations" not in stats
+        and "state_accepted_operations" not in stats
         and not any(stats.get(key, 0) for key in ACCOUNTING_FIELDS)):
         return errors
-    if "translation_accepted_operations" in stats:
-        operations = stats["translation_accepted_operations"]
-        if (not isinstance(operations, list) or len(operations) != 2
+    aggregate_keys = {"translation_accepted_operations", "state_accepted_operations"} & stats.keys()
+    if aggregate_keys:
+        if len(aggregate_keys) != 1:
+            return errors + [f"{label} mixes accepted operation families"]
+        aggregate_key = next(iter(aggregate_keys))
+        operations = stats[aggregate_key]
+        state_aggregate = aggregate_key == "state_accepted_operations"
+        if (not isinstance(operations, list) or len(operations) not in ({2, 3} if state_aggregate else {2})
             or any(not isinstance(entry, dict) for entry in operations)):
             return errors + [f"{label} has invalid accepted translation operations"]
         ids = [entry.get("operation_id") for entry in operations]
         if (any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in ids)
-            or ids[0] == ids[1]):
+            or len(ids) != len(set(ids))):
             return errors + [f"{label} has invalid accepted operation identities"]
+        if state_aggregate and tuple(entry.get("operation_kind") for entry in operations) not in {
+            ("state_extraction", "state_extraction_recovery"),
+            ("state_extraction", "state_json_repair"),
+            ("state_extraction", "state_extraction_recovery", "state_json_repair"),
+        }:
+            return errors + [f"{label} has invalid accepted state operation order"]
         individual = [entry.get("stats") for entry in operations]
-        if any(not isinstance(value, dict) or "translation_accepted_operations" in value for value in individual):
+        if state_aggregate and (stats.get("provider") == "command_code_provider" or
+            stats.get("accounting") == "command_code_credit_equivalent" or
+            any(isinstance(value, dict) and (
+                value.get("provider") == "command_code_provider" or
+                value.get("accounting") == "command_code_credit_equivalent") for value in individual)):
+            return errors + [f"{label} mixes direct state and GOAT accounting"]
+        if any(not isinstance(value, dict) or
+               {"translation_accepted_operations", "state_accepted_operations"} & value.keys()
+               for value in individual):
             return errors + [f"{label} has invalid/nested accepted usage"]
         import math
         for value in (stats, *individual):

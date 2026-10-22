@@ -104,6 +104,7 @@ controlled_trial_plan.py
 controlled_trial_repo_env.py
 create_novel.py
 docs/ASTRA_F1_F2_HISTORICAL_PROOF.md
+docs/AUTONOMOUS_RECOVERY.md
 docs/G10FG_PAID_EXECUTORS.md
 docs/G10H_BLIND_CORPUS_FREEZE.md
 docs/G10_QWEN_GLM_PREREGISTRATION.md
@@ -172,6 +173,7 @@ pending_recovery_plan.py
 plan_final_editorial_chapters.py
 private_inputs.py
 production_accounting.py
+production_autonomous_recovery.py
 production_auxiliary_paid_request.py
 production_candidate_preparation.py
 production_chapter_commit.py

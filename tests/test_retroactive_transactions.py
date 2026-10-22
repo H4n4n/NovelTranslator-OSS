@@ -618,3 +618,70 @@ def test_experiment_recovery_hash_ambiguity_blocks_before_associated_state_resto
     with pytest.raises(FullPipelinePeriodicAuditRecoveryError, match="local retroactive"):
         _restore_baseline(root, manifest)
     assert marker.read_bytes() == before
+
+
+def test_audit_diagnostics_do_not_read_translation_source_or_policy(sandbox, monkeypatch):
+    engine = install_engine(monkeypatch, sandbox)
+    class NoSourceLookup:
+        def __getitem__(self, key):
+            pytest.fail("audit diagnostics looked up a translation source")
+    monkeypatch.setattr(engine, "chapter_map", NoSourceLookup())
+    monkeypatch.setattr(engine, "current_production_operation_policy",
+                        lambda: pytest.fail("audit diagnostics reconstructed translation policy"))
+    events = []
+    monkeypatch.setattr(engine, "log_event", lambda event, **fields: events.append(fields))
+    supervisor = engine.autonomous_audit_recovery_supervisor(1, 10)
+    # Construction/diagnostic output grants neither acquisition nor publication.
+    from production_autonomous_recovery import stopped
+    supervisor.report("audit_publication", stopped("IDENTITY_OR_PROOF_MISMATCH"))
+    assert events[-1]["audit_start_chapter"] == 1
+    assert events[-1]["audit_end_chapter"] == 10
+    assert events[-1]["disposition"] == "BLOCKED_UNVERIFIED"
+
+
+@pytest.mark.parametrize("damage", ["missing_source", "changed_source", "intent_range"])
+def test_historical_audit_range_cannot_bypass_source_or_intent_proof(sandbox, monkeypatch, damage):
+    engine = install_engine(monkeypatch, sandbox)
+    assert 1 not in engine.chapter_map  # The legitimate range start is absent.
+    baseline = copy.deepcopy(engine.progress)
+    monkeypatch.setattr(engine, "log_event", lambda *args, **kwargs: None)
+    acquisitions = []
+    def acquired(*args):
+        acquisitions.append(args)
+        return {"issues": []}, {"cost_usd": 0}, {"candidate_set_hash": "validated-local-fixture"}
+    monkeypatch.setattr(engine, "call_periodic_audit", acquired)
+    monkeypatch.setattr(engine, "apply_periodic_audit", lambda *args, **kwargs: {
+        "retroactive_replacements": [rule()], "kept": [], "corrected": [], "rejected": [],
+        "contextualized": [], "merged": []})
+    original = tx.atomic_write_bytes
+    def interrupted(path, content):
+        original(path, content)
+        if path.parent == sandbox["output_dir"]:
+            raise KeyboardInterrupt()
+    monkeypatch.setattr(tx, "atomic_write_bytes", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        engine.run_periodic_audit(1, 10)
+    if damage == "missing_source":
+        engine.chapter_map.pop(10)
+    elif damage == "changed_source":
+        engine.chapter_map[10] = {"text": "Different synthetic source."}
+    else:
+        from production_accounting import canonical_sha256
+        path = engine.AUDIT_DIR / "audit_0001_0010.finalization.json"
+        value = json.loads(path.read_bytes())
+        value["end"] = 11
+        value["intent_sha256"] = canonical_sha256({k: v for k, v in value.items() if k != "intent_sha256"})
+        path.write_text(json.dumps(value), encoding="utf-8")
+    root = sandbox["output_dir"].parent
+    def snapshot():
+        return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    before = snapshot()
+    monkeypatch.setattr(engine, "call_periodic_audit", lambda *a: pytest.fail("audit reacquisition"))
+    monkeypatch.setattr(engine, "save_json", lambda *a: pytest.fail("unproved state write"))
+    monkeypatch.setattr(tx, "atomic_write_bytes", lambda *a: pytest.fail("unproved prose write"))
+    from production_periodic_audit_finalization import AuditFinalizationBlocked
+    with pytest.raises((tx.RetroactiveBlocked, AuditFinalizationBlocked)):
+        engine.run_periodic_audit(1, 10)
+    assert acquisitions == [(1, 10)]
+    assert engine.progress == baseline
+    assert snapshot() == before

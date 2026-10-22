@@ -255,6 +255,18 @@ def perform_deterministic_strict_terminology_repair(
             and qa_strict == after
         )
         if not partial_strict_improvement:
+            # Reuse the paid-patch transition proof for a zero-cost exact alias
+            # repair too. Unchanged residual CJK must not force a paid strict
+            # repair before the normal CJK stage can run. Every unrelated QA
+            # blocker, including CJK counts/fragments, must remain identical.
+            unresolved_sources = {item["chinese"] for item in after}
+            transition = _strict_qa_transition(qa_checker(translation), qa, {
+                "violations": before,
+                "eligible_failures": [item for item in before
+                                      if item["chinese"] not in unresolved_sources],
+            })
+            partial_strict_improvement = transition["accepted"]
+        if not partial_strict_improvement:
             return {
                 "status": "qa_rejected",
                 "translation": translation,

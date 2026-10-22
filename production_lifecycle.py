@@ -10,11 +10,14 @@ identity checks while moving detailed startup/audit/chapter-loop sequencing
 behind a reusable engine boundary.
 """
 
-from production_failure_classification import ProductionControlError
+from production_failure_classification import ProductionControlError, ProductionIntegrityError
 
 
 def run_due_audits(*, progress, audit_interval, run_periodic_audit):
     """Run every complete audit interval currently due."""
+
+    if type(audit_interval) is not int or audit_interval < 1:
+        raise ProductionControlError("audit interval must be a positive integer")
 
     while (
         progress["last_completed"] - progress["last_audited_chapter"]
@@ -23,6 +26,8 @@ def run_due_audits(*, progress, audit_interval, run_periodic_audit):
         start_chapter = progress["last_audited_chapter"] + 1
         end_chapter = progress["last_audited_chapter"] + audit_interval
         run_periodic_audit(start_chapter, end_chapter)
+        if progress["last_audited_chapter"] != end_chapter:
+            raise ProductionIntegrityError("due audit did not commit its exact boundary")
 
 
 def run_final_audit_if_needed(
@@ -41,6 +46,8 @@ def run_final_audit_if_needed(
         progress["last_audited_chapter"] + 1,
         final_chapter,
     )
+    if progress["last_audited_chapter"] != final_chapter:
+        raise ProductionIntegrityError("final audit did not commit its exact boundary")
 
 
 def run_unattended_lifecycle(
@@ -138,6 +145,9 @@ def run_unattended_lifecycle(
                 start_chapter,
                 end_chapter + 1,
             ):
+                if (progress["next_chapter"] != chapter_number
+                    or progress["last_completed"] != chapter_number - 1):
+                    raise ProductionIntegrityError("chapter chronology changed before dispatch")
                 if not process_chapter(chapter_number):
                     print_fn("\n" + "=" * 70)
                     print_fn(
@@ -155,6 +165,9 @@ def run_unattended_lifecycle(
                         chapter=chapter_number,
                     )
                     raise SystemExit(1)
+                if (progress["last_completed"] != chapter_number
+                    or progress["next_chapter"] != chapter_number + 1):
+                    raise ProductionIntegrityError("chapter callback returned before durable commit")
                 run_due_audits_callback()
 
         run_final_audit_if_needed_callback()

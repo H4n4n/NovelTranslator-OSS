@@ -1,3 +1,4 @@
+from public_test_support import supervised_callback_source
 import copy
 from pathlib import Path
 
@@ -198,6 +199,11 @@ def test_active_runtime_validates_checkpoint_identity_before_reuse_or_commit_tai
         / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
     ).read_text(encoding="utf-8")
 
+    source = supervised_callback_source(source, "process_chapter", {
+        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
+        'candidate_checkpoint': ('candidates', 'run_candidate_preparation_checkpoint'),
+        'review_checkpoint': ('glossary_review', 'run_glossary_review_checkpoint'),
+    })
     process = source[source.index("def process_chapter("):]
     state_identity = process.index(
         "state_checkpoint_identity = current_state_checkpoint_identity("

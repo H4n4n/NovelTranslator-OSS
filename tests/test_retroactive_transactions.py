@@ -731,3 +731,189 @@ def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tm
     changed = copy.deepcopy(chapter_map)
     changed[52]["source_document_sha256"] = "changed-provenance"
     assert impact_report(planned, changed, staged)["source_inventory_sha256"] != report["source_inventory_sha256"]
+
+
+@pytest.fixture
+def aut2_review_intent(sandbox, monkeypatch):
+    """Small local audit interrupted after intent, before any receipt or prose write."""
+    import production_periodic_audit_finalization as final
+    root = sandbox["output_dir"].parent / "review_novel"
+    output = root / "output/chapters"
+    output.mkdir(parents=True)
+    (output / "0010.md").write_bytes((sandbox["output_dir"] / "0010.md").read_bytes())
+    sandbox.update(output_dir=output, retroactive_dir=root / "output/retroactive_fixes", backup_dir=root / "backup")
+    engine = install_engine(monkeypatch, sandbox)
+    changes = {"retroactive_replacements": [rule()], "kept": [], "corrected": [],
+               "rejected": [], "contextualized": [], "merged": []}
+    monkeypatch.setattr(engine, "apply_periodic_audit", lambda *a, **k: copy.deepcopy(changes))
+    monkeypatch.setattr(engine, "call_periodic_audit", lambda *a: pytest.fail("provider reacquisition"))
+    monkeypatch.setattr(engine, "send_api_request_once", lambda **k: pytest.fail("provider send"))
+    engine.AUDIT_DIR.mkdir(parents=True)
+    engine.save_json(engine.periodic_audit_checkpoint_path(1, 10), {"synthetic": "accepted local decision"})
+    args = ({"issues": []}, {"cost_usd": 0}, {"candidate_set_hash": "synthetic-local-decision"})
+    write = final.atomic_write_json
+    def stop(path, value):
+        write(path, value)
+        if path.name.endswith(".finalization.json"):
+            raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(final, "atomic_write_json", stop)
+        with pytest.raises(KeyboardInterrupt):
+            final.finalize_periodic_audit(engine, 1, 10, *args)
+    return root, engine, args
+
+
+def _review_snapshot(root):
+    return {p.relative_to(root).as_posix(): None if p.is_dir() else p.read_bytes()
+            for p in root.rglob("*")}
+
+
+def _review_rehash_intent(engine, value):
+    import production_periodic_audit_finalization as final
+    value["historical_proof"]["plan_sha256"] = canonical_hash(value["transaction_plan"])
+    value["intent_sha256"] = canonical_hash({k: v for k, v in value.items() if k != "intent_sha256"})
+    final.atomic_write_json(final.intent_path(engine, 1, 10), value)
+
+
+@pytest.mark.parametrize("raw", [b'{"a":1,"a":1}', b'{"a":[{"nested":1,"nested":1}]}',
+    b'{"x":NaN}', b'{"x":Infinity}', b'{"x":-Infinity}', b'{"x":1e400}',
+    b'{"x":-1e400}', b'{"x":"\xff"}', b'{"x":"\\ud800"}', b'{"x":', b'[]', b'null',
+    '{"x":1}'.encode("utf-16")])
+def test_aut2_review_strict_json_rejects_ambiguous_evidence(tmp_path, raw):
+    from historical_reconciliation import read_object
+    from production_failure_classification import ProductionIntegrityError
+    path = tmp_path / "evidence.json"
+    path.write_bytes(raw)
+    with pytest.raises(ProductionIntegrityError):
+        read_object(path)
+    assert path.read_bytes() == raw
+
+
+def test_aut2_review_strict_json_keeps_valid_historical_formatting(tmp_path):
+    from historical_reconciliation import read_object
+    path = tmp_path / "pretty.json"
+    raw = '\ufeff{\r\n  "한": [1.25, {"中文": "café"}], "flag": true\r\n}\r\n'.encode()
+    path.write_bytes(raw)
+    assert read_object(path) == {"한": [1.25, {"中文": "café"}], "flag": True}
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("damage", ["wrong_hex", "traversal", "absolute", "uppercase", "short", "foreign_novel",
+    "audit_label", "boundary", "post", "baseline", "checkpoint", "plan", "transaction_json", "duplicate_intent", "nested_duplicate_intent", "duplicate_transaction", "foreign_root", "linked_root", "bool_boundary"])
+def test_aut2_review_rejects_contradictory_intent_without_any_write(aut2_review_intent, monkeypatch, damage):
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    from production_failure_classification import ProductionIntegrityError
+    root, engine, args = aut2_review_intent
+    value = final.load_intent(engine, 1, 10)
+    plan = value["transaction_plan"]
+    if damage in {"wrong_hex", "traversal", "absolute", "uppercase", "short"}:
+        plan["transaction_id"] = {"wrong_hex": "0" * 64, "traversal": "../escaped",
+            "absolute": str(root.parent / "escaped"), "uppercase": "A" * 64, "short": "a" * 63}[damage]
+        value["record"]["historical_reconciliation"]["transaction_id"] = plan["transaction_id"]
+    elif damage == "foreign_novel": plan["request"]["novel_id"] = "foreign"
+    elif damage == "audit_label": plan["request"]["audit_label"] = "0002_0010"
+    elif damage == "boundary": value["end"] = 11
+    elif damage == "bool_boundary": value["start"] = True
+    elif damage in {"post", "baseline"}: value[damage]["glossary"]["entries"]["韓"]["english"] = "Contradictory"
+    elif damage == "checkpoint": engine.periodic_audit_checkpoint_path(1, 10).write_bytes(b"changed")
+    elif damage == "plan":
+        plan["chapters"][0]["edits"][0]["start"] += 1
+        plan["transaction_id"] = canonical_hash({k: v for k, v in plan.items() if k != "transaction_id"})
+        value["record"]["historical_reconciliation"]["transaction_id"] = plan["transaction_id"]
+    elif damage in {"transaction_json", "duplicate_transaction"}:
+        directory = engine.RETROACTIVE_DIR / "transactions"
+        directory.mkdir(parents=True)
+        slot = canonical_hash({k: plan["request"][k] for k in ("novel_id", "audit_label", "through_chapter")})
+        raw = json.dumps(plan).replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1', 1)
+        assert json.loads(raw) == plan
+        (directory / (slot + ".plan.json")).write_bytes(b"{broken" if damage == "transaction_json" else raw.encode())
+    _review_rehash_intent(engine, value)
+    if damage == "foreign_root":
+        monkeypatch.setattr(engine, "RETROACTIVE_DIR", root.parent / "foreign/retroactive_fixes")
+    if damage == "linked_root":
+        is_link = Path.is_symlink
+        target = root / "output/publication_freshness"
+        monkeypatch.setattr(Path, "is_symlink", lambda p: p == target or is_link(p))
+    if damage in {"duplicate_intent", "nested_duplicate_intent"}:
+        path = final.intent_path(engine, 1, 10)
+        raw = path.read_text(encoding="utf-8")
+        needle = '"start": 1' if damage == "duplicate_intent" else '"audit_label": "0001_0010"'
+        path.write_text(raw.replace(needle, needle + ', ' + needle, 1), encoding="utf-8")
+    before = _review_snapshot(root.parent)
+    with pytest.raises((ProductionIntegrityError, ValueError)):
+        final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root.parent) == before
+    assert not (root / "output/publication_freshness").exists()
+
+
+@pytest.mark.parametrize("field", ["revision", "status", "transaction_id", "before_sha256"])
+def test_aut2_review_duplicate_identical_receipt_never_certifies(aut2_review_intent, field):
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    import build_publication_epub as publication
+    from production_failure_classification import ProductionIntegrityError
+    root, engine, args = aut2_review_intent
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    intent = final.load_intent(engine, 1, 10)
+    path = history.invalidation_path(engine, intent)
+    value = history.read_object(path)
+    raw = json.dumps(value, ensure_ascii=False)
+    import re
+    match = re.search(r'"' + field + r'": "[^"\\]*"', raw)
+    assert match is not None
+    corrupted = raw[:match.end()] + ", " + match[0] + raw[match.end():]
+    assert json.loads(corrupted) == value  # Demonstrates the old equality bypass.
+    path.write_text(corrupted, encoding="utf-8")
+    project = SimpleNamespace(root=root, audit_dir=engine.AUDIT_DIR, epub_dir=root / "output/epub",
+                              config=engine.ACTIVE_NOVEL_CONFIG, is_legacy=False)
+    before = _review_snapshot(root)
+    for call in (publication.build_publication_epub, publication.verify_existing_publication_epub):
+        with pytest.raises(ProductionIntegrityError):
+            call(project)
+    with pytest.raises(ProductionIntegrityError):
+        final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root) == before
+
+
+@pytest.mark.parametrize("stage", ["before_receipt", "after_receipt", "after_backup", "after_chapter"])
+def test_aut2_review_invalidation_crash_restarts_in_original_transaction(aut2_review_intent, monkeypatch, stage):
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    root, engine, args = aut2_review_intent
+    intent = final.load_intent(engine, 1, 10)
+    receipt = history.invalidation_path(engine, intent)
+    write_json, write_bytes = history.atomic_write_json, tx.atomic_write_bytes
+    def json_crash(path, value):
+        if stage == "before_receipt": raise KeyboardInterrupt()
+        write_json(path, value)
+        if stage == "after_receipt": raise KeyboardInterrupt()
+    def byte_crash(path, raw):
+        assert history.read_object(receipt) == history.invalidation_record(intent)
+        write_bytes(path, raw)
+        if stage == "after_backup" or (stage == "after_chapter" and path.parent == engine.OUTPUT_DIR):
+            raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(history, "atomic_write_json", json_crash)
+        mp.setattr(tx, "atomic_write_bytes", byte_crash)
+        with pytest.raises(KeyboardInterrupt):
+            final.finalize_periodic_audit(engine, 1, 10, *args)
+    original_intent = final.intent_path(engine, 1, 10).read_bytes()
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert final.intent_path(engine, 1, 10).read_bytes() == original_intent
+    assert (engine.OUTPUT_DIR / "0010.md").read_bytes().count(b"Hann") == 1
+    before = _review_snapshot(root)
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root) == before
+
+
+def test_aut2_review_new_foreign_namespace_does_not_persist_intent(aut2_review_intent, monkeypatch):
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    root, engine, args = aut2_review_intent
+    final.intent_path(engine, 1, 10).unlink()
+    monkeypatch.setattr(engine, "RETROACTIVE_DIR", root.parent / "foreign/retroactive_fixes")
+    before = _review_snapshot(root.parent)
+    with pytest.raises(ProductionIntegrityError, match="FOREIGN_INVALIDATION_ROOT"):
+        final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root.parent) == before

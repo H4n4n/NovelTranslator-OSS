@@ -6,6 +6,7 @@ Reports contain opaque identities/counts/hashes, never source or English prose.
 """
 import copy
 import json
+import math
 from pathlib import Path
 
 from noveltranslator_core import atomic_write_json, strict_term_valid_targets
@@ -28,10 +29,35 @@ def plain(path):
     return path
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate evidence key")
+        result[key] = value
+    return result
+
+
+def _finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("nonfinite evidence number")
+    return number
+
+
+def _invalid_constant(value):
+    raise ValueError("nonfinite evidence constant")
+
+
 def read_object(path):
     try:
-        value = json.loads(plain(path).read_bytes())
-    except (ValueError, OSError) as exc:
+        # Decode explicitly: json.loads(bytes) also accepts UTF-16/32. Existing
+        # UTF-8/BOM, whitespace, CRLF and pretty printing remain valid.
+        value = json.loads(plain(path).read_bytes().decode("utf-8-sig"),
+                           object_pairs_hook=_unique_object, parse_float=_finite_float,
+                           parse_constant=_invalid_constant)
+        json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (ValueError, OSError, RecursionError) as exc:
         raise ProductionIntegrityError("AUT2: UNREADABLE_EVIDENCE") from exc
     require(isinstance(value, dict), "INVALID_EVIDENCE")
     return value
@@ -132,8 +158,49 @@ def publication_input_snapshot(root):
 
 
 def invalidation_path(module, intent):
-    return module.RETROACTIVE_DIR.parent / "publication_freshness" / (
-        intent["transaction_plan"]["transaction_id"] + ".json")
+    try:
+        transaction = intent["transaction_plan"]["transaction_id"]
+        require(isinstance(transaction, str) and len(transaction) == 64
+                and all(c in "0123456789abcdef" for c in transaction), "INVALID_TRANSACTION_ID")
+        root = plain(module.OUTPUT_DIR).resolve().parent
+        require(plain(module.RETROACTIVE_DIR).resolve().parent == root
+                and plain(module.AUDIT_DIR).resolve().parent == root, "FOREIGN_INVALIDATION_ROOT")
+        directory = plain(root / "publication_freshness")
+        path = plain(directory / (transaction + ".json"))
+        require(path.resolve().parent == directory.resolve()
+                and path.resolve().is_relative_to(root), "INVALIDATION_PATH_ESCAPE")
+        return path
+    except (KeyError, TypeError) as exc:
+        raise ProductionIntegrityError("AUT2: INVALID_INVALIDATION_IDENTITY") from exc
+
+
+def validate_invalidation_identity(module, intent, start, end):
+    """Read-only bindings; a recomputed checksum alone grants no authority."""
+    from production_periodic_audit_finalization import intent_path
+    try:
+        path = invalidation_path(module, intent)  # Check before any ID-derived lookup.
+        plan = intent["transaction_plan"]
+        request = plan["request"]
+        novel = module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"
+        require(type(start) is int and type(end) is int and 1 <= start <= end
+                and type(intent["start"]) is int and type(intent["end"]) is int
+                and (intent["start"], intent["end"]) == (start, end), "INVALID_AUDIT_BOUNDARY")
+        require(request["novel_id"] == novel and request["audit_label"] == f"{start:04d}_{end:04d}"
+                and type(request["through_chapter"]) is int and request["through_chapter"] == end,
+                "INVALIDATION_OPERATION_MISMATCH")
+        require(type(intent["record"]["start_chapter"]) is int and type(intent["record"]["end_chapter"]) is int
+                and (intent["record"]["start_chapter"], intent["record"]["end_chapter"]) == (start, end),
+                "INVALIDATION_RECORD_MISMATCH")
+        report = intent["record"].get("historical_reconciliation")
+        if report is not None:
+            require(report["transaction_id"] == plan["transaction_id"]
+                    and type(report["audit_boundary"]) is int and report["audit_boundary"] == end,
+                    "INVALIDATION_REPORT_MISMATCH")
+        tx.validate_plan(plan, request, module.chapter_map)
+        require(audit_intent(module, intent_path(module, start, end)) == intent, "DURABLE_INTENT_MISMATCH")
+        return path
+    except (KeyError, TypeError) as exc:
+        raise ProductionIntegrityError("AUT2: INVALID_INVALIDATION_IDENTITY") from exc
 
 
 def invalidation_record(intent):
@@ -159,18 +226,19 @@ def ensure_invalidation(module, intent):
 
     A missing derived manifest can be reconstructed from immutable intent.
     Corrupt or contradictory evidence is never overwritten.
-    Caller owns the existing novel writer lock.
+    Caller owns the existing novel writer lock and must finish all read-only
+    finalization proofs before invoking this writer.
     """
+    path = validate_invalidation_identity(module, intent, intent["start"], intent["end"])
     if "historical_reconciliation" not in intent["record"]:
         return  # Legacy intents retain their original recovery contract.
-    path = plain(invalidation_path(module, intent))
     expected = invalidation_record(intent)
     if path.exists():
         require(read_object(path) == expected, "FRESHNESS_MANIFEST_DRIFT")
         return
-    # Missing invalidation has no overwrite authority: reconstruct only the
-    # conservative STALE record from the already validated immutable intent.
-    # The caller separately reproves any pre-existing transaction below.
+    # The finalizer has already reproved publication prefixes, paid evidence,
+    # deterministic authorization and the transaction. Only now may this
+    # conservative receipt become durable, before any transaction mutation.
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, expected)
 

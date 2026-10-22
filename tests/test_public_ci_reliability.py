@@ -15,6 +15,7 @@ from scripts import publication_guard as guard
 
 
 NEW_MODULE = 'tests/test_public_ci_reliability.py'
+SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 BASELINE_PARTITIONS = (
     'e66a6222b9ad4dfd31b4d6b9c50d1be1d7a6022bee01466868578571bc83c74e',
     '70554ac08d00cfd0fa8cf31daea187ba46a51e2b1926cc8cab069124c60f0051',
@@ -27,15 +28,16 @@ def test_exact_public_partition_and_reviewed_deselections():
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
     buckets = runner.balanced_shards(public, 3)
     flat = sum(buckets, [])
-    assert len(flat) == len(set(flat)) == len(public) == 190
+    assert len(flat) == len(set(flat)) == len(public) == 191
     assert set(flat) == set(public)
+    assert SYNTHETIC_WITNESS_MODULE in buckets[2]
     assert runner.balanced_shards(list(reversed(public)), 3) == buckets
     assert runner.balanced_shards(public, 1) == [public]
     assert sum(v['status'] == 'private' for v in files.values()) == 2
     assert sum(v['status'] == 'historical' for v in files.values()) == 7
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     for bucket, expected in zip(buckets, BASELINE_PARTITIONS, strict=True):
-        old = sorted(p for p in bucket if p != NEW_MODULE)
+        old = sorted(p for p in bucket if p not in {NEW_MODULE, SYNTHETIC_WITNESS_MODULE})
         assert len(old) == 63
         assert hashlib.sha256('\n'.join(old).encode()).hexdigest() == expected
     assert len(deselect) == 15
@@ -131,7 +133,7 @@ def test_partition_never_probes_source_sizes_or_other_drives(monkeypatch):
     def forbidden_stat(*args, **kwargs):
         raise AssertionError('allocation must not probe filesystem sizes')
     monkeypatch.setattr(Path, 'stat', forbidden_stat)
-    assert len(sum(runner.balanced_shards(public, 3), [])) == 190
+    assert len(sum(runner.balanced_shards(public, 3), [])) == 191
 
 
 @pytest.mark.parametrize('args', [['--shard', '-1'], ['--shard', '3'], ['--shards', '0'],
@@ -488,8 +490,8 @@ def test_parent_persistence_failure_cannot_pass_or_hide_primary(meter, monkeypat
     assert result == (exit_code or 2)
     assert 'primary failure retained' in capsys.readouterr().out
 
-# PR B controls deliberately extend the existing public module so the frozen
-# 190-module three-shard partition and its exclusions remain unchanged.
+# PR B controls extend this existing module. Original shard membership and
+# exclusions remain pinned; B2B2B-2 adds one public module.
 from scripts import public_ci as risk
 
 
@@ -643,7 +645,7 @@ def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatc
         risk.select(decision, 1 if tier == 'L3' else 3, 0)
     assert set(risk.SMOKE) <= set(decision['selected'])
     if tier == 'L3':
-        assert len(decision['selected']) == 190 and len(decision['deselect']) == 15
+        assert len(decision['selected']) == 191 and len(decision['deselect']) == 15
     elif tier == 'L2':
         assert len(decision['selected']) == 5
 

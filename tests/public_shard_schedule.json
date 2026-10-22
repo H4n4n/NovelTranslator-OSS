@@ -198,7 +198,8 @@
       "tests/test_rogue_first_prince_source.py",
       "tests/test_translate_model_selection.py",
       "tests/test_korean_plain_hwa_heading.py",
-      "tests/test_pytest_configuration.py"
+      "tests/test_pytest_configuration.py",
+      "tests/test_synthetic_goat_batch_witness.py"
     ]
   ]
 }

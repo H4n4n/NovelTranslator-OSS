@@ -607,6 +607,10 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
+  "tests/test_synthetic_goat_batch_witness.py": {
+   "status": "public",
+   "reason": "synthetic offline witness probes; no provider or send authority"
+  },
   "tests/test_production_goat_batch_witness.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"

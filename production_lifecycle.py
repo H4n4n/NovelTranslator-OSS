@@ -73,6 +73,7 @@ def run_unattended_lifecycle(
     local_error_types,
     print_fn,
     target_chapter=None,
+    run_whole_history_consistency=None,
 ):
     """Run production sequencing, optionally bounded to one exact target.
 
@@ -171,6 +172,9 @@ def run_unattended_lifecycle(
                 run_due_audits_callback()
 
         run_final_audit_if_needed_callback()
+        history_status = None
+        if run_whole_history_consistency is not None and progress["last_completed"] >= final_chapter:
+            history_status = run_whole_history_consistency()
 
     except KeyboardInterrupt:
         log_event(
@@ -256,7 +260,10 @@ def run_unattended_lifecycle(
         raise
 
     print_fn("\n" + "=" * 70)
-    print_fn("NOVEL TRANSLATION COMPLETE")
+    print_fn("NOVEL TRANSLATION COMPLETE" if history_status is None else
+             "TRANSLATION COMMITTED — PUBLICATION NOT VERIFIED")
+    if history_status is not None:
+        print_fn(f"Whole-history check: {history_status['status']}; deferred chapters: {history_status['deferred_chapters']}")
     print_fn("=" * 70)
     print_fn(
         f"Completed through Chapter {progress['last_completed']}"
@@ -292,6 +299,7 @@ def run_unattended_lifecycle(
     print_fn("=" * 70)
     log_event(
         "shutdown",
-        stage="complete",
-        reason="translation_complete",
+        stage="complete" if history_status is None else "translation_committed",
+        reason="translation_complete" if history_status is None else "publication_not_verified",
+        whole_history_status=history_status["status"] if history_status else None,
     )

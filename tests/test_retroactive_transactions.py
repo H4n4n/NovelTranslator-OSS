@@ -685,3 +685,49 @@ def test_historical_audit_range_cannot_bypass_source_or_intent_proof(sandbox, mo
     assert acquisitions == [(1, 10)]
     assert engine.progress == baseline
     assert snapshot() == before
+
+
+@pytest.mark.parametrize("language,source_key", [("zh", "韓"), ("ko", "한민")])
+def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tmp_path, language, source_key):
+    from historical_reconciliation import impact_report
+    output = tmp_path / language / "output/chapters"
+    output.mkdir(parents=True)
+    numbers = list(range(1, 53))
+    chapter_map = {n: {"production_index": n, "text": source_key if n in (1, 2, 26, 51, 52) else ""}
+                   for n in numbers}
+    before = {n: ("\ufeff# Title 🦉\r\n\r\n**Han** — Hand, café.\r\n" if n in (1, 26, 51)
+                  else "Han met Han.\r\n" if n == 2 else "Hann.\r\n" if n == 52
+                  else "Untouched ordinary prose.\r\n").encode() for n in numbers}
+    for n, raw in before.items():
+        (output / f"{n:04d}.md").write_bytes(raw)
+    data = glossary(**{source_key: {"english": "Han", "category": "character", "status": "provisional"}})
+    staged = copy.deepcopy(data)
+    staged["entries"][source_key]["english"] = "Hann"
+    args = dict(novel_id=language, audit_label="0026_0052", through_chapter=52,
+                replacements=[rule(source_key)], glossary=data, staged_glossary=staged,
+                safe_categories=RETROACTIVE_SAFE_CATEGORIES, committed_chapters=numbers, chapter_map=chapter_map,
+                output_dir=output, retroactive_dir=tmp_path / language / "output/retroactive_fixes",
+                backup_dir=tmp_path / language / "backup")
+    result = tx.execute_retroactive_transaction(**args)
+    plan_file = next((args["retroactive_dir"] / "transactions").glob("*.plan.json"))
+    planned = json.loads(plan_file.read_bytes())
+    report = impact_report(planned, chapter_map, staged, before)
+    assert report["examined_chapters"] == 52
+    assert report["proven_eligible_chapters"] == 3
+    assert report["deferred_chapters"] == 1
+    assert report["already_current_chapters"] == 1
+    assert result["chapters_changed"] == [1, 26, 51]
+    assert source_key not in json.dumps(report, ensure_ascii=False)
+    assert "Hand, café" not in json.dumps(report, ensure_ascii=False)
+    for n, original in before.items():
+        actual = (output / f"{n:04d}.md").read_bytes()
+        assert actual == (original.replace(b"**Han**", b"**Hann**") if n in (1, 26, 51) else original)
+    backups = list(args["backup_dir"].rglob("*.md"))
+    assert len(backups) == 3
+    assert all(p.read_bytes() == before[int(p.stem)] for p in backups)
+    untouched = {n: (output / f"{n:04d}.md").stat().st_mtime_ns for n in numbers}
+    assert tx.execute_retroactive_transaction(**args)["transaction_id"] == result["transaction_id"]
+    assert untouched == {n: (output / f"{n:04d}.md").stat().st_mtime_ns for n in numbers}
+    changed = copy.deepcopy(chapter_map)
+    changed[52]["source_document_sha256"] = "changed-provenance"
+    assert impact_report(planned, changed, staged)["source_inventory_sha256"] != report["source_inventory_sha256"]

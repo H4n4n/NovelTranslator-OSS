@@ -4450,6 +4450,12 @@ def run_final_audit_if_needed():
     )
 
 
+def run_whole_history_consistency():
+    from types import SimpleNamespace
+    from historical_reconciliation import save_final_consistency
+    return save_final_consistency(SimpleNamespace(**globals()))
+
+
 def run_unattended_production(*, target_chapter=None):
     """Compatibility callable backed by shared lifecycle sequencing."""
 
@@ -4490,6 +4496,7 @@ def run_unattended_production(*, target_chapter=None):
         local_error_types=(NonProviderProductionError,),
         print_fn=print,
         target_chapter=target_chapter,
+        run_whole_history_consistency=(run_whole_history_consistency if target_chapter is None else None),
     )
 
 

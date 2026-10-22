@@ -47,6 +47,12 @@ def show_status(project, now=None):
                if goat_active else {})),
     )
 
+    from historical_reconciliation import publication_freshness
+    try:
+        freshness = publication_freshness(project)
+    except (OSError, ValueError, RuntimeError):
+        freshness = {"status": "NOT_VERIFIED", "reason_code": "HISTORY_OR_FRESHNESS_PROOF_INVALID"}
+    print(f"Publication freshness: {freshness['status']} ({freshness['reason_code']})")
     print("NovelTranslator status (zero API calls)")
     print("=" * 42)
     print(f"Project: {project.config.id} ({project.config.title})")

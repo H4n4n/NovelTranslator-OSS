@@ -36,6 +36,7 @@ from build_publication_chapters import (
 from novel_project import NovelProject, select_project
 from noveltranslator_core import atomic_replace_prepared_file
 from production_run_lock import ProductionRunLockedError, production_run_lock
+from production_failure_classification import ProductionIntegrityError
 
 
 SCHEMA_VERSION = 1
@@ -1044,6 +1045,8 @@ def build_publication_epub(
     report_json_path: Path | None = None,
     report_md_path: Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
+    from historical_reconciliation import require_publication_freshness
+    require_publication_freshness(project)
     paths = publication_paths(project)
     output_path = Path(output_path or paths["output"])
     if write_reports is None:
@@ -1132,6 +1135,8 @@ def build_publication_epub(
 def verify_existing_publication_epub(
     project: NovelProject, output_path: Path | None = None
 ) -> dict[str, Any]:
+    from historical_reconciliation import require_publication_freshness
+    require_publication_freshness(project)
     paths = publication_paths(project)
     output_path = Path(output_path or paths["output"])
     if not output_path.is_file():
@@ -1184,6 +1189,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (
         PublicationEpubError,
+        ProductionIntegrityError,
         OSError,
         json.JSONDecodeError,
         zipfile.BadZipFile,

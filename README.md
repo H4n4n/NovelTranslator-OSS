@@ -36,6 +36,10 @@ are documented in [docs/PRODUCTION_OPERATION_POLICY.md](docs/PRODUCTION_OPERATIO
 AUT-1 recovery behavior, existing automatic routes, and remaining operator-controlled
 boundaries are documented in [Autonomous recovery](docs/AUTONOMOUS_RECOVERY.md).
 
+AUT-2's first historical-evidence/publication-invalidation slice and its explicit
+remaining boundaries are documented in [Historical reconciliation](docs/AUT2_HISTORY_RECONCILIATION.md).
+It does not yet implement automatic downstream regeneration or complete Issue #11.
+
 ## Development Environment
 
 The supported engineering baseline is Python 3.14.x. The current reproducible

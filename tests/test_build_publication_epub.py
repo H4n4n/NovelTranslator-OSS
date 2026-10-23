@@ -92,6 +92,170 @@ def member_text(epub_path, suffix):
         return archive.read(name).decode("utf-8")
 
 
+BODY_PROOF_SOURCE = (
+    'Plain & <safe> "quoted" café.\nNext  line.\n\n'
+    'Before *soft* and _other_ then **firm** after.\n\n'
+    '***\n\nLast paragraph.\n'
+)
+BODY_PROOF_XHTML = (
+    '<p>Plain &amp; &lt;safe&gt; "quoted" café.<br/>Next  line.</p>'
+    '<p>Before <em>soft</em> and <em>other</em> then <strong>firm</strong> after.</p>'
+    '<p class="scene-break">* * *</p><p>Last paragraph.</p>'
+)
+
+
+def rewrite_archive_unit(epub_path, transform, unit=1):
+    """Rewrite one synthetic member, preserving ZIP layout and all other bytes."""
+    with zipfile.ZipFile(epub_path) as archive:
+        entries = [(info, archive.read(info)) for info in archive.infolist()]
+    rewritten = 0
+    with zipfile.ZipFile(epub_path, "w") as archive:
+        for info, data in entries:
+            if info.filename.endswith(f"text/unit_{unit:04d}.xhtml"):
+                data = transform(data)
+                rewritten += 1
+            archive.writestr(info, data)
+    assert rewritten == 1
+
+
+def replace_archive_body(epub_path, body_xhtml):
+    def transform(data):
+        document = ElementTree.fromstring(data)
+        body = document.find(".//{*}body")
+        heading = body.find("{*}h1")
+        body.clear()
+        body.append(heading)
+        fragment = ElementTree.fromstring(
+            '<div xmlns="http://www.w3.org/1999/xhtml">' + body_xhtml + '</div>'
+        )
+        body.text = fragment.text
+        body.extend(fragment)
+        return ElementTree.tostring(document, encoding="utf-8")
+    rewrite_archive_unit(epub_path, transform)
+
+
+@pytest.fixture
+def body_proof_epub(tmp_path):
+    project = make_project(tmp_path)
+    install_corpus(project, ["Chapter 1. Body Proof\n\n" + BODY_PROOF_SOURCE])
+    corpus = publication.load_publication_corpus(project)
+    output, _ = publication.build_publication_epub(
+        project, output_path=tmp_path / "body-proof.epub", write_reports=False
+    )
+    return output, corpus
+
+
+@pytest.mark.parametrize("marker", ["* * *", "**", "*", r"\*\*\*", "***", "* *", "---", "===="])
+def test_body_proof_accepts_source_syntax_and_newlines(tmp_path, marker):
+    project = make_project(tmp_path)
+    body = BODY_PROOF_SOURCE.replace("***", marker)
+    body += r"Literal \*escaped\* and unmatched *mark, a*b*c, 2 * 3." + "\n"
+    install_corpus(project, [("Chapter 1. Body Proof\n\n" + body).replace("\n", "\r\n")])
+    output, report = publication.build_publication_epub(
+        project, output_path=tmp_path / "positive.epub", write_reports=False
+    )
+    assert report["validation_checks"]["publication_bodies_match_editorial"] is True
+    assert publication.verify_epub_archive(output, publication.load_publication_corpus(project))[
+        "checks"
+    ]["publication_bodies_match_editorial"] is True
+
+
+def test_body_proof_accepts_equivalent_xhtml_serialization_and_wrappers(body_proof_epub):
+    output, corpus = body_proof_epub
+    # Literal expected XHTML is independent of the production renderer.
+    replace_archive_body(output, BODY_PROOF_XHTML)
+    def transform(data):
+        document = ElementTree.fromstring(data)
+        namespace = "{http://www.w3.org/1999/xhtml}"
+        body = document.find(".//{*}body")
+        wrapper = ElementTree.Element(namespace + "section", {"id": "chapter-wrapper"})
+        wrapper.text = "\n  "
+        for child in list(body):
+            body.remove(child)
+            wrapper.append(child)
+            child.tail = "\n  "
+        body.append(wrapper)
+        document.set("data-generator", "different harmless wrapper")
+        serialized = ElementTree.tostring(document, encoding="unicode", short_empty_elements=False)
+        return serialized.replace("café", "caf&#233;").encode("utf-8")
+    rewrite_archive_unit(output, transform)
+    assert publication.verify_epub_archive(output, corpus)["checks"][
+        "publication_bodies_match_editorial"
+    ] is True
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ('café', 'changed'),
+        ('café', 'cafe'),
+        ('Next  line.', 'Next line.'),
+        ('<p>Last paragraph.</p>', ''),
+        ('<p>Last paragraph.</p>', '<p>Last paragraph.</p><p>Last paragraph.</p>'),
+        ('<p>Last paragraph.</p>', '<p>Last</p><p> paragraph.</p>'),
+        ('</p><p>Before', '<br/>Before'),
+        ('<em>soft</em>', 'soft'),
+        ('<strong>firm</strong>', 'firm'),
+        ('<em>soft</em>', '<strong>soft</strong>'),
+        ('<strong>firm</strong>', '<em>firm</em>'),
+        ('Before <em>soft</em>', '<em>Before </em>soft'),
+        ('<em>soft</em>', '<em><strong>soft</strong></em>'),
+        ('<br/>', ''),
+        ('<br/>', '\n'),
+        ('<br/>Next  line.', 'Next<br/>  line.'),
+        ('class="scene-break"', ''),
+        ('* * *</p>', '***</p>'),
+        ('<p class="scene-break">* * *</p>', ''),
+        ('<p class="scene-break">* * *</p>', '<p class="scene-break">* * *</p>' * 2),
+        ('<p>Last paragraph.</p>', '<p class="scene-break">Last paragraph.</p>'),
+        ('<p>Last paragraph.</p>', '<div>Last paragraph.</div>'),
+        ('<p>Last paragraph.</p>', '<p>Last paragraph.</p>UNACCOUNTED TAIL'),
+        ('<p>Last paragraph.</p>', '<p>Last paragraph.</p>\u00a0'),
+        ('<p>Last paragraph.</p>', '<p>Last paragraph.</p><div>EXTRA</div>'),
+        ('<em>soft</em>', '<span>soft</span>'),
+        ('<em>soft</em>', '<em xmlns="urn:foreign">soft</em>'),
+        ('<br/>', '<br>EXTRA</br>'),
+        ('<p>Last paragraph.</p>', '<p>Last paragraph.</p><script>EXTRA</script>'),
+    ],
+    ids=[
+        'substitution', 'unicode-change', 'whitespace-loss', 'omission', 'duplication',
+        'paragraph-split', 'paragraph-merge', 'lost-emphasis', 'lost-strong',
+        'emphasis-to-strong', 'strong-to-emphasis', 'shifted-emphasis', 'nested-style',
+        'lost-line-break', 'literal-newline', 'shifted-line-break', 'lost-scene-class',
+        'changed-scene-text', 'lost-scene', 'duplicate-scene', 'fake-scene',
+        'unwrapped-paragraph', 'unaccounted-tail', 'nonbreaking-space-tail', 'unaccounted-container',
+        'unsupported-inline', 'foreign-namespace', 'text-inside-break', 'extra-element',
+    ],
+)
+def test_body_proof_rejects_archive_body_mutations(body_proof_epub, old, new):
+    output, corpus = body_proof_epub
+    assert BODY_PROOF_XHTML.count(old) == 1
+    replace_archive_body(output, BODY_PROOF_XHTML.replace(old, new))
+    with pytest.raises(publication.PublicationEpubError, match="unit 1 XHTML body differs") as error:
+        publication.verify_epub_archive(output, corpus)
+    assert str(error.value) == "unit 1 XHTML body differs from publication text"
+    assert corpus.units[0].path.read_bytes() == corpus.units[0].source_bytes
+
+
+@pytest.mark.parametrize("body", ["", "<p>OTHER UNIT BODY</p>",
+    '<p>Last paragraph.</p>' + BODY_PROOF_XHTML.removesuffix('<p>Last paragraph.</p>')])
+def test_body_proof_rejects_empty_substituted_or_reordered_body(body_proof_epub, body):
+    output, corpus = body_proof_epub
+    replace_archive_body(output, body)
+    with pytest.raises(publication.PublicationEpubError, match="XHTML body differs"):
+        publication.verify_epub_archive(output, corpus)
+
+
+def test_body_proof_does_not_use_renderer_as_expected_value(tmp_path, monkeypatch):
+    project = make_project(tmp_path)
+    install_corpus(project, ["Chapter 1. Renderer Defect\n\nApproved prose.\n"])
+    monkeypatch.setattr(publication, "_render_body", lambda body: '<p>Wrong prose.</p>')
+    output = tmp_path / "rejected.epub"
+    with pytest.raises(publication.PublicationEpubError, match="XHTML body differs"):
+        publication.build_publication_epub(project, output_path=output, write_reports=False)
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("marker", ["* * *", "**", "*", r"\*\*\*"])
 def test_required_standalone_scene_break_forms_render_consistently(marker):
     assert publication.is_publication_scene_break(marker)

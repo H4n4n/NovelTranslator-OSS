@@ -917,3 +917,54 @@ def test_aut2_review_new_foreign_namespace_does_not_persist_intent(aut2_review_i
     with pytest.raises(ProductionIntegrityError, match="FOREIGN_INVALIDATION_ROOT"):
         final.finalize_periodic_audit(engine, 1, 10, *args)
     assert _review_snapshot(root.parent) == before
+
+
+def test_aut2_audit_inventory_ignores_uncommitted_source(aut2_review_intent):
+    import production_periodic_audit_finalization as final
+    root, engine, args = aut2_review_intent
+    original = final.intent_path(engine, 1, 10).read_bytes()
+    # Both an uncommitted row within the boundary and a future row are outside
+    # this sparse fixture's exact committed set, [10].
+    engine.chapter_map.update({1: {"text": "Earlier uncommitted source"},
+                               11: {"text": "Future source"}})
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    engine.chapter_map[12] = {"text": "Later acquired source"}
+    before = _review_snapshot(root)
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert final.intent_path(engine, 1, 10).read_bytes() == original
+    assert _review_snapshot(root) == before
+
+
+@pytest.mark.parametrize("damage", ["text", "missing", "identity"])
+def test_aut2_audit_inventory_rejects_original_source_drift(aut2_review_intent, damage):
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    root, engine, args = aut2_review_intent
+    if damage == "missing":
+        del engine.chapter_map[10]
+    elif damage == "text":
+        engine.chapter_map[10]["text"] += " changed"
+    else:
+        # Same source text substituted from a different original source unit.
+        engine.chapter_map[10] = {**engine.chapter_map[10], "source_document_sha256": "different-unit"}
+    before = _review_snapshot(root)
+    with pytest.raises(ProductionIntegrityError, match="source hash mismatch|deterministic finalization drift"):
+        final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root) == before
+
+
+def test_aut2_retained_contradictory_receipt_blocks_restart_without_writes(aut2_review_intent):
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    from production_failure_classification import ProductionIntegrityError
+    root, engine, args = aut2_review_intent
+    final.finalize_periodic_audit(engine, 1, 10, *args)
+    intent = final.load_intent(engine, 1, 10)
+    receipt = history.invalidation_path(engine, intent)
+    value = history.read_object(receipt)
+    value["audit_intent_sha256"] = "0" * 64
+    receipt.write_text(json.dumps(value), encoding="utf-8")
+    before = _review_snapshot(root)
+    with pytest.raises(ProductionIntegrityError, match="FRESHNESS_MANIFEST_DRIFT"):
+        final.finalize_periodic_audit(engine, 1, 10, *args)
+    assert _review_snapshot(root) == before

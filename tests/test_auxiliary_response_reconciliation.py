@@ -67,6 +67,17 @@ def reset_synthetic_publication(module):
     transport tests must rewind the entire synthetic associated publication.
     Paid journals and PR155 evidence remain intact.
     """
+    from production_periodic_audit_finalization import load_intent
+    from historical_reconciliation import (
+        validate_invalidation_identity, read_object, invalidation_record,
+    )
+    intent = load_intent(module, 1, 1)
+    if intent is not None:
+        receipt = validate_invalidation_identity(module, intent, 1, 1)
+        if receipt.exists():
+            # Only discard the exact derived receipt of the discarded intent.
+            assert read_object(receipt) == invalidation_record(intent)
+            receipt.unlink()
     for suffix in (".json", ".finalization.json"):
         path = module.AUDIT_DIR / ("audit_0001_0001" + suffix)
         if path.exists(): path.unlink()
@@ -508,3 +519,22 @@ def test_impossible_unresolved_ownership_blocks_before_new_attempt(engine, monke
     with pytest.raises(RuntimeError, match="impossible kind/chunk/lifecycle"):
         module.run_periodic_audit(1, 1)
     assert path.read_bytes() == before and len(sends) == 1
+
+
+def test_synthetic_rewind_preserves_unrelated_receipt_and_paid_evidence(engine, monkeypatch):
+    from production_periodic_audit_finalization import load_intent
+    from historical_reconciliation import invalidation_path
+    module, _, _, _, path, _ = setup(engine, monkeypatch)
+    module.run_periodic_audit(1, 1)
+    receipt = invalidation_path(module, load_intent(module, 1, 1))
+    unrelated = receipt.with_name("f" * 64 + ".json")
+    assert unrelated != receipt
+    unrelated.write_bytes(b"Unrelated disposable evidence")
+    paid = journal(read(path)["attempt_records"][0])
+    original_paid = paid.read_bytes()
+    transactions = {p: p.read_bytes() for p in (module.RETROACTIVE_DIR / "transactions").glob("*.json")}
+    reset_synthetic_publication(module)
+    assert not receipt.exists()
+    assert unrelated.read_bytes() == b"Unrelated disposable evidence"
+    assert paid.read_bytes() == original_paid
+    assert transactions == {p: p.read_bytes() for p in transactions}

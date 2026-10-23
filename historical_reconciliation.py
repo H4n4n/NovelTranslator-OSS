@@ -98,6 +98,10 @@ def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):
     ambiguity stays deferred under the unchanged owned-single-span-v1 policy.
     """
     tx.validate_plan(plan, plan["request"], chapter_map)
+    # Later source acquisition must not change an immutable earlier audit.
+    # validate_plan proves every committed source hash; retain full unit identity
+    # in the inventory so in-scope provenance drift still changes the proof.
+    audited_sources = {n: chapter_map[n] for n in plan["request"]["committed_chapters"]}
     rules = plan["request"]["rules"]
     rows = []
     for item in plan["chapters"]:
@@ -135,7 +139,7 @@ def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):
     return {"revision": REVISION, "scope": "whole_committed_history",
             "audit_boundary": plan["request"]["through_chapter"],
             "transaction_id": plan["transaction_id"],
-            "source_inventory_sha256": canonical_hash(source_inventory(chapter_map)),
+            "source_inventory_sha256": canonical_hash(source_inventory(audited_sources)),
             "glossary_revision_sha256": canonical_hash(staged_glossary),
             "examined_chapters": len(rows), **counts, "chapters": rows,
             "phase": "DISCOVERY_NOT_COMMIT_AUTHORITY", "provider_calls": 0}

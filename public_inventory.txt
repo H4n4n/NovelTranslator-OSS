@@ -487,3 +487,5 @@ docs/public_ci_reliability.md
 docs/DEVELOPMENT_TIPS.md
 scripts/public_ci.py
 scripts/public_ci_policy.json
+historical_reconciliation.py
+docs/AUT2_HISTORY_RECONCILIATION.md

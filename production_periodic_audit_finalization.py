@@ -106,7 +106,7 @@ def chapter_manifest(module):
     return {p.name: file_sha(p) for p in sorted(module.OUTPUT_DIR.glob("*.md"))}
 
 
-def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None):
+def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None, _include_before_bytes=False):
     """Pure PR155 proof, including original plan regeneration from BEFORE bytes."""
     novel = module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"
     label = f"{start:04d}_{end:04d}"
@@ -256,7 +256,10 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
         evidence[str(p)] = file_sha(p)
     for p in directory.glob(f"{slot}.reconcile.*.json"):
         evidence[str(p)] = file_sha(p)
-    return dict(plan=plan, result=result, state=state, evidence=evidence, existing=existing)
+    proof = dict(plan=plan, result=result, state=state, evidence=evidence, existing=existing)
+    if _include_before_bytes:
+        proof["_before_bytes"] = originals  # private in-memory input, never serialized
+    return proof
 
 
 def prepare_finalization(module, start, end, audit_result, audit_stats, chunking, *, timestamp=0, chapter_bytes=None):
@@ -291,10 +294,17 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     candidate["last_audited_chapter"] = end
     staged = copy.deepcopy(baseline["glossary"])
     changes = module.apply_periodic_audit(start, end, audit_result, glossary_data=staged)
-    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes)
+    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes, _include_before_bytes=True)
+    # Existing immutable intents retain their exact replay semantics. New audits
+    # bind a source-safe full-range discovery report to the outer transaction.
+    from historical_reconciliation import impact_report
+    prior_intent = load_intent(module, start, end)
+    history_evidence = prior_intent is None or "historical_reconciliation" in prior_intent["record"]
     record = dict(start_chapter=start, end_chapter=end, timestamp_unix=timestamp,
                   stats=copy.deepcopy(audit_stats), chunking=copy.deepcopy(chunking), changes=changes,
                   retroactive=proof["result"], issues=copy.deepcopy(audit_result.get("issues", [])))
+    if history_evidence:
+        record["historical_reconciliation"] = impact_report(proof["plan"], module.chapter_map, staged, proof["_before_bytes"])
     post_history = copy.deepcopy(baseline["history"])
     post_history["audits"].append(record)
     post_issues = copy.deepcopy(baseline["issues"])
@@ -306,18 +316,24 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     historical_proof = dict(schema_version=1, novel_id=proof["plan"]["request"]["novel_id"],
         before_chapters=manifest, plan_sha256=canonical_sha256(proof["plan"]),
         checkpoint_sha256=file_sha(module.periodic_audit_checkpoint_path(start, end)))
-    return dict(revision=REVISION, start=start, end=end, baseline=baseline, post=post,
+    prepared = dict(revision=REVISION, start=start, end=end, baseline=baseline, post=post,
         record=record, transaction_plan=proof["plan"], operation_id=op,
         chapters=manifest, historical_proof=historical_proof, continuity_sha256=file_sha(module.CONTINUITY_FILE),
         checkpoint_sha256=file_sha(module.periodic_audit_checkpoint_path(start, end)),
         audit_result=copy.deepcopy(audit_result), audit_stats=copy.deepcopy(audit_stats), chunking=copy.deepcopy(chunking))
+    if history_evidence:
+        from historical_reconciliation import publication_input_snapshot
+        prepared["publication_inputs_before"] = (prior_intent["publication_inputs_before"] if prior_intent else
+            publication_input_snapshot(module.GLOSSARY_FILE.resolve().parent.parent))
+    return prepared
 
 
 def load_intent(module, start, end):
     path = intent_path(module, start, end)
     if not path.exists():
         return None
-    value = read_json(path)
+    from historical_reconciliation import read_object
+    value = read_object(path)
     require(value.get("intent_sha256") == canonical_sha256({k: v for k, v in value.items() if k != "intent_sha256"})
             and value.get("revision") == REVISION and (value.get("start"), value.get("end")) == (start, end), "audit finalization intent mismatch")
     if "historical_proof" in value:
@@ -368,6 +384,7 @@ def verify_publication(module, intent):
 
 def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunking):
     """Common normal/recovery local seam. Caller owns the novel production lock."""
+    from historical_reconciliation import ensure_invalidation, invalidation_path, validate_invalidation_identity, read_object
     intent = load_intent(module, start, end)
     if intent is None:
         intent = prepare_finalization(module, start, end, audit_result, audit_stats, chunking,
@@ -375,10 +392,12 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
         record_path = module.AUDIT_DIR / f"audit_{start:04d}_{end:04d}.json"
         require(not record_path.exists(), "audit record exists without proven intent")
         intent["intent_sha256"] = canonical_sha256(intent)
+        invalidation_path(module, intent)  # Confine even a new operation before persistence.
         module.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
         atomic_write_json(intent_path(module, start, end), intent)
     require(audit_result == intent["audit_result"] and audit_stats == intent["audit_stats"]
             and chunking == intent["chunking"], "audit finalization inputs drift")
+    validate_invalidation_identity(module, intent, start, end)
     finalized = verify_publication(module, intent)
     # Revalidate deterministic accounting on the original detached baseline,
     # including on restart; never infer a baseline from partially installed state.
@@ -408,7 +427,12 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
     proof = transaction_proof(detached, start, end, intent["baseline"]["glossary"], intent["post"]["glossary"], intent["record"]["changes"])
     if finalized:
         require(proof["state"] and proof["state"]["state"] == "FINALIZED", "final audit lacks finalized transaction")
-    elif not proof["state"] or proof["state"]["state"] != "FINALIZED":
+    # Existing transaction JSON must have one unambiguous interpretation too.
+    for path, sha in proof["evidence"].items():
+        if sha and Path(path).suffix == ".json":
+            read_object(path)
+    ensure_invalidation(module, intent)  # First receipt write, AFTER pure proof.
+    if not finalized and (not proof["state"] or proof["state"]["state"] != "FINALIZED"):
         tx.execute_retroactive_transaction(novel_id=proof["plan"]["request"]["novel_id"],
             audit_label=f"{start:04d}_{end:04d}", through_chapter=end,
             replacements=intent["record"]["changes"]["retroactive_replacements"],

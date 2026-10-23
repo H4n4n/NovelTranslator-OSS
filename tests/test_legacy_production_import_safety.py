@@ -172,6 +172,10 @@ def _configure_unattended_runner_fixture(
         lambda: events.append("final_audit"),
     )
 
+    # Audit callbacks above are sequencing stubs, with no durable audit intents.
+    monkeypatch.setattr(module, "run_whole_history_consistency", lambda: {
+        "status": "SYNTHETIC_AUDIT_STUB", "deferred_chapters": 0})
+
     def process_chapter(chapter_number):
         events.append(f"process:{chapter_number}")
         module.progress["completed"].append(chapter_number)

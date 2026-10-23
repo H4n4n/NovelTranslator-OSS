@@ -581,6 +581,10 @@ def aut1_engine(monkeypatch, tmp_path):
         engine.create_checkpoint(end)
     real_audit = engine.run_periodic_audit
     monkeypatch.setattr(engine, "run_periodic_audit", audit)
+    # This AUT-1 fixture deliberately stubs audit publication/intent evidence.
+    # AUT-2's real whole-history proof is exercised with real finalization below.
+    monkeypatch.setattr(engine, "run_whole_history_consistency", lambda: {
+        "status": "SYNTHETIC_AUDIT_STUB", "deferred_chapters": 0})
     return NS(real_audit=real_audit, engine=engine, calls=calls, events=events, queue=queue, audits=audits,
               response=response, root=tmp_path)
 
@@ -880,3 +884,125 @@ def test_aut1_glossary_semantic_correction_commits_then_next_chapter(aut1_engine
     from chapter_glossary_review import CHAPTER_REVIEW_RECOVERY_KEY
     assert reviewed[-1][CHAPTER_REVIEW_RECOVERY_KEY]["semantic_correction"]["attempted"] is True
     assert reviewed[-1]["review_result"]["decisions"][0]["action"] == "accept"
+
+
+def test_aut2_history_check_follows_tail_and_does_not_claim_publication():
+    progress, events, output, errors, kwargs = _fixture()
+    def whole_history():
+        assert events[-1] == "final_audit"
+        events.append("whole_history")
+        return {"status": "CHECKED_WITH_DEFERRALS", "deferred_chapters": 1}
+    kwargs["run_whole_history_consistency"] = whole_history
+    run_unattended_lifecycle(**kwargs)
+    assert not errors
+    assert "whole_history" in events
+    assert "NOVEL TRANSLATION COMPLETE" not in output
+    assert "TRANSLATION COMMITTED — PUBLICATION NOT VERIFIED" in output
+    assert events[-1][2]["reason"] == "publication_not_verified"
+    assert events[-1][2]["stage"] == "translation_committed"
+
+
+@pytest.fixture(params=["zh", "ko"])
+def aut2_history_novel(aut1_engine, monkeypatch, request):
+    """Accepted synthetic decisions; actual finalizer/transaction, zero transport."""
+    from dataclasses import replace
+    import production_periodic_audit_finalization as final
+    from retroactive_span_planning import canonical_hash
+    h, e = aut1_engine, aut1_engine.engine
+    key = "韓" if request.param == "zh" else "한민"
+    monkeypatch.setattr(e, "ACTIVE_NOVEL_CONFIG", replace(e.ACTIVE_NOVEL_CONFIG, source_language=request.param))
+    chapters = {n: {"chapter": n, "production_index": n, "text": key if n in (1, 2, 26) else ""} for n in range(1, 27)}
+    monkeypatch.setattr(e, "chapters", list(chapters.values()))
+    monkeypatch.setattr(e, "chapter_map", chapters)
+    monkeypatch.setattr(e, "glossary", {"entries": {key: {"english": "Han", "category": "character", "status": "provisional", "first_chapter": 1}}})
+    original_apply = e.apply_periodic_audit
+    monkeypatch.setattr(e, "apply_periodic_audit", lambda start, end, result, glossary_data=None:
+        original_apply(start, end, result, glossary_data, targets=[{"chinese": key}]))
+    e.save_json(e.GLOSSARY_FILE, e.glossary)
+    publication_dir = h.root / "final/epub"
+    publication_dir.mkdir(parents=True)
+    (publication_dir / "prior.epub").write_bytes(b"synthetic prior published bytes")
+    before = {n: ("\ufeff# Chapter %d\r\n\r\n**Han** — Hand, café.\r\n" % n if n in (1, 26)
+                  else "Han met Han.\r\n" if n == 2 else "Ordinary prose.\r\n").encode() for n in range(1, 27)}
+    for n in range(1, 26):
+        (e.OUTPUT_DIR / f"{n:04d}.md").write_bytes(before[n])
+    e.progress.update(completed=list(range(1, 26)), last_completed=25, next_chapter=26)
+    e.save_json(e.PROGRESS_FILE, e.progress)
+    stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
+    stats["api_request_count"] = 0
+    chunking = {"candidate_count": 1, "candidate_set_hash": canonical_hash("synthetic-accepted-decisions"), "api_request_count": 0}
+    e.save_json(e.periodic_audit_checkpoint_path(1, 25), {"synthetic_accepted_decisions": True})
+    final.finalize_periodic_audit(e, 1, 25, {"decisions": [{"chinese": key, "action": "keep"}], "issues": []}, stats, chunking)
+    (e.OUTPUT_DIR / "0026.md").write_bytes(before[26])
+    e.progress.update(completed=list(range(1, 27)), last_completed=26, next_chapter=27)
+    e.save_json(e.PROGRESS_FILE, e.progress)
+    e.save_json(e.periodic_audit_checkpoint_path(26, 26), {"synthetic_accepted_decisions": True})
+    final.finalize_periodic_audit(e, 26, 26, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []}, stats, chunking)
+    return h, before
+
+
+def test_aut2_final_pass_reaches_history_and_replays_without_writes(aut2_history_novel):
+    import historical_reconciliation as history
+    import production_periodic_audit_finalization as final
+    h, before = aut2_history_novel
+    e = h.engine
+    intent = final.load_intent(e, 26, 26)
+    public_proof = final.transaction_proof(e, 26, 26, intent["baseline"]["glossary"],
+        intent["post"]["glossary"], intent["record"]["changes"])
+    assert "_before_bytes" not in public_proof
+    json.dumps(public_proof)  # operator fingerprints must remain serializable
+    discovery = intent["record"]["historical_reconciliation"]
+    assert (discovery["examined_chapters"], discovery["proven_eligible_chapters"], discovery["deferred_chapters"]) == (26, 2, 1)
+    report = history.save_final_consistency(e)
+    assert (report["examined_chapters"], report["audit_boundary"], report["deferred_chapters"]) == (26, 26, 1)
+    assert report["corrected_chapters"] == 0  # transaction owns edits; this pass observes
+    assert len(report["transactions"]) == 2 and report["publication_status"] == "NOT_VERIFIED"
+    assert h.calls == []
+    for n, raw in before.items():
+        assert (e.OUTPUT_DIR / f"{n:04d}.md").read_bytes() == (raw.replace(b"**Han**", b"**Hann**") if n in (1, 26) else raw)
+    snapshot = {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in h.root.rglob("*") if p.is_file()}
+    assert history.save_final_consistency(e) == report
+    assert snapshot == {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in h.root.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("damage", ["source", "backup", "outside_editor", "intent", "checkpoint", "glossary", "missing_chapter", "extra_chapter"])
+def test_aut2_final_pass_rejects_unproven_history(aut2_history_novel, damage):
+    import historical_reconciliation as history
+    h, _ = aut2_history_novel
+    e = h.engine
+    if damage == "source": e.chapter_map[1]["text"] += "changed"
+    elif damage == "backup": next(e.BACKUP_DIR.glob("retroactive_*/chapters_before/0001.md")).unlink()
+    elif damage == "outside_editor": (e.OUTPUT_DIR / "0001.md").write_bytes(b"Outside editor")
+    elif damage == "intent": (e.AUDIT_DIR / "audit_0026_0026.finalization.json").write_bytes(b"{bad")
+    elif damage == "checkpoint": e.periodic_audit_checkpoint_path(26, 26).write_bytes(b"changed")
+    elif damage == "glossary": e.glossary["entries"][next(iter(e.glossary["entries"]))]["english"] = "Changed"
+    elif damage == "missing_chapter": (e.OUTPUT_DIR / "0002.md").unlink()
+    else: (e.OUTPUT_DIR / "0999.md").write_bytes(b"foreign")
+    snapshot = {str(p): p.read_bytes() for p in h.root.rglob("*") if p.is_file()}
+    with pytest.raises((RuntimeError, ValueError, KeyError, FileNotFoundError)):
+        history.save_final_consistency(e)
+    assert snapshot == {str(p): p.read_bytes() for p in h.root.rglob("*") if p.is_file()}
+    assert h.calls == []
+
+
+def test_aut2_publication_inventory_detects_missing_and_renamed_outputs(aut2_history_novel):
+    import historical_reconciliation as history
+    import build_publication_epub as publication
+    from novel_project import NovelProject
+    from production_failure_classification import ProductionIntegrityError
+    h, _ = aut2_history_novel
+    project = NovelProject(Path(__file__).resolve().parents[1], h.root, h.engine.ACTIVE_NOVEL_CONFIG)
+    prior = h.root / "final/epub/prior.epub"
+    raw = prior.read_bytes()
+    renamed = prior.with_name("renamed.epub")
+    prior.rename(renamed)
+    status = history.publication_freshness(project)
+    assert status["status"] == "STALE" and status["rebuilt_epubs"] == 0
+    assert any(a["path"] == "final/epub/prior.epub" and a["status"] == "MISSING" for a in status["artifacts"])
+    assert any(a["path"] == "final/epub/renamed.epub" and a["status"] == "NOT_VERIFIED" for a in status["artifacts"])
+    snapshot = {str(p): p.read_bytes() for p in h.root.rglob("*") if p.is_file()}
+    for call in (publication.build_publication_epub, publication.verify_existing_publication_epub):
+        with pytest.raises(ProductionIntegrityError, match="PUBLICATION_STALE"):
+            call(project)
+    assert renamed.read_bytes() == raw
+    assert snapshot == {str(p): p.read_bytes() for p in h.root.rglob("*") if p.is_file()}

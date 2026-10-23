@@ -559,3 +559,121 @@ def test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix(incid
     with pytest.raises(RuntimeError, match="checkpoint"):
         plan(project)
     assert snapshot(project) == before
+
+
+@pytest.mark.parametrize("incident", ["mixed", "mixed_competing", "mixed_contextual"], indirect=True)
+def test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail(incident):
+    import historical_reconciliation as history
+    project, module, result, stats, chunking = incident
+    execute(project)
+    current = local_module(project)
+    # Fixture starts at 376; earlier legacy windows have no intents. Full-history
+    # proof must block rather than silently treating that tail as the entire book.
+    before = snapshot(project)
+    with pytest.raises(Exception, match="MISSING_OR_COMPETING_AUDIT_HISTORY"):
+        history.final_consistency_report(current)
+    assert snapshot(project) == before
+    freshness = history.publication_freshness(project)
+    assert freshness["status"] == "STALE"
+    assert 388 in freshness["impacted_chapters"] or freshness["impacted_chapters"] == []
+    assert freshness["rebuilt_epubs"] == 0
+    with pytest.raises(Exception, match="PUBLICATION_STALE"):
+        history.require_publication_freshness(project)
+    intent = final.load_intent(current, 376, 400)
+    report = intent["record"]["historical_reconciliation"]
+    assert report["scope"] == "whole_committed_history"
+    assert report["examined_chapters"] == 400
+    assert "有榮山" not in json.dumps(report, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("incident", ["mixed"], indirect=True)
+@pytest.mark.parametrize("stage", ["invalidation", "first_chapter", "glossary", "progress"])
+def test_aut2_crash_invalidation_precedes_edits_and_progress_last(incident, monkeypatch, stage):
+    import historical_reconciliation as history
+    project, module, result, stats, chunking = incident
+    original_json, original_prose, original_save = history.atomic_write_json, final.tx.atomic_write_bytes, module.save_json
+    fired = []
+    def crash(path, value):
+        original_json(path, value)
+        if stage == "invalidation" and "publication_freshness" in str(path) and not fired:
+            fired.append(True)
+            raise KeyboardInterrupt()
+    def prose(path, raw):
+        original_prose(path, raw)
+        if stage == "first_chapter" and Path(path).parent == module.OUTPUT_DIR and not fired:
+            fired.append(True)
+            assert list((project.root / "output/publication_freshness").glob("*.json"))
+            raise KeyboardInterrupt()
+    def save(path, value):
+        original_save(path, value)
+        if ((stage == "glossary" and path == module.GLOSSARY_FILE)
+                or (stage == "progress" and path == module.PROGRESS_FILE)) and not fired:
+            fired.append(True)
+            raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(history, "atomic_write_json", crash)
+        mp.setattr(final.tx, "atomic_write_bytes", prose)
+        mp.setattr(module, "save_json", save)
+        with pytest.raises(KeyboardInterrupt):
+            final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+    journals = {p.name: p.read_bytes() for p in module.PAID_REQUEST_JOURNAL_DIR.glob("*.json")}
+    reloaded = local_module(project)
+    final.finalize_periodic_audit(reloaded, 376, 400, result, stats, chunking)
+    assert journals == {p.name: p.read_bytes() for p in module.PAID_REQUEST_JOURNAL_DIR.glob("*.json")}
+    assert history.publication_freshness(project)["status"] == "STALE"
+    before = snapshot(project)
+    final.finalize_periodic_audit(local_module(project), 376, 400, result, stats, chunking)
+    assert snapshot(project) == before
+
+
+@pytest.mark.parametrize("incident", ["mixed"], indirect=True)
+@pytest.mark.parametrize("damage", ["malformed", "missing", "tampered", "foreign"])
+def test_aut2_invalid_freshness_never_certifies_editorial_copy(incident, damage):
+    import historical_reconciliation as history
+    import build_publication_epub as publication
+    project, module, result, stats, chunking = incident
+    execute(project)
+    path = next((project.root / "output/publication_freshness").glob("*.json"))
+    if damage == "missing":
+        path.unlink()
+    elif damage == "malformed":
+        path.write_bytes(b"{bad")
+    else:
+        value = json.loads(path.read_bytes())
+        value["status" if damage == "tampered" else "novel_id"] = "CURRENT" if damage == "tampered" else "foreign"
+        path.write_text(json.dumps(value), encoding="utf-8")
+    before = snapshot(project)
+    with pytest.raises(Exception, match="AUT2"):
+        publication.build_publication_epub(project)
+    assert snapshot(project) == before
+
+
+@pytest.mark.parametrize("incident", ["mixed"], indirect=True)
+@pytest.mark.parametrize("damage", ["checkpoint", "paid_journal"])
+def test_aut2_review_paid_proof_failure_precedes_first_receipt(incident, monkeypatch, damage):
+    import historical_reconciliation as history
+    project, module, result, stats, chunking = incident
+    write = final.atomic_write_json
+    def stop(path, value):
+        write(path, value)
+        if Path(path).name.endswith(".finalization.json"):
+            raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(final, "atomic_write_json", stop)
+        with pytest.raises(KeyboardInterrupt):
+            final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+    if damage == "checkpoint":
+        module.periodic_audit_checkpoint_path(376, 400).write_bytes(b"stale checkpoint")
+    else:
+        path = next(module.PAID_REQUEST_JOURNAL_DIR.glob("*.json"))
+        value = json.loads(path.read_bytes())
+        value["response"]["stats"]["prompt_tokens"] += 1
+        _write_json(path, _with_record_hash(value))
+    monkeypatch.setattr(module.client.chat.completions, "create", lambda **k: pytest.fail("provider send"))
+    before = snapshot(project)
+    directories = {p.relative_to(project.root).as_posix() for p in project.root.rglob("*") if p.is_dir()}
+    with pytest.raises((RuntimeError, ValueError)):
+        final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+    assert snapshot(project) == before
+    assert {p.relative_to(project.root).as_posix() for p in project.root.rglob("*") if p.is_dir()} == directories
+    assert not (project.root / "output/publication_freshness").exists()

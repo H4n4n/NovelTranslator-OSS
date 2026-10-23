@@ -563,6 +563,43 @@ def build_finalization_corpus(project, output_dir=None):
     return manifest, verification, alignment
 
 
+def build_identity_finalization_corpus(project, output_dir):
+    """Copy an unchanged committed spine losslessly to a NEW final workspace.
+
+    The caller supplies source/audit/approval proofs and owns the novel lock.
+    This seam grants no title, normalization, or historical-edit authority.
+    """
+    output_dir = Path(output_dir)
+    if output_dir.exists() or output_dir.is_symlink():
+        raise FinalizationError("finalization output already exists")
+    count = project.config.final_chapter
+    inventory, payloads = inventory_production_chapters(project.chapter_dir, count)
+    expected_names = {f"{n:04d}.md" for n in range(1, count + 1)}
+    if {p.name for p in project.chapter_dir.iterdir()} != expected_names:
+        raise FinalizationError("identity finalization inventory drift")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="finalization-", dir=output_dir.parent))
+    try:
+        (temp_root / "chapters").mkdir()
+        (temp_root / "reports").mkdir()
+        for n, raw in payloads.items():
+            (temp_root / "chapters" / f"{n:04d}.md").write_bytes(raw)
+        actual = {n: (temp_root / "chapters" / f"{n:04d}.md").read_bytes() for n in payloads}
+        if actual != payloads:
+            raise FinalizationError("identity finalization staged bytes drift")
+        (temp_root / "manifest.json").write_bytes(json_bytes({
+            "schema_version": 1, "project_id": project.config.id,
+            "migration_kind": "committed-identity-v1", "production_inventory": inventory,
+        }))
+        if inventory_production_chapters(project.chapter_dir, count)[1] != payloads:
+            raise FinalizationError("production changed before identity finalization")
+        os.rename(temp_root, output_dir)
+    except BaseException:
+        if temp_root.exists():
+            shutil.rmtree(temp_root)
+        raise
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Build a local-only lossless TXT finalization corpus (zero API calls)"

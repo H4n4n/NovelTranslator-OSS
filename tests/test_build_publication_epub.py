@@ -909,3 +909,392 @@ def test_real_rogue_publication_temporary_integration(tmp_path):
     assert report["split_heading_units"] == expected_split_units
     assert report["source_unchanged"] is True
     assert publication.load_publication_corpus(project).fingerprint == corpus.fingerprint
+
+
+# AUT-2: source-bound generations (all inputs are disposable).
+"""Disposable AUT-2 source-to-EPUB regeneration contracts, no provider access."""
+import copy
+from dataclasses import replace
+import json
+from pathlib import Path
+import zipfile
+
+import pytest
+
+import historical_reconciliation as history
+import publication_regeneration as regen
+from novel_project import NovelProject
+from retroactive_span_planning import canonical_hash, digest
+from test_production_lifecycle import aut1_engine
+from test_apply_title_resolution_plan import _fixture as title_fixture
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def snapshot(root):
+    return {p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+            for p in root.rglob("*") if p.is_file() and p.name != ".production.lock"}
+
+
+@pytest.fixture(params=["zh", "ko"])
+def novel(aut1_engine, monkeypatch, request):
+    import production_periodic_audit_finalization as final
+    e, root = aut1_engine.engine, aut1_engine.root
+    key = "韓" if request.param == "zh" else "한민"
+    config = replace(e.ACTIVE_NOVEL_CONFIG, final_chapter=3, source_language=request.param, source_type="txt")
+    monkeypatch.setattr(e, "ACTIVE_NOVEL_CONFIG", config)
+    project = NovelProject(Path(__file__).resolve().parents[1], root, config)
+    write(project.config_file, config.to_dict())
+    source = (key + " arrived\n" + key + " departed\n" + key + " returned\n").encode()
+    project.source_txt.parent.mkdir(parents=True, exist_ok=True)
+    project.source_txt.write_bytes(source)
+    units = [{"chapter": n, "production_index": n, "text": key + f" {n}",
+              "title": "Synthetic", "source_document_sha256": digest(source)} for n in range(1, 4)]
+    write(project.chapters_file, units)
+    monkeypatch.setattr(e, "chapters", units)
+    monkeypatch.setattr(e, "chapter_map", {u["chapter"]: u for u in units})
+    monkeypatch.setattr(e, "glossary", {"entries": {key: {"english": "Han", "category": "character", "status": "provisional", "first_chapter": 1}}})
+    original_apply = e.apply_periodic_audit
+    monkeypatch.setattr(e, "apply_periodic_audit", lambda start, end, result, glossary_data=None:
+        original_apply(start, end, result, glossary_data, targets=[{"chinese": key}]))
+    e.progress.update(completed=[1, 2, 3], last_completed=3, next_chapter=4, last_audited_chapter=0)
+    e.save_json(e.GLOSSARY_FILE, e.glossary)
+    e.save_json(e.PROGRESS_FILE, e.progress)
+    e.save_json(e.ISSUES_FILE, e.issues_data)
+    e.save_json(e.AUDIT_HISTORY_FILE, e.audit_history)
+    e.save_json(e.CONTINUITY_FILE, e.continuity)
+    for n in range(1, 4):
+        heading = "Chapter 1. 7. Old Title (1)" if n == 1 else f"# Chapter {n}. Stable"
+        raw = (heading + "\r\n\r\nHan walked along the strete. **Hand** — café.\r\n").encode()
+        (project.chapter_dir / f"{n:04d}.md").write_bytes(raw)
+    # Existing output ownership must survive every downstream operation.
+    (root / "final/editorial_chapters").mkdir(parents=True)
+    (root / "final/editorial_chapters/0001.md").write_bytes(b"stale but retained")
+    (root / "final/epub").mkdir()
+    (root / "final/epub/prior.epub").write_bytes(b"prior published bytes")
+    project.epub_dir.mkdir(parents=True, exist_ok=True)
+    (project.epub_dir / "unrelated.epub").write_bytes(b"unrelated volume")
+    e.save_json(e.periodic_audit_checkpoint_path(1, 3), {"synthetic_accepted_decisions": True})
+    stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
+    stats["api_request_count"] = 0
+    final.finalize_periodic_audit(e, 1, 3, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []},
+        stats, {"candidate_count": 1, "candidate_set_hash": canonical_hash("accepted"), "api_request_count": 0})
+    report = history.save_final_consistency(e)
+    assert report["status"] == "CHECKED"
+    report_sha = canonical_hash(report)
+    install_approvals(project, report_sha)
+    return project, e, report_sha, aut1_engine
+
+
+def install_approvals(project, report_sha):
+    import apply_normalization_plan as normal
+    import apply_title_resolution_plan as titles
+    import build_publication_chapters as cleanup
+    directory = project.root / "approval_preview"
+    directory.mkdir(exist_ok=True)
+    baseline = directory / "chapters"
+    baseline.mkdir(exist_ok=True)
+    for p in project.chapter_dir.glob("*.md"):
+        (baseline / p.name).write_bytes(p.read_bytes())
+    fp = normal.corpus_fingerprint(baseline)
+    normal_plan = {"schema_version": 3, "plan_revision": "2.1",
+        "corpus": {"project_id": project.config.id, "inventory_recorded_final_sha256": fp["aggregate_sha256"], "verified_final_fingerprint": fp},
+        "safety": {"source_identity_required": True, "global_string_replacement_allowed": False},
+        "application_policy": {"mode": "fail_closed_exact_occurrence_only", "paragraph_number_alone_is_sufficient": False,
+            "global_replacement_authorized": False, "abort_on_any_precondition_mismatch": True, "review_required_is_executable": False},
+        "text_decisions": [], "pronoun_decisions": [], "summary_counts": {"APPROVED_CORRECTION": 0,
+            "APPROVED_CORRECTION_OCCURRENCES": 0, "PRONOUN_APPROVED_CORRECTION_OCCURRENCES": 0,
+            "TOTAL_APPROVED_PROSE_OCCURRENCES": 0, "REVIEW_REQUIRED": 0, "FALSE_POSITIVE_NO_CHANGE": 0}}
+    raw = (baseline / "0001.md").read_bytes()
+    title_dir = directory / "title_fixture"
+    title_dir.mkdir(exist_ok=True)
+    title_source, title_plan = title_fixture(title_dir, heading=raw.decode().splitlines()[0], body="Hann")
+    # Use the real CRLF corpus and exact title-line/file anchors.
+    title_plan["corpora"]["normalized_title_base"] = titles.corpus_fingerprint(baseline, 3)
+    anchor = title_plan["title_decisions"][0]["application_anchors"][0]
+    anchor["baseline_normalized_chapter_file_sha256"] = digest(raw)
+    write(project.root / regen.APPROVALS["normalization_plan"], normal_plan)
+    write(project.root / regen.APPROVALS["title_plan"], title_plan)
+    # Independently derive this fixture's intended post-title presentation checkpoint.
+    outputs = []
+    for p in sorted(baseline.glob("*.md")):
+        data = p.read_bytes()
+        if p.stem == "0001":
+            data = data.replace(b"Old Title", b"New Title")
+        outputs.append((p.name, cleanup.transform_unit(int(p.stem), p, data).output_bytes))
+    fp = cleanup.framed_corpus_fingerprint(outputs)
+    source = project.source_txt.read_bytes()
+    text = source.decode().splitlines()[2]
+    manifest = {"schema_version": 1, "revision": "synthetic-editorial-v1", "novel": project.config.id,
+        "immutable_publication_checkpoint": {k: fp[k] for k in ("file_count", "aggregate_byte_count", "aggregate_sha256")},
+        "korean_source": {"byte_count": len(source), "sha256": digest(source), "preservation_anchors": []},
+        "authorized_set": {"operation_count": 1, "heading_operation_count": 0, "prose_operation_count": 1, "affected_units": [3]},
+        "edits": [{"edit_id": "fixture-typo", "unit": 3, "edit_category": "PROSE_TYPO", "scope": "prose",
+            "expected_english": "strete", "replacement": "street", "source_evidence": [{"anchor_text": text,
+                "anchor_sha256": digest(text.encode()), "source_locator": {"line_number_hint": 3}}]}], "preservation_guards": [{"guard_id": "keep-title", "units": [2], "expected_heading_lines": {"2": ["Chapter 2. Stable", ""]}}]}
+    write(project.root / regen.APPROVALS["editorial_authorization"], manifest)
+    snapshot_value = regen.source_snapshot(project, report_sha)
+    authorization = {"revision": regen.REVISION, "novel_id": project.config.id, "enabled": True,
+        "finalization": "committed-identity-v1", "allow_manual_approved": False, "whole_history_sha256": report_sha,
+        "source_snapshot_sha256": canonical_hash(snapshot_value)}
+    authorization.update({k + "_sha256": digest((project.root / p).read_bytes()) for k, p in regen.APPROVALS.items()})
+    write(project.root / regen.AUTHORIZATION, authorization)
+
+
+def test_aut2_real_fresh_epub_from_approved_history_and_all_stage_owners(novel):
+    project, e, _, h = novel
+    before = snapshot(project.root)
+    assert history.publication_freshness(project)["status"] == "STALE"
+    result = regen.regenerate(project)
+    assert result["status"] == "CURRENT" and result["content_document_count"] == 3
+    output = Path(result["epub"])
+    with zipfile.ZipFile(output) as archive:
+        body = "\n".join(archive.read(n).decode() for n in archive.namelist() if "unit_" in n)
+    assert "Hann walked" in body and "New Title" in body and "street" in body
+    assert "**Hand**" not in body and "<strong>Hand</strong>" in body
+    after = snapshot(project.root)
+    assert all(after[p] == value for p, value in before.items())
+    report = history.publication_freshness(project)
+    assert report["status"] == "CURRENT" and report["rebuilt_epubs"] == 1
+    assert report["artifacts"][-1]["status"] == "CURRENT"
+    assert regen.regenerate(project) == result
+    assert snapshot(project.root) == after
+    assert h.calls == []
+
+
+@pytest.mark.parametrize("damage", ["source", "chapter", "glossary", "title", "editorial", "missing_title", "report", "receipt", "checkpoint", "pending", "extra_chapter", "foreign_authorization"])
+def test_aut2_stale_or_missing_dependencies_preserve_every_existing_byte(novel, damage):
+    project, _, _, h = novel
+    if damage == "source": project.source_txt.write_bytes(b"changed source")
+    elif damage == "chapter": (project.chapter_dir / "0001.md").write_bytes(b"outside edit")
+    elif damage == "glossary": write(project.glossary_file, {"entries": {}})
+    elif damage in {"title", "editorial"}: (project.root / regen.APPROVALS["title_plan" if damage == "title" else "editorial_authorization"]).write_bytes(b"{}")
+    elif damage == "missing_title": (project.root / regen.APPROVALS["title_plan"]).unlink()
+    elif damage == "report": next((project.audit_dir / "whole_history").glob("*.json")).write_bytes(b'{}')
+    elif damage == "receipt": next((project.root / "output/publication_freshness").glob("*.json")).write_bytes(b'{"status":1,"status":1}')
+    elif damage == "checkpoint": epath = project.audit_dir / "audit_0001_0003.checkpoint.json"; epath.write_bytes(b"{}")
+    elif damage == "pending": (project.pending_dir / "0004.md").write_bytes(b"paid pending")
+    elif damage == "extra_chapter": (project.chapter_dir / "0004.md").write_bytes(b"uncommitted")
+    else:
+        auth = history.read_object(project.root / regen.AUTHORIZATION); auth["novel_id"] = "foreign"; write(project.root / regen.AUTHORIZATION, auth)
+    before = snapshot(project.root)
+    with pytest.raises((RuntimeError, ValueError, KeyError, OSError)):
+        regen.regenerate(project)
+    assert snapshot(project.root) == before and h.calls == []
+
+
+@pytest.mark.parametrize("phase", ["before_epub", "after_epub", "before_pointer", "after_pointer"])
+def test_aut2_interrupted_publication_replays_and_is_idempotent(novel, monkeypatch, phase):
+    import build_publication_epub as epub
+    project, _, _, h = novel
+    original_build, original_write = epub.build_publication_epub, regen.atomic_write_json
+    def build(*args, **kwargs):
+        if phase == "before_epub": raise KeyboardInterrupt()
+        value = original_build(*args, **kwargs)
+        if phase == "after_epub": raise KeyboardInterrupt()
+        return value
+    def write_crash(path, value):
+        if path == project.root / regen.POINTER:
+            if phase == "before_pointer": raise KeyboardInterrupt()
+            original_write(path, value)
+            raise KeyboardInterrupt()
+        original_write(path, value)
+    with monkeypatch.context() as mp:
+        mp.setattr(epub, "build_publication_epub", build)
+        if "pointer" in phase: mp.setattr(regen, "atomic_write_json", write_crash)
+        with pytest.raises(KeyboardInterrupt): regen.regenerate(project)
+    assert history.publication_freshness(project)["status"] == ("CURRENT" if phase == "after_pointer" else "STALE")
+    result = regen.regenerate(project)
+    before = snapshot(project.root)
+    assert regen.regenerate(project) == result
+    assert snapshot(project.root) == before and h.calls == []
+
+
+def test_aut2_self_consistent_old_editorial_is_not_current(novel):
+    import build_publication_epub as epub
+    project, _, _, _ = novel
+    result = regen.regenerate(project)
+    final_dir = Path(result["epub"]).parent.parent
+    workspace = regen.PublicationWorkspace(project, final_dir)
+    # Remains internally consistent, but its committed ancestor has changed.
+    (project.chapter_dir / "0001.md").write_bytes(b"newer historical correction")
+    assert epub.load_publication_corpus(workspace).fingerprint
+    assert history.publication_freshness(project)["status"] == "STALE"
+    before = snapshot(project.root)
+    with pytest.raises(RuntimeError): epub.verify_existing_publication_epub(workspace)
+    assert snapshot(project.root) == before
+
+
+def test_aut2_conflicting_novel_lock_blocks_before_generation(novel):
+    from production_run_lock import production_run_lock, ProductionRunLockedError
+    project, _, _, _ = novel
+    before = snapshot(project.root)
+    with production_run_lock(project.root):
+        with pytest.raises(ProductionRunLockedError): regen.regenerate(project)
+    assert snapshot(project.root) == before
+
+@pytest.mark.parametrize("damage", ["intent", "provenance", "duplicate_provenance", "manifest", "normal_report", "title_report", "cleanup", "editorial_plan", "editorial_apply", "epub_report", "missing_epub_report", "epub", "pointer", "traversal_pointer", "foreign_pointer", "linked_stage"])
+def test_aut2_contradictory_generation_never_certifies_current(novel, monkeypatch, damage):
+    project, _, _, h = novel
+    result = regen.regenerate(project)
+    final = Path(result["epub"]).parent.parent
+    targets = {"intent": final.parent / "intent.json", "provenance": final / "reports/source_bound_provenance.json",
+        "manifest": final / "manifest.json", "normal_report": final / "reports/normalization_application.json",
+        "title_report": final / "reports/title_application.json", "cleanup": final / "reports/publication_cleanup.json",
+        "editorial_plan": final / "reports/final_editorial_plan.json", "editorial_apply": final / "reports/final_editorial_apply.json",
+        "epub_report": final / "reports/publication_epub.json"}
+    if damage in targets:
+        value = history.read_object(targets[damage]); value["contradictory"] = True; write(targets[damage], value)
+    elif damage == "duplicate_provenance":
+        path = targets["provenance"]
+        raw = path.read_text(encoding="utf-8"); path.write_text(raw.replace('"revision": "source-bound-publication-v1"', '"revision": "source-bound-publication-v1", "revision": "source-bound-publication-v1"', 1), encoding="utf-8")
+    elif damage == "missing_epub_report": targets["epub_report"].unlink()
+    elif damage == "epub": Path(result["epub"]).write_bytes(b"broken zip")
+    elif damage in {"pointer", "traversal_pointer", "foreign_pointer"}:
+        path = project.root / regen.POINTER
+        value = history.read_object(path)
+        value["generation" if damage == "traversal_pointer" else "novel_id" if damage == "foreign_pointer" else "epub_sha256"] = "../escape" if damage == "traversal_pointer" else "foreign" if damage == "foreign_pointer" else "0" * 64
+        write(path, value)
+    else:
+        original = Path.is_symlink
+        monkeypatch.setattr(Path, "is_symlink", lambda p: p == final / "normalized_chapters" or original(p))
+    before = snapshot(project.root)
+    assert history.publication_freshness(project)["status"] == "STALE"
+    assert snapshot(project.root) == before and h.calls == []
+
+
+@pytest.mark.parametrize("stage", ["title_plan", "editorial_authorization", "normalization_plan"])
+def test_aut2_rehashing_old_plan_does_not_fabricate_fresh_approval(novel, stage):
+    project, _, _, _ = novel
+    path = project.root / regen.APPROVALS[stage]
+    plan = history.read_object(path)
+    if stage == "title_plan":
+        plan["corpora"]["normalized_title_base"]["files"][0]["sha256"] = "0" * 64
+    elif stage == "normalization_plan":
+        plan["corpus"]["verified_final_fingerprint"]["aggregate_sha256"] = "0" * 64
+    else:
+        plan["immutable_publication_checkpoint"]["aggregate_sha256"] = "0" * 64
+    write(path, plan)
+    authorization = history.read_object(project.root / regen.AUTHORIZATION)
+    authorization[stage + "_sha256"] = digest(path.read_bytes())
+    write(project.root / regen.AUTHORIZATION, authorization)
+    protected = {str(p): p.read_bytes() for p in [*project.chapter_dir.glob("*.md"), *project.epub_dir.glob("*.epub"), * (project.root / "final/epub").glob("*.epub")]}
+    with pytest.raises((RuntimeError, ValueError)): regen.regenerate(project)
+    assert {name: Path(name).read_bytes() for name in protected} == protected
+    assert not (project.root / regen.POINTER).exists()
+
+
+@pytest.mark.parametrize("after", [False, True])
+def test_aut2_crash_at_existing_epub_owner_final_replace(novel, monkeypatch, after):
+    import build_publication_epub as epub
+    project, _, _, _ = novel
+    original = epub.atomic_replace_prepared_file
+    def interrupted(temp, target):
+        if after: original(temp, target)
+        raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(epub, "atomic_replace_prepared_file", interrupted)
+        with pytest.raises(KeyboardInterrupt): regen.regenerate(project)
+    assert history.publication_freshness(project)["status"] == "STALE"
+    regen.regenerate(project)
+    before = snapshot(project.root)
+    regen.regenerate(project)
+    assert snapshot(project.root) == before
+    assert history.publication_freshness(project)["status"] == "CURRENT"
+
+
+def test_aut2_multi_novel_isolation_and_foreign_generation_rejection(novel):
+    from novel_project import NovelConfig
+    project, _, _, _ = novel
+    other = project.root.parent / (project.root.name + "_other_novel")
+    other.mkdir()
+    second = NovelProject(project.repository_root, other, replace(project.config, id="other_novel"))
+    write(second.config_file, second.config.to_dict())
+    (other / "untouched.epub").write_bytes(b"other novel published bytes")
+    before = snapshot(other)
+    result = regen.regenerate(project)
+    assert snapshot(other) == before
+    write(other / regen.POINTER, history.read_object(project.root / regen.POINTER))
+    assert regen.current_generation(second)["status"] == "STALE"
+    assert regen.current_generation(project)["status"] == "CURRENT"
+    assert Path(result["epub"]).is_relative_to(project.root)
+
+
+def test_aut2_newer_revision_invalidates_every_stage_without_rewriting_them(novel):
+    project, _, _, _ = novel
+    result = regen.regenerate(project)
+    generation = Path(result["epub"]).parent.parent
+    before = snapshot(generation)
+    (project.chapter_dir / "0001.md").write_bytes(b"newer historical revision")
+    report = history.publication_freshness(project)
+    assert report["status"] == "STALE" and report["rebuilt_epubs"] == 0
+    assert any(a["path"] == Path(result["epub"]).relative_to(project.root).as_posix() and a["status"] == "STALE" for a in report["artifacts"])
+    assert any(r["path"] == "final/editorial_chapters/0001.md" and r["status"] == "STALE" for r in report["downstream_outputs"])
+    with pytest.raises(RuntimeError): regen.regenerate(project)
+    assert snapshot(generation) == before
+
+
+def test_aut2_diagnostics_do_not_emit_expected_prose():
+    import apply_title_resolution_plan as titles
+    diagnostic = regen._blocker(titles.TitleApplicationError("unexpected secret source prose"))
+    assert "secret source prose" not in json.dumps(diagnostic)
+
+@pytest.mark.parametrize("operation", ["build", "verify"])
+def test_aut2_source_drift_during_epub_operation_fails_closed(novel, monkeypatch, operation):
+    project, _, _, _ = novel
+    result = regen.regenerate(project)
+    workspace = regen.PublicationWorkspace(project, Path(result["epub"]).parent.parent)
+    old_epub = Path(result["epub"]).read_bytes()
+    original = publication.verify_epub_archive
+    def drift(*args, **kwargs):
+        value = original(*args, **kwargs)
+        (project.chapter_dir / "0001.md").write_bytes(b"external newer chapter revision")
+        return value
+    target = workspace.publication_final_dir / "epub/another.epub"
+    with monkeypatch.context() as mp:
+        mp.setattr(publication, "verify_epub_archive", drift)
+        with pytest.raises(RuntimeError):
+            if operation == "build": publication.build_publication_epub(workspace, output_path=target)
+            else: publication.verify_existing_publication_epub(workspace)
+    assert not target.exists() and Path(result["epub"]).read_bytes() == old_epub
+    assert history.publication_freshness(project)["status"] == "STALE"
+
+
+def test_aut2_report_checksum_cannot_resolve_internal_contradiction(novel):
+    project, _, report_hash, _ = novel
+    report = history.read_object(project.audit_dir / "whole_history" / (report_hash + ".json"))
+    report["chapters"][0]["decisions"][0]["outcome"] = "deferred"
+    changed_hash = canonical_hash(report)
+    write(project.audit_dir / "whole_history" / (changed_hash + ".json"), report)
+    before = snapshot(project.root)
+    with pytest.raises(RuntimeError, match="CONTRADICTORY_WHOLE_HISTORY"):
+        regen.source_snapshot(project, changed_hash)
+    assert snapshot(project.root) == before
+
+@pytest.mark.parametrize("name", ["translation_addendum.txt", "source_overrides.json"])
+def test_aut2_novel_policy_drift_invalidates_source_proof(novel, name):
+    project, _, _, _ = novel
+    result = regen.regenerate(project)
+    before = snapshot(Path(result["epub"]).parent.parent)
+    path = project.root / name
+    if path.suffix == ".json": write(path, {"new_policy": True})
+    else: path.write_bytes(b"New novel-specific translation policy")
+    assert history.publication_freshness(project)["status"] == "STALE"
+    with pytest.raises(RuntimeError, match="SOURCE_APPROVAL_STALE"): regen.regenerate(project)
+    assert snapshot(Path(result["epub"]).parent.parent) == before
+
+@pytest.mark.parametrize("stage", ["title_plan", "editorial_authorization"])
+def test_aut2_missing_approval_cli_identifies_prerequisite_file(novel, monkeypatch, capsys, stage):
+    project, _, _, _ = novel
+    missing = project.root / regen.APPROVALS[stage]
+    missing.unlink()
+    before = snapshot(project.root)
+    monkeypatch.setattr(regen, "select_project", lambda _: project)
+    capsys.readouterr()
+    assert regen.main(["--novel", project.config.id]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "STALE" and result["blocker"]["file"] == missing.name
+    assert snapshot(project.root) == before

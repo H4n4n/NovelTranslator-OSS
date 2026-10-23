@@ -49,7 +49,7 @@ def _invalid_constant(value):
     raise ValueError("nonfinite evidence constant")
 
 
-def read_object(path):
+def read_value(path):
     try:
         # Decode explicitly: json.loads(bytes) also accepts UTF-16/32. Existing
         # UTF-8/BOM, whitespace, CRLF and pretty printing remain valid.
@@ -59,6 +59,11 @@ def read_object(path):
         json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
     except (ValueError, OSError, RecursionError) as exc:
         raise ProductionIntegrityError("AUT2: UNREADABLE_EVIDENCE") from exc
+    return value
+
+
+def read_object(path):
+    value = read_value(path)
     require(isinstance(value, dict), "INVALID_EVIDENCE")
     return value
 
@@ -247,13 +252,8 @@ def ensure_invalidation(module, intent):
     atomic_write_json(path, expected)
 
 
-def publication_freshness(project):
-    """Recompute from audit intents, never accept a cached CURRENT flag.
-
-    This first slice deliberately cannot certify or rebuild downstream corpora.
-    Missing/renamed/deleted artifacts are explicit. A receipt never grants write
-    authority, even if its own hash is internally consistent.
-    """
+def publication_revisions(project):
+    """Reprove immutable invalidation receipts; receipts grant no write authority."""
     from types import SimpleNamespace
     module = SimpleNamespace(AUDIT_DIR=project.audit_dir)
     revisions = []
@@ -270,6 +270,12 @@ def publication_freshness(project):
     known = {r["transaction_id"] + ".json" for r in revisions}
     directory = plain(project.root / "output/publication_freshness")
     require({p.name for p in directory.glob("*.json")} == known, "ORPHAN_FRESHNESS_MANIFEST")
+    return revisions
+
+
+def publication_freshness(project):
+    """Recompute freshness; a source-bound generation must reprove its inputs."""
+    revisions = publication_revisions(project)
     artifacts = []
     for directory in (project.epub_dir, project.root / "final/epub"):
         for path in sorted(plain(directory).glob("*.epub")):
@@ -283,18 +289,47 @@ def publication_freshness(project):
                 if relative not in actual_paths:
                     artifacts.append({"path": relative, "before_sha256": sha, "status": "MISSING"})
                     actual_paths.add(relative)
-    return {"revision": REVISION, "status": "STALE" if revisions else "NOT_VERIFIED",
+    dependencies = []
+    for revision in revisions:
+        for folder, files in revision["publication_inputs_before"].items():
+            if folder == "final/manifest.json":
+                files = {"manifest.json": files} if files else {}
+                folder = "final"
+            require(folder in {"final", "output/epub", "final/chapters", "final/normalized_chapters",
+                               "final/titled_chapters", "final/publication_chapters", "final/editorial_chapters",
+                               "final/reports", "final/epub"} and isinstance(files, dict), "INVALID_DOWNSTREAM_INVENTORY")
+            for name, before_sha in files.items():
+                require(isinstance(name, str) and Path(name).name == name and "/" not in name and "\\" not in name,
+                        "INVALID_DOWNSTREAM_NAME")
+                path = plain(project.root / folder / name)
+                after_sha = digest(path.read_bytes()) if path.is_file() else None
+                status = ("MISSING" if after_sha is None else "STALE" if revision["impacted_chapters"]
+                          and after_sha == before_sha else "NOT_VERIFIED")
+                dependencies.append({"path": folder + "/" + name, "before_sha256": before_sha,
+                                     "sha256": after_sha, "status": status, "transaction_id": revision["transaction_id"]})
+    from publication_regeneration import current_generation
+    generation = current_generation(project)
+    if "artifact" in generation:
+        artifacts.append(generation["artifact"])
+    return {"revision": REVISION, "status": generation["status"] if generation["status"] != "NOT_VERIFIED" else ("STALE" if revisions else "NOT_VERIFIED"),
             "transaction_ids": [r["transaction_id"] for r in revisions],
             "impacted_chapters": sorted({n for r in revisions for n in r["impacted_chapters"]}),
-            "artifacts": artifacts, "rebuilt_epubs": 0,
-            "reason_code": "DOWNSTREAM_PROVENANCE_REQUIRES_REVALIDATION" if revisions else "NO_CURRENT_OUTPUT_PROOF",
+            "artifacts": artifacts, "rebuilt_epubs": int(generation["status"] == "CURRENT"),
+            "generation": generation, "downstream_outputs": dependencies,
+            "reason_code": "SOURCE_BOUND_GENERATION_VERIFIED" if generation["status"] == "CURRENT" else ("DOWNSTREAM_PROVENANCE_REQUIRES_REVALIDATION" if revisions else "NO_CURRENT_OUTPUT_PROOF"),
             "provider_calls": 0}
 
 
 def require_publication_freshness(project):
     """No successful publication claim from an old self-consistent editorial copy."""
-    report = publication_freshness(project)
-    require(not report["transaction_ids"], "PUBLICATION_STALE_REVALIDATE_DOWNSTREAM_PLANS")
+    revisions = publication_revisions(project)
+    final_dir = getattr(project, "publication_final_dir", project.root / "final")
+    proof = plain(final_dir / "reports/source_bound_provenance.json")
+    if proof.exists():
+        from publication_regeneration import verify_generation_corpus
+        verify_generation_corpus(project, final_dir)
+    else:
+        require(not revisions, "PUBLICATION_STALE_REVALIDATE_DOWNSTREAM_PLANS")
 
 
 def final_consistency_report(module):

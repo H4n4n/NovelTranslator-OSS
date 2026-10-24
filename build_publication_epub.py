@@ -2,7 +2,8 @@
 
 Publication text and inventory come only from ``final/editorial_chapters``
 and its successful ``final_editorial_apply.json`` integrity contract. Runtime
-translation progress and earlier finalization corpora are never used.
+translation progress and earlier corpora supply only source-provenance checks;
+EPUB text still comes exclusively from the editorial corpus.
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def publication_paths(project: NovelProject) -> dict[str, Path]:
-    final_dir = project.root / "final"
+    final_dir = getattr(project, "publication_final_dir", project.root / "final")
     return {
         "source_dir": final_dir / "editorial_chapters",
         "editorial_apply_report": final_dir / "reports" / "final_editorial_apply.json",
@@ -1109,6 +1110,7 @@ def build_publication_epub(
             raise PublicationEpubError("publication source changed before final EPUB commit")
         if output_path.exists():
             raise PublicationEpubError(f"final EPUB appeared during build: {output_path}")
+        require_publication_freshness(project)
         atomic_replace_prepared_file(temp_path, output_path)
         installed_output = True
         return output_path, report
@@ -1147,6 +1149,7 @@ def verify_existing_publication_epub(
     after = load_publication_corpus(project).fingerprint
     if before != after:
         raise PublicationEpubError("publication source changed during EPUB verification")
+    require_publication_freshness(project)
     return validation
 
 

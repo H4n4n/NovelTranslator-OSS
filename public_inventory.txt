@@ -489,3 +489,5 @@ scripts/public_ci.py
 scripts/public_ci_policy.json
 historical_reconciliation.py
 docs/AUT2_HISTORY_RECONCILIATION.md
+docs/AUT2_PUBLICATION_REGENERATION.md
+publication_regeneration.py

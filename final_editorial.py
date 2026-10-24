@@ -53,7 +53,7 @@ class EditorialPaths:
 
 
 def editorial_paths(project: NovelProject) -> EditorialPaths:
-    final_dir = project.root / "final"
+    final_dir = getattr(project, "publication_final_dir", project.root / "final")
     reports = final_dir / "reports"
     return EditorialPaths(
         publication_dir=final_dir / "publication_chapters",

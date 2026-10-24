@@ -578,6 +578,102 @@ def reader_visible_markdown_artifacts(document: ElementTree.Element) -> list[str
     return artifacts
 
 
+def _source_body_structure(body_text: str) -> list[tuple[str, Any]]:
+    """Derive the body contract from editorial text, without calling the renderer.
+
+    Share the supported source syntax, but never trust generated XHTML as the
+    expected value. Text (including whitespace), style, and break positions are
+    compared separately; escaping and document serialization are irrelevant.
+    """
+
+    blocks: list[tuple[str, Any]] = []
+    for block in split_blocks(body_text):
+        if is_publication_scene_break(block):
+            blocks.append(("scene-break", "* * *"))
+            continue
+        tokens: list[tuple[str, str]] = []
+        for index, line in enumerate(block.split("\n")):
+            if index:
+                tokens.append(("br", ""))
+            offset = 0
+            for match in INLINE_EMPHASIS_RE.finditer(line):
+                if match.start() > offset:
+                    tokens.append(("text", line[offset:match.start()]))
+                if match.group("strong") is not None:
+                    tokens.append(("strong", match.group("strong")))
+                else:
+                    tokens.append(("em", match.group("star") or match.group("underscore")))
+                offset = match.end()
+            if offset < len(line):
+                tokens.append(("text", line[offset:]))
+        blocks.append(("p", tokens))
+    return blocks
+
+
+def _verify_unit_body(document: ElementTree.Element, unit: PublicationUnit) -> None:
+    """Account for the entire XHTML body, allowing neutral block wrappers only."""
+
+    def fail() -> None:
+        # Do not expose approved or unexpected novel prose in diagnostics.
+        raise PublicationEpubError(
+            f"unit {unit.unit} XHTML body differs from publication text"
+        )
+
+    namespace = "{http://www.w3.org/1999/xhtml}"
+    bodies = document.findall(".//{*}body")
+    if len(bodies) != 1 or bodies[0].tag != namespace + "body":
+        fail()
+    blocks: list[tuple[str, Any]] = []
+    heading_seen = False
+
+    def visit(container: ElementTree.Element) -> None:
+        nonlocal heading_seen
+        # Only XML indentation is ignorable outside paragraphs, not NBSP, etc.
+        if (container.text or "").strip(" \t\r\n"):
+            fail()
+        for child in container:
+            if child.tag in {namespace + "div", namespace + "section"}:
+                visit(child)
+            elif child.tag == namespace + "h1":
+                if heading_seen or blocks:
+                    fail()
+                heading_seen = True  # Heading content is checked separately.
+            elif child.tag == namespace + "p":
+                if not heading_seen:
+                    fail()
+                if "scene-break" in child.get("class", "").split():
+                    if len(child):
+                        fail()
+                    blocks.append(("scene-break", child.text or ""))
+                else:
+                    tokens: list[tuple[str, str]] = []
+                    if child.text:
+                        tokens.append(("text", child.text))
+                    for inline in child:
+                        if len(inline):
+                            fail()
+                        if inline.tag == namespace + "br":
+                            if inline.text:
+                                fail()
+                            tokens.append(("br", ""))
+                        elif inline.tag in {namespace + "em", namespace + "strong"}:
+                            tokens.append((_local_name(inline.tag), inline.text or ""))
+                        else:
+                            fail()
+                        if inline.tail:
+                            tokens.append(("text", inline.tail))
+                    blocks.append(("p", tokens))
+            else:
+                fail()
+            if (child.tail or "").strip(" \t\r\n"):
+                fail()
+
+    visit(bodies[0])
+    expected = _source_body_structure(unit.body_text)
+    if not heading_seen or not expected or blocks != expected:
+        fail()
+
+
 def verify_epub_archive(
     epub_path: Path,
     corpus: PublicationCorpus,
@@ -790,6 +886,7 @@ def verify_epub_archive(
                     f"unit {unit.unit} XHTML heading contains a technical wrapper"
                 )
 
+            _verify_unit_body(document, unit)
             scene_break_count += sum(
                 "scene-break" in paragraph.get("class", "").split()
                 for paragraph in document.findall(".//{*}p")
@@ -800,6 +897,7 @@ def verify_epub_archive(
                 (unit.unit, artifact)
                 for artifact in reader_visible_markdown_artifacts(document)
             )
+        checks["publication_bodies_match_editorial"] = True
         checks["no_technical_title_wrappers_introduced"] = True
         if markdown_artifacts:
             unit, artifact = markdown_artifacts[0]

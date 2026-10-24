@@ -953,6 +953,293 @@ def test_aut2_audit_inventory_rejects_original_source_drift(aut2_review_intent, 
     assert _review_snapshot(root) == before
 
 
+@pytest.fixture
+def discovery_novel(tmp_path, monkeypatch):
+    """Real local finalizer intent, stopped before ANY transaction writes."""
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    serial = []
+
+    def make(language="zh", count=26, extra=None, sources=None, english=None, action="correct", prior_record=False):
+        key = "韓" if language == "zh" else "한민"
+        root = tmp_path / f"public_novel_{len(serial)}"
+        serial.append(root)
+        output = root / "output/chapters"
+        output.mkdir(parents=True)
+        entries = {key: {"english": "Han", "category": "character", "status": "provisional"}, **(extra or {})}
+        units = {n: {"chapter": n, "production_index": n, "text": key if n in {1, 2, 25, 26, 388, 401} else "",
+                     "source_document_sha256": canonical_hash([language, n])} for n in range(1, count + 1)}
+        for n, source in (sources or {}).items():
+            units[n]["text"] = source.replace("KEY", key)
+        for n in units:
+            text = (english or {}).get(n, "Han met Han.\r\n" if n == 2 else
+                "\ufeff# Héading 🦉\r\n\r\n**Han** — Hand, café.\r\n" if units[n]["text"] else "Ordinary prose.\r\n")
+            (output / f"{n:04d}.md").write_bytes(text.encode())
+        setup = dict(output_dir=output, retroactive_dir=root / "output/retroactive_fixes",
+                     backup_dir=root / "backup", glossary={"entries": entries}, chapter_map=units)
+        engine = install_engine(monkeypatch, setup)
+        monkeypatch.setattr(engine.ACTIVE_PROFILE, "requires_formal_capitalization", lambda category: False, raising=False)
+        monkeypatch.setattr(engine, "ACTIVE_NOVEL_CONFIG", SimpleNamespace(id=root.name))
+        engine.progress.update(completed=list(units), last_completed=count, next_chapter=count + 1,
+                               last_audited_chapter=25 if count == 26 else 375)
+        engine.save_json(engine.PROGRESS_FILE, engine.progress)
+        original_apply = engine.apply_periodic_audit
+        # If another novel was built in the same test, unwrap the explicit target adapter.
+        original_apply = getattr(original_apply, "discovery_original", original_apply)
+        def apply(start, end, result, glossary_data=None):
+            return original_apply(start, end, result, glossary_data=glossary_data, targets=[{"chinese": key}])
+        apply.discovery_original = original_apply
+        monkeypatch.setattr(engine, "apply_periodic_audit", apply)
+        engine.AUDIT_DIR.mkdir(parents=True)
+        if prior_record:
+            old_record = {"start_chapter": 1, "end_chapter": 25, "synthetic_accepted_history": True}
+            engine.audit_history["audits"].append(old_record)
+            engine.save_json(engine.AUDIT_HISTORY_FILE, engine.audit_history)
+            engine.save_json(engine.AUDIT_DIR / "audit_0001_0025.json", old_record)
+        start = engine.progress["last_audited_chapter"] + 1
+        checkpoint = engine.periodic_audit_checkpoint_path(start, count)
+        engine.save_json(checkpoint, {"synthetic_accepted_decision": True})
+        decision = {"chinese": key, "action": action, "english": "Hann"}
+        if action == "contextual": decision["approved_renderings"] = ["Han", "Hann"]
+        if action == "merge": decision["merge_with"] = next(iter(extra))
+        result = {"decisions": [decision], "issues": []}
+        stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
+        chunking = {"candidate_count": 1, "api_request_count": 0, "candidate_set_hash": canonical_hash(result)}
+        for folder, name in (("output/pending", "0402.md"), ("backup/preserved", "old.md"),
+                             ("output/epub", "prior.epub")):
+            directory = root / folder
+            directory.mkdir(parents=True)
+            (directory / name).write_bytes(b"Unrelated synthetic evidence; preserve exactly.\r\n")
+        write = final.atomic_write_json
+        def stop(path, value):
+            write(path, value)
+            if path.name.endswith(".finalization.json"): raise KeyboardInterrupt()
+        with monkeypatch.context() as mp:
+            mp.setattr(final, "atomic_write_json", stop)
+            with pytest.raises(KeyboardInterrupt):
+                final.finalize_periodic_audit(engine, start, count, result, stats, chunking)
+        intent = final.load_intent(engine, start, count)
+        proposals = intent["record"]["changes"]["retroactive_replacements"] or [
+            rule(key, "Han", "", reason="Accepted contextual classification.")]
+        kwargs = dict(through_chapter=count, audit_start=start, audit_end=count,
+                      expected_intent_sha256=intent["intent_sha256"])
+        def preflight(changes=None, **overrides):
+            return history.historical_impact_preflight(engine, proposals if changes is None else changes,
+                                                       **{**kwargs, **overrides})
+        return SimpleNamespace(root=root, engine=engine, key=key, proposals=proposals, kwargs=kwargs,
+                               preflight=preflight, args=(result, stats, chunking), intent=intent)
+    return make
+
+
+def _discovery_snapshot(root):
+    return {p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns) if p.is_file() else None
+            for p in root.rglob("*")}
+
+
+@pytest.mark.parametrize("language", ["zh", "ko"])
+def test_discovery_entire_history_crosses_windows_without_writing(discovery_novel, language):
+    case = discovery_novel(language, count=401)
+    before = _discovery_snapshot(case.root)
+    memory = copy.deepcopy((case.engine.glossary, case.engine.progress, case.engine.audit_history, case.engine.chapter_map))
+    report = case.preflight()
+    assert report["examined_chapters"] == 401
+    assert [row["chapter"] for row in report["chapters"] if row["decisions"][0]["outcome"] == "proven_eligible"] == [1, 25, 26, 388, 401]
+    assert report["chapters"][1]["decisions"][0]["outcome"] == "deferred"
+    assert report["potential_impact_chapters"] == 6
+    assert report["corrected_chapters"] == report["provider_calls"] == 0
+    assert case.preflight() == report
+    assert _discovery_snapshot(case.root) == before
+    assert (case.engine.glossary, case.engine.progress, case.engine.audit_history, case.engine.chapter_map) == memory
+    encoded = json.dumps(report, ensure_ascii=False)
+    for private in (case.key, "Han", "Héading", "café", "Unrelated synthetic", str(case.root)):
+        assert private not in encoded
+    assert not (case.engine.RETROACTIVE_DIR / "transactions").exists()
+    assert report["phase"] == "DISCOVERY_NOT_COMMIT_AUTHORITY"
+
+
+@pytest.mark.parametrize("sources,english,extra,reason", [
+    ({1: "KEYKEY"}, {1: "Han met Han."}, {}, "repeated_source_occurrences_require_independent_pairing"),
+    ({1: "KEY"}, {1: "Han met Han."}, {}, "repeated_target_occurrences_require_independent_pairing"),
+    ({1: "KEY"}, {1: "Hand."}, {}, "cardinality_requires_manual_review"),
+    ({1: "韓先生"}, {1: "Han."}, {"韓先生": {"english": "Master Han"}}, "source_absent_or_owned_by_longer_identity"),
+    ({1: "KEY"}, {1: "Han."}, {"漢": {"english": "Han"}}, "competing_or_nested_target_ownership"),
+    ({1: "KEY"}, {1: "Han's House."}, {"漢": {"english": "Han's House"}}, "competing_or_nested_target_ownership"),
+    ({1: "KEY"}, {1: "Han."}, {"高": {"english": "Other", "aliases": ["韓"]}}, "competing_source_ownership"),
+])
+def test_discovery_preserves_existing_ownership_gates(discovery_novel, sources, english, extra, reason):
+    case = discovery_novel(sources=sources, english=english, extra=extra)
+    before = _discovery_snapshot(case.root)
+    item = case.preflight()["chapters"][0]["decisions"][0]
+    assert item["potential_impact"] and item["outcome"] == "deferred"
+    assert reason in item["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("action,extra,reason", [
+    ("contextual", {}, "contextual_identity_requires_manual_review"),
+    ("merge", {"漢": {"english": "Hann", "category": "character"}}, "alias_identity_requires_manual_review"),
+])
+def test_discovery_accepted_alias_and_contextual_changes_defer(discovery_novel, action, extra, reason):
+    case = discovery_novel(action=action, extra=extra)
+    before = _discovery_snapshot(case.root)
+    item = case.preflight()["chapters"][0]["decisions"][0]
+    assert item["outcome"] == "deferred" and reason in item["reason_codes"]
+    assert "MISSING_ACCEPTED_CHANGE_PROVENANCE" not in item["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("mode,reason", [("missing", "MISSING_ACCEPTED_CHANGE_PROVENANCE"),
+    ("unaccepted", "CHANGE_NOT_IN_VERIFIED_AUDIT"), ("split", "ALIAS_SPLIT_PROVENANCE_UNAVAILABLE")])
+def test_discovery_unwitnessed_proposals_never_gain_eligibility(discovery_novel, mode, reason):
+    case = discovery_novel()
+    proposal = copy.deepcopy(case.proposals)
+    if mode == "unaccepted": proposal[0]["new_english"] = "Unaccepted Name"
+    if mode == "split": proposal[0]["change_kind"] = "alias_split"
+    before = _discovery_snapshot(case.root)
+    kwargs = dict(audit_start=None, audit_end=None, expected_intent_sha256=None) if mode == "missing" else {}
+    report = case.preflight(proposal, **kwargs)
+    assert report["proven_eligible_chapters"] == report["already_current_chapters"] == 0
+    assert reason in report["chapters"][0]["decisions"][0]["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_current_bytes_after_existing_transaction_and_selected_boundary(discovery_novel):
+    import production_periodic_audit_finalization as final
+    case = discovery_novel()
+    final.finalize_periodic_audit(case.engine, 26, 26, *case.args)
+    before = _discovery_snapshot(case.root)
+    report = case.preflight(through_chapter=25)
+    assert report["examined_chapters"] == 25 and report["already_current_chapters"] == 2
+    assert report["chapters"][0]["decisions"][0]["outcome"] == "already_current"
+    assert report["proven_eligible_chapters"] == 0
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("damage", ["source", "source_unit", "missing_source", "english", "missing_chapter",
+    "extra_chapter", "reordered", "duplicate", "glossary", "intent", "record", "checkpoint", "missing_intent",
+    "before_backup", "duplicate_json", "foreign_novel", "foreign_root", "plan", "policy", "nested_chapter"])
+def test_discovery_drift_blocks_without_mutation(discovery_novel, damage, monkeypatch):
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel()
+    e = case.engine
+    if damage in {"before_backup", "record", "plan"}:
+        final.finalize_periodic_audit(e, 26, 26, *case.args)
+    if damage == "source": e.chapter_map[1]["text"] += "changed"
+    elif damage == "source_unit": e.chapter_map[1]["source_document_sha256"] = "different"
+    elif damage == "missing_source": del e.chapter_map[1]
+    elif damage == "english": (e.OUTPUT_DIR / "0001.md").write_bytes(b"edited outside")
+    elif damage == "missing_chapter": (e.OUTPUT_DIR / "0001.md").unlink()
+    elif damage == "extra_chapter": (e.OUTPUT_DIR / "0027.md").write_bytes(b"foreign")
+    elif damage == "nested_chapter":
+        (e.OUTPUT_DIR / "hidden").mkdir()
+        (e.OUTPUT_DIR / "hidden/0001.md").write_bytes(b"unrecorded")
+    elif damage == "reordered": e.progress["completed"].reverse()
+    elif damage == "duplicate": e.progress["completed"].append(1)
+    elif damage == "glossary": e.glossary["entries"][case.key]["english"] = "Changed"
+    elif damage == "intent":
+        value = copy.deepcopy(case.intent)
+        value["record"]["changes"]["corrected"].append("tampered")
+        final.atomic_write_json(final.intent_path(e, 26, 26), value)
+    elif damage == "record": (e.AUDIT_DIR / "audit_0026_0026.json").write_bytes(b"{}")
+    elif damage == "checkpoint": e.periodic_audit_checkpoint_path(26, 26).write_bytes(b"{}")
+    elif damage == "missing_intent": final.intent_path(e, 26, 26).unlink()
+    elif damage == "before_backup": next(e.BACKUP_DIR.rglob("0001.md")).unlink()
+    elif damage == "duplicate_json":
+        path = final.intent_path(e, 26, 26)
+        path.write_bytes(path.read_bytes().replace(b'"start": 26', b'"start": 26, "start": 26'))
+    elif damage == "foreign_novel": e.ACTIVE_NOVEL_CONFIG.id = "foreign"
+    elif damage == "foreign_root": monkeypatch.setattr(e, "RETROACTIVE_DIR", case.root.parent / "other/output/retroactive_fixes")
+    elif damage == "plan": next((e.RETROACTIVE_DIR / "transactions").glob("*.plan.json")).write_bytes(b"{}")
+    elif damage == "policy": e.ACTIVE_PROFILE.retroactive_safe_categories = set()
+    before = _discovery_snapshot(case.root.parent)
+    with pytest.raises((ProductionIntegrityError, OSError, KeyError, ValueError)):
+        case.preflight()
+    assert _discovery_snapshot(case.root.parent) == before
+
+
+def test_discovery_duplicate_changes_and_bounds_fail_closed(discovery_novel):
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel()
+    before = _discovery_snapshot(case.root)
+    for changes, options in [(case.proposals * 2, {}), ([], {}), (case.proposals, {"through_chapter": True}),
+                             (case.proposals, {"through_chapter": 10001})]:
+        with pytest.raises(ProductionIntegrityError): case.preflight(changes, **options)
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_multi_novel_isolation(discovery_novel):
+    first = discovery_novel("zh")
+    original = _discovery_snapshot(first.root)
+    second = discovery_novel("ko")
+    report = second.preflight()
+    assert report["proven_eligible_chapters"] == 3
+    assert report["novel_id_sha256"] != canonical_hash(first.root.name)
+    assert _discovery_snapshot(first.root) == original
+    from production_failure_classification import ProductionIntegrityError
+    with pytest.raises(ProductionIntegrityError, match="DISCOVERY_INTENT_DRIFT"):
+        second.preflight(expected_intent_sha256=first.intent["intent_sha256"])
+    assert _discovery_snapshot(first.root) == original
+
+
+def test_discovery_locked_entry_cannot_manufacture_accepted_change(discovery_novel):
+    case = discovery_novel(extra={"韓": {"english": "Han", "category": "character", "status": "locked"}})
+    before = _discovery_snapshot(case.root)
+    report = case.preflight([rule()])
+    assert report["proven_eligible_chapters"] == 0
+    assert "CHANGE_NOT_IN_VERIFIED_AUDIT" in report["chapters"][0]["decisions"][0]["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_already_current_requires_independent_ownership(discovery_novel):
+    case = discovery_novel(english={1: "Hann."}, extra={"漢": {"english": "Hann"}})
+    before = _discovery_snapshot(case.root)
+    item = case.preflight()["chapters"][0]["decisions"][0]
+    assert item["outcome"] == "deferred"
+    assert "competing_or_nested_target_ownership" in item["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_rechecks_evidence_after_computation(discovery_novel, monkeypatch):
+    import historical_reconciliation as history
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel()
+    original = history.plan_chapter
+    fired = []
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if not fired:
+            fired.append(True)
+            (case.engine.OUTPUT_DIR / "0001.md").write_bytes(b"outside writer")
+        return result
+    monkeypatch.setattr(history, "plan_chapter", changed)
+    with pytest.raises(ProductionIntegrityError, match="DISCOVERY_INPUT_DRIFT"):
+        case.preflight()
+    assert (case.engine.OUTPUT_DIR / "0001.md").read_bytes() == b"outside writer"
+
+
+def test_discovery_selection_order_does_not_change_report(discovery_novel):
+    case = discovery_novel()
+    proposals = case.proposals + [rule(case.key, "Han", "Unsupported Name")]
+    before = _discovery_snapshot(case.root)
+    assert case.preflight(proposals) == case.preflight(list(reversed(proposals)))
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("damage", ["missing", "tampered", "duplicate"])
+def test_discovery_reproves_prior_audit_records(discovery_novel, damage):
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel(prior_record=True)
+    assert case.preflight()["proven_eligible_chapters"] == 3
+    path = case.engine.AUDIT_DIR / "audit_0001_0025.json"
+    if damage == "missing": path.unlink()
+    elif damage == "tampered": path.write_bytes(b"{}")
+    else: path.write_bytes(b'{"start_chapter":1,"start_chapter":1,"end_chapter":25,"synthetic_accepted_history":true}')
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError): case.preflight()
+    assert _discovery_snapshot(case.root) == before
+
+
 def test_aut2_retained_contradictory_receipt_blocks_restart_without_writes(aut2_review_intent):
     import production_periodic_audit_finalization as final
     import historical_reconciliation as history

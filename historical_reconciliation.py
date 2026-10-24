@@ -15,6 +15,10 @@ from retroactive_span_planning import canonical_hash, digest, target_spans, owne
 import retroactive_transactions as tx
 
 REVISION = "aut2-history-evidence-v1"
+PREFLIGHT_REVISION = "aut2-impact-preflight-v1"
+MAX_DISCOVERY_CHAPTERS = 10000
+MAX_DISCOVERY_CHANGES = 64
+MAX_DISCOVERY_ROWS = 100000
 
 
 def require(condition, reason):
@@ -94,6 +98,225 @@ def source_inventory(chapter_map):
     return [{"chapter": n, "unit_sha256": canonical_hash(unit),
              "source_sha256": digest(unit["text"].encode("utf-8"))}
             for n, unit in sorted(chapter_map.items())]
+
+
+def _discovery_intent(module, start, end, expected_sha):
+    """Reprove the existing finalizer's intent; never acquire or finalize it.
+
+    This adapter supports the current audit publication prefix only. Older
+    superseded state needs the separate lineage owner, not a guessed baseline.
+    """
+    from types import SimpleNamespace
+    from production_periodic_audit_finalization import (
+        intent_path, state_paths, verify_publication, transaction_proof,
+        prepare_finalization,
+    )
+    path = plain(intent_path(module, start, end))
+    require(path.is_file(), "MISSING_ACCEPTED_CHANGE_PROVENANCE")
+    intent = audit_intent(module, path)
+    require(intent["intent_sha256"] == expected_sha, "DISCOVERY_INTENT_DRIFT")
+    novel = module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"
+    request = intent["transaction_plan"]["request"]
+    require(request["novel_id"] == novel and request["audit_label"] == f"{start:04d}_{end:04d}"
+            and request["through_chapter"] == end, "FOREIGN_DISCOVERY_INTENT")
+    require("historical_proof" in intent and "historical_reconciliation" in intent["record"],
+            "DISCOVERY_SOURCE_UNIT_WITNESS_MISSING")
+    require(module.progress["last_completed"] == end, "SUPERSEDED_AUDIT_REQUIRES_LINEAGE_REVIEW")
+    verify_publication(module, intent)
+    for record in intent["baseline"]["history"]["audits"]:
+        record_path = plain(module.AUDIT_DIR /
+            f"audit_{record['start_chapter']:04d}_{record['end_chapter']:04d}.json")
+        require(read_object(record_path) == record, "DISCOVERY_PRIOR_AUDIT_RECORD_DRIFT")
+    for key, name in (("glossary", "glossary"), ("progress", "progress"),
+                      ("issues", "issues_data"), ("history", "audit_history")):
+        require(read_object(state_paths(module)[key]) == getattr(module, name), "DISCOVERY_STATE_DRIFT")
+    # Reject ambiguous JSON even when the older transaction reader would accept it.
+    for evidence in plain(module.RETROACTIVE_DIR / "transactions").glob("*.json"):
+        read_object(evidence)
+    detached = SimpleNamespace(**vars(module))
+    for key, name in (("glossary", "glossary"), ("progress", "progress"),
+                      ("issues", "issues_data"), ("history", "audit_history")):
+        setattr(detached, name, copy.deepcopy(intent["baseline"][key]))
+    if detached.progress.get("provider") == "command_code_provider" and intent["chunking"].get("candidate_count", 0):
+        from goat_periodic_audit_finalize_plan import checkpoint_proof
+        paid = checkpoint_proof(detached, start, end)
+        require(all(paid[k] == intent[k] for k in ("audit_result", "audit_stats")),
+                "PAID_AUDIT_EVIDENCE_DRIFT")
+    proof = transaction_proof(detached, start, end, intent["baseline"]["glossary"],
+                              intent["post"]["glossary"], intent["record"]["changes"])
+    prepared = prepare_finalization(detached, start, end, intent["audit_result"], intent["audit_stats"],
+                                   intent["chunking"], timestamp=intent["record"]["timestamp_unix"])
+    for record in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
+        record["retroactive"] = intent["record"]["retroactive"]
+    require(prepared == {k: v for k, v in intent.items() if k != "intent_sha256"},
+            "DISCOVERY_AUDIT_AUTHORIZATION_DRIFT")
+    return intent, proof
+
+
+def historical_impact_preflight(module, changes, *, through_chapter,
+                               audit_start=None, audit_end=None, expected_intent_sha256=None):
+    """Bounded read-only discovery over 1..through_chapter, with no cache.
+
+    ``changes`` uses the existing retroactive rule shape (including ``chinese``
+    for Korean source identities). Supply the independently selected immutable
+    periodic intent hash and window to reprove accepted provenance. Unwitnessed
+    proposals remain deferred. A missing/drifted *supplied* witness blocks.
+
+    Caller supplies the existing initialized local module under the cooperative
+    novel writer exclusion; this API does not load a provider, take a writing
+    lock, persist a report, or expand transaction authority. Eligibility means
+    only that CURRENT plan_chapter policy can prove the current bytes.
+    """
+    from noveltranslator_core import _claim_longest_non_overlapping_occurrences
+    from retroactive_span_planning import POLICY_VERSION
+    from production_periodic_audit_finalization import state_paths
+
+    require(type(through_chapter) is int and 1 <= through_chapter <= MAX_DISCOVERY_CHAPTERS,
+            "DISCOVERY_BOUNDARY_LIMIT")
+    require(isinstance(changes, list) and 0 < len(changes) <= MAX_DISCOVERY_CHANGES,
+            "DISCOVERY_CHANGE_LIMIT")
+    require(all(isinstance(change, dict) and set(change) <= {
+        "chinese", "old_english", "new_english", "category", "reason", "change_kind"
+    } for change in changes), "INVALID_DISCOVERY_CHANGE_FIELDS")
+    require(through_chapter * len(changes) <= MAX_DISCOVERY_ROWS, "DISCOVERY_ROW_LIMIT")
+    rules = normalized_rules(changes)
+    require(len(rules) == len(changes), "DUPLICATE_DISCOVERY_CHANGE")
+    completed = module.progress["completed"]
+    last = module.progress["last_completed"]
+    require(type(last) is int and through_chapter <= last <= MAX_DISCOVERY_CHAPTERS
+            and all(type(n) is int for n in completed)
+            and completed == list(range(1, last + 1)), "NONSEQUENTIAL_COMMITTED_INVENTORY")
+    numbers = list(range(1, through_chapter + 1))
+    require(set(completed) <= module.chapter_map.keys(), "MISSING_SOURCE")
+    inventory = source_inventory({n: module.chapter_map[n] for n in completed})
+    require({p.relative_to(module.OUTPUT_DIR).as_posix() for p in plain(module.OUTPUT_DIR).rglob("*.md")} ==
+            {f"{n:04d}.md" for n in completed}, "COMMITTED_FILE_INVENTORY_DRIFT")
+
+    # Bind all evidence read by the owners and recheck after computation. No
+    # directory is created, no stale cache or report is trusted, no prose leaks.
+    def snapshot():
+        paths = set(state_paths(module).values()) | {module.CONTINUITY_FILE}
+        for folder, pattern in ((module.OUTPUT_DIR, "*.md"), (module.AUDIT_DIR, "*.json"),
+                                (module.RETROACTIVE_DIR / "transactions", "*.json"),
+                                (module.BACKUP_DIR, "retroactive_*/chapters_before/*.md")):
+            paths.update(p for p in plain(folder).glob(pattern) if p.is_file())
+        require(len(paths) <= MAX_DISCOVERY_ROWS, "DISCOVERY_EVIDENCE_FILE_LIMIT")
+        return {str(p): digest(plain(p).read_bytes()) for p in paths}
+
+    output_root = plain(module.OUTPUT_DIR).resolve().parent
+    require(plain(module.AUDIT_DIR).resolve().parent == output_root
+            and plain(module.RETROACTIVE_DIR).resolve().parent == output_root
+            and plain(module.BACKUP_DIR).resolve().parent == output_root.parent
+            and all(plain(p).resolve().is_relative_to(output_root.parent)
+                    for p in state_paths(module).values()), "FOREIGN_DISCOVERY_ROOT")
+    witness = snapshot()
+    for key, name in (("glossary", "glossary"), ("progress", "progress"),
+                      ("issues", "issues_data"), ("history", "audit_history")):
+        require(read_object(state_paths(module)[key]) == getattr(module, name), "DISCOVERY_STATE_DRIFT")
+    supplied = expected_intent_sha256 is not None
+    require(supplied or (audit_start is None and audit_end is None), "INCOMPLETE_DISCOVERY_PROVENANCE")
+    intent, proof = None, None
+    if supplied:
+        require(type(audit_start) is int and type(audit_end) is int
+                and 1 <= audit_start <= audit_end and through_chapter <= audit_end
+                and isinstance(expected_intent_sha256, str) and len(expected_intent_sha256) == 64
+                and all(c in "0123456789abcdef" for c in expected_intent_sha256),
+                "INVALID_DISCOVERY_PROVENANCE")
+        intent, proof = _discovery_intent(module, audit_start, audit_end, expected_intent_sha256)
+    baseline = intent["baseline"]["glossary"] if intent else module.glossary
+    staged = intent["post"]["glossary"] if intent else module.glossary
+    policy = ownership_policy(baseline, staged)
+    categories = sorted(module.ACTIVE_PROFILE.retroactive_safe_categories)
+    accepted = normalized_rules(intent["record"]["changes"]["retroactive_replacements"]) if intent else []
+    provenance = []
+    for rule in rules:
+        reason = "MISSING_ACCEPTED_CHANGE_PROVENANCE"
+        original = next(item for item in changes if normalized_rules([item])[0] == rule)
+        kind = original.get("change_kind", "canonical")
+        require(kind in {"canonical", "alias_merge", "alias_split", "contextual"}, "INVALID_DISCOVERY_CHANGE_KIND")
+        if intent:
+            before = baseline["entries"].get(rule["chinese"], {})
+            after = staged["entries"].get(rule["chinese"], {})
+            if rule in accepted:
+                reason = ""
+            elif (before != after and rule["old_english"] == before.get("english", "")
+                  and rule["new_english"] == after.get("english", "")
+                  and rule["category"] == after.get("category", before.get("category", ""))
+                  and after.get("status") == "contextual"):
+                reason = ""  # Accepted contextualization still never permits a global edit.
+            else:
+                reason = "CHANGE_NOT_IN_VERIFIED_AUDIT"
+        if kind == "alias_split":
+            reason = "ALIAS_SPLIT_PROVENANCE_UNAVAILABLE"
+        provenance.append(reason)
+
+    rows = []
+    for n in numbers:
+        raw = plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+        require(len(raw) <= 16 * 1024 * 1024, "DISCOVERY_CHAPTER_BYTE_LIMIT")
+        source, text = module.chapter_map[n]["text"], raw.decode("utf-8")
+        claims = _claim_longest_non_overlapping_occurrences(
+            source, [(key, item["source_forms"]) for key, item in policy.items()])
+        _, decisions = plan_chapter(source, raw, rules, policy, categories)
+        findings = []
+        for rule, decision, missing in zip(rules, decisions, provenance):
+            anchors = claims.get(rule["chinese"], [])
+            old_count = decision["target_candidate_count"]
+            new_count = len(target_spans(text, rule["new_english"])) if rule["new_english"] else 0
+            entry = policy.get(rule["chinese"], {})
+            potential = bool(anchors or rule["chinese"] in source or old_count or new_count)
+            reasons = []
+            if missing:
+                reasons.append(missing)
+            if entry.get("contextual"):
+                reasons.append("contextual_identity_requires_manual_review")
+            if entry.get("alias_of"):
+                reasons.append("alias_identity_requires_manual_review")
+            if len(anchors) > 1:
+                reasons.append("repeated_source_occurrences_require_independent_pairing")
+            if old_count > 1 or new_count > 1:
+                reasons.append("repeated_target_occurrences_require_independent_pairing")
+            outcome = "deferred"
+            if not missing and decision["status"] == "planned":
+                outcome, reasons = "proven_eligible", ["OWNED_SINGLE_SPAN"]
+            elif not missing and not potential:
+                outcome, reasons = "unaffected", ["NO_SOURCE_OR_BOUNDED_TARGET_CANDIDATE"]
+            elif not missing and not old_count and new_count:
+                reverse = {**rule, "old_english": rule["new_english"], "new_english": rule["old_english"]}
+                owned, reverse_decisions = plan_chapter(source, raw, [reverse], policy, categories)
+                if owned:
+                    outcome, reasons = "already_current", ["OWNED_APPROVED_RENDERING"]
+                else:
+                    reasons.append(reverse_decisions[0]["skip_reason"])
+            else:
+                reasons.append(decision.get("skip_reason", "OWNERSHIP_REQUIRES_REVIEW"))
+            findings.append({"term_id": canonical_hash(rule["chinese"]), "change_id": canonical_hash(rule),
+                "potential_impact": potential, "outcome": outcome,
+                "reason_codes": sorted(set(reasons)), "source_owned_count": len(anchors),
+                "source_claims_sha256": canonical_hash(anchors),
+                "english_candidate_count": old_count, "approved_candidate_count": new_count})
+        rows.append({"chapter": n, "unit_sha256": canonical_hash(module.chapter_map[n]),
+                     "source_sha256": digest(source.encode("utf-8")), "english_sha256": digest(raw),
+                     "decisions": findings})
+    require(snapshot() == witness and source_inventory({n: module.chapter_map[n] for n in completed}) == inventory,
+            "DISCOVERY_INPUT_DRIFT")
+    report = {"revision": PREFLIGHT_REVISION, "policy_version": POLICY_VERSION,
+        "phase": "DISCOVERY_NOT_COMMIT_AUTHORITY", "scope": "whole_committed_history",
+        "novel_id_sha256": canonical_hash(module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"),
+        "audit_boundary": through_chapter, "examined_chapters": len(rows),
+        "source_inventory_sha256": canonical_hash(inventory), "evidence_sha256": canonical_hash(witness),
+        "baseline_glossary_sha256": canonical_hash(baseline), "staged_glossary_sha256": canonical_hash(staged),
+        "current_glossary_sha256": canonical_hash(module.glossary), "ownership_policy_sha256": canonical_hash(policy),
+        "safe_categories_sha256": canonical_hash(categories), "selected_changes_sha256": canonical_hash(
+            sorted(changes, key=canonical_hash)),
+        "intent_sha256": intent["intent_sha256"] if intent else None,
+        "transaction_id": proof["plan"]["transaction_id"] if proof else None,
+        "chapters": rows, "corrected_chapters": 0, "provider_calls": 0}
+    for outcome in ("proven_eligible", "deferred", "already_current", "unaffected"):
+        report[outcome + "_chapters"] = sum(any(d["outcome"] == outcome for d in row["decisions"]) for row in rows)
+    report["potential_impact_chapters"] = sum(any(d["potential_impact"] for d in row["decisions"]) for row in rows)
+    report["report_sha256"] = canonical_hash(report)
+    return report
 
 
 def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):

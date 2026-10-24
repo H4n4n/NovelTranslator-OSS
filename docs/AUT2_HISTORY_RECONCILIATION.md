@@ -1,5 +1,138 @@
 # AUT-2: historical evidence and publication invalidation (first vertical slice)
 
+## Phase 3: explicit read-only impact preflight
+
+`historical_reconciliation.historical_impact_preflight()` is an additive API
+based on `e1d99f0f191efcacfd2265f079e611407ef018f4`. It is not called by the
+production writer and never saves a report, acquires a provider response,
+retranslates, changes a glossary, or invokes a historical transaction.
+
+The architecture audit found these existing authorities:
+
+- `glossary_audit.py` validates immutable candidate IDs and alias families;
+  `chapter_glossary_review.py` owns its separate accepted chapter-review result
+  and source/translation/candidate input identity.
+- The production adapter's `apply_periodic_audit()` owns accepted glossary
+  changes, preserves locked entries, and emits retroactive proposals. Rejection
+  and contextualization do not authorize blanket historical replacement.
+- `production_periodic_audit_finalization.py` stages BEFORE/AFTER glossaries and
+  binds accepted changes, original source inventory, audit checkpoint, state,
+  progress, and immutable `retroactive_transactions.py` plan. Its existing
+  `transaction_proof()` regenerates the original plan from exact BEFORE bytes
+  and verified backups. Checksums are local consistency evidence, not signatures.
+- `production_historical_lineage.py` owns proofs of older superseded audit
+  chains. `final_consistency_report()` separately checks final whole-book audit
+  history and reports unresolved renderings; the new preflight does not certify
+  final consistency or publication freshness.
+- `ownership_policy()` and `plan_chapter()` retain all source/target ownership
+  policy, using the core longest non-overlapping source claims. Discovery adds
+  classifications, not a second glossary owner or a more permissive writer.
+
+Call under the existing cooperative novel writer exclusion, with an initialized
+local module and an independently selected immutable periodic intent hash:
+
+```python
+from historical_reconciliation import historical_impact_preflight
+
+report = historical_impact_preflight(
+    module,
+    selected_changes,  # exact rules from intent.record.changes.retroactive_replacements
+    through_chapter=401,
+    audit_start=376,
+    audit_end=401,
+    expected_intent_sha256=independently_selected_intent_hash,
+)
+```
+
+The rule shape is `chinese`, `old_english`, `new_english`, `category`, `reason`;
+the existing `chinese` field also carries exact Korean source identities.
+For accepted contextualizations, supply the exact old/new canonical values
+(normally the new canonical value is empty) and category from the intent's
+BEFORE/AFTER entries. Optional `change_kind` is `canonical` (default),
+`alias_merge`, `contextual`, or `alias_split`. Splits are explicitly deferred
+with `ALIAS_SPLIT_PROVENANCE_UNAVAILABLE` because the existing periodic owner
+does not issue a split decision. Other unaccepted proposals report
+`CHANGE_NOT_IN_VERIFIED_AUDIT`. Calling without all three provenance arguments
+reports `MISSING_ACCEPTED_CHANGE_PROVENANCE` and cannot prove eligibility.
+Supplying a missing, mismatched, malformed or drifted witness blocks instead.
+
+The supported witnessed scope is the current periodic audit publication prefix,
+including an untouched immutable intent before its transaction and a finalized
+intent at the current last-completed chapter. Existing partial transaction
+prefixes must satisfy the existing transaction and publication validators.
+An older superseded intent blocks with
+`SUPERSEDED_AUDIT_REQUIRES_LINEAGE_REVIEW`; this API does not invent a bridge
+over later glossary/chapter changes. Chapter-review, newly discovered referent,
+and external alias-split provenance have no adapter here and remain deferred
+proposals. This is a specific dependency boundary, not a claim to implement
+all of Issue #11.
+
+Every committed source unit and exact English bytes from Chapter 1 through the
+selected boundary is examined, including chapters hundreds of chapters before
+the decision window. Progress must be contiguous and the complete current
+committed file inventory must match it. Full source units (including metadata),
+English bytes, original/staged/current glossaries, safe categories, ownership
+policy, selected changes, evidence, and audit/transaction identity are hashed.
+No index or saved discovery report can omit history or grant authority. Evidence
+is checked again after computation; callers must still exclude cooperating
+writers, since this is not an operating-system atomic filesystem snapshot.
+
+`potential_impact` is an advisory candidate flag, independent of `outcome`:
+`proven_eligible`, `deferred`, `already_current`, or `unaffected`. Counts are
+chapter sets and can overlap when selecting multiple changes. Eligibility and
+already-current claims both require `plan_chapter()` ownership validation;
+already-current detection uses the same validator in reverse without editing.
+Repeated source or target occurrences, aliases, contextual entries, competing
+target families, longer source names and missing provenance carry reason codes.
+Two source mentions plus two English occurrences never prove independent pairing.
+
+Hard limits are 64 selected changes, 10,000 committed chapters, 100,000
+chapter/change rows, 100,000 evidence files and 16 MiB per examined English chapter; exceeding a limit
+blocks rather than truncating. Reports contain only fixed status/reason codes,
+counts, chapter numbers and opaque hashes, with zero corrected chapters and
+zero provider calls. There are no chapter bodies, source prose, term strings,
+filesystem paths, credentials or provider responses in the returned report.
+The report is never edit authority: existing immutable transaction plans and
+their final validators must independently reprove any actual modification.
+
+Disposable public tests in `tests/test_retroactive_transactions.py` cover
+Chinese/Korean full-history discovery, Chapters 1/25/26/388/401, pending and
+finalized intents, exact BOM/CRLF/Unicode/Markdown preservation, repeated
+occurrences, nested/shared names, aliases and contextual decisions, missing and
+tampered provenance, inventory drift, bounds and multi-novel preservation.
+They compare both bytes and modification times of the entire synthetic novel
+tree, including unrelated pending work, backups and EPUBs.
+
+Phase 3 local validation on Python 3.14.4 (all pytest runs use
+`tests/zero_provider_validation.py`, unique external system-TEMP basetemps and
+explicit real-Windows-DPAPI deselection):
+
+- `python -m py_compile historical_reconciliation.py tests/test_retroactive_transactions.py`:
+  exit 0.
+- `python scripts/publication_guard.py --index`: PASS, 490 files, exit 0;
+  staged diff whitespace check: exit 0.
+- `-q tests/test_retroactive_transactions.py tests/test_production_lifecycle.py`:
+  248 passed, zero skips, exit 0. After adding three prior-record negative tests,
+  `-q tests/test_retroactive_transactions.py -k discovery_reproves_prior_audit_records`:
+  3 passed, 163 deselected, zero skips, exit 0. The implementation did not change
+  between those runs.
+- `-q tests/test_glossary_audit.py tests/test_chapter_glossary_review.py -k
+  'not runtime_audit_prompt_reconstruction_uses_initializer_assignment'`:
+  171 passed, 3 existing skips, 1 deselected, exit 0.
+- The unfiltered glossary/review run returned 171 passed, 3 skipped, 1 failed,
+  exit 1. The failing node is
+  `tests/test_glossary_audit.py::test_runtime_audit_prompt_reconstruction_uses_initializer_assignment`.
+  It attempts to open a repository novel configuration under the private-data
+  guard. Running that exact node from an untouched public archive of baseline
+  `e1d99f0f191efcacfd2265f079e611407ef018f4` gives the identical
+  `ZERO Provider suite: private project data access forbidden` failure, exit 1.
+  No private fixture was read and no guard was weakened. The explicit public
+  selection above excludes this independently confirmed baseline dependency.
+
+Independent Command Code validation of the exact local commit/tree remains the
+next handoff. This phase does not authorize a push, PR, production activation,
+provider send/replay, or completion of Issue #11.
+
 This change is a dependency-bounded first slice of Issue #11. **AUT-2 is not
 complete.** Hosted independent L3 qualification and separate owner disposition
 remain required. No AUT-1 PR #10 exception transfers to this branch.

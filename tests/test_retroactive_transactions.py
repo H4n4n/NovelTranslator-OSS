@@ -960,15 +960,17 @@ def discovery_novel(tmp_path, monkeypatch):
     import historical_reconciliation as history
     serial = []
 
-    def make(language="zh", count=26, extra=None, sources=None, english=None, action="correct", prior_record=False):
+    def make(language="zh", count=26, extra=None, sources=None, english=None, action="correct", prior_record=False, prior_extra=None, committed_subset=None, prior_midpoint=None):
         key = "韓" if language == "zh" else "한민"
         root = tmp_path / f"public_novel_{len(serial)}"
         serial.append(root)
         output = root / "output/chapters"
         output.mkdir(parents=True)
-        entries = {key: {"english": "Han", "category": "character", "status": "provisional"}, **(extra or {})}
+        entries = {key: {"english": "Han", "category": "character", "status": "provisional"}, **(extra or {}), **(prior_extra or {})}
         units = {n: {"chapter": n, "production_index": n, "text": key if n in {1, 2, 25, 26, 388, 401} else "",
                      "source_document_sha256": canonical_hash([language, n])} for n in range(1, count + 1)}
+        if prior_extra:
+            units[3]["text"] = " ".join(prior_extra)
         for n, source in (sources or {}).items():
             units[n]["text"] = source.replace("KEY", key)
         for n in units:
@@ -981,21 +983,45 @@ def discovery_novel(tmp_path, monkeypatch):
         monkeypatch.setattr(engine.ACTIVE_PROFILE, "requires_formal_capitalization", lambda category: False, raising=False)
         monkeypatch.setattr(engine, "ACTIVE_NOVEL_CONFIG", SimpleNamespace(id=root.name))
         engine.progress.update(completed=list(units), last_completed=count, next_chapter=count + 1,
-                               last_audited_chapter=25 if count == 26 else 375)
+                               last_audited_chapter=0)
         engine.save_json(engine.PROGRESS_FILE, engine.progress)
         original_apply = engine.apply_periodic_audit
         # If another novel was built in the same test, unwrap the explicit target adapter.
         original_apply = getattr(original_apply, "discovery_original", original_apply)
+        # Finalize a genuine prior publication. A marker in audit_history cannot
+        # witness historical ownership. No provider is used by these fixtures.
+        prior_end = 25 if count == 26 else 375
+        engine.AUDIT_DIR.mkdir(parents=True)
+        def prior_apply(start, end, result, glossary_data=None):
+            return original_apply(start, end, result, glossary_data=glossary_data,
+                                  targets=[{"chinese": d["chinese"]} for d in result["decisions"]] or [{"chinese": key}])
+        monkeypatch.setattr(engine, "apply_periodic_audit", prior_apply)
+        prior_result = {"decisions": [{"chinese": term, "action": "reject"} for term in (prior_extra or {})], "issues": []}
+        prior_stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
+        prior_chunking = {"candidate_count": len(prior_extra or {}), "api_request_count": 0,
+                          "candidate_set_hash": canonical_hash(prior_result)}
+        prior_start = 1
+        for end in ([prior_midpoint, prior_end] if prior_midpoint else [prior_end]):
+            engine.save_json(engine.periodic_audit_checkpoint_path(prior_start, end), {"synthetic_prior_checkpoint": True})
+            final.finalize_periodic_audit(engine, prior_start, end, prior_result, prior_stats, prior_chunking)
+            prior_start = end + 1
+            prior_result = {"decisions": [], "issues": []}
+            prior_chunking = {"candidate_count": 0, "api_request_count": 0,
+                              "candidate_set_hash": canonical_hash(prior_result)}
         def apply(start, end, result, glossary_data=None):
-            return original_apply(start, end, result, glossary_data=glossary_data, targets=[{"chinese": key}])
+            return original_apply(start, end, result, glossary_data=glossary_data,
+                                  targets=[{"chinese": d["chinese"]} for d in result["decisions"]] or [{"chinese": key}])
         apply.discovery_original = original_apply
         monkeypatch.setattr(engine, "apply_periodic_audit", apply)
-        engine.AUDIT_DIR.mkdir(parents=True)
         if prior_record:
             old_record = {"start_chapter": 1, "end_chapter": 25, "synthetic_accepted_history": True}
-            engine.audit_history["audits"].append(old_record)
+            engine.audit_history["audits"] = [old_record]
+            final.intent_path(engine, 1, prior_end).unlink()
             engine.save_json(engine.AUDIT_HISTORY_FILE, engine.audit_history)
             engine.save_json(engine.AUDIT_DIR / "audit_0001_0025.json", old_record)
+        if committed_subset is not None:
+            engine.progress["completed"] = committed_subset
+            engine.save_json(engine.PROGRESS_FILE, engine.progress)
         start = engine.progress["last_audited_chapter"] + 1
         checkpoint = engine.periodic_audit_checkpoint_path(start, count)
         engine.save_json(checkpoint, {"synthetic_accepted_decision": True})
@@ -1053,7 +1079,7 @@ def test_discovery_entire_history_crosses_windows_without_writing(discovery_nove
     encoded = json.dumps(report, ensure_ascii=False)
     for private in (case.key, "Han", "Héading", "café", "Unrelated synthetic", str(case.root)):
         assert private not in encoded
-    assert not (case.engine.RETROACTIVE_DIR / "transactions").exists()
+    assert len(list((case.engine.RETROACTIVE_DIR / "transactions").glob("*.plan.json"))) == 1
     assert report["phase"] == "DISCOVERY_NOT_COMMIT_AUTHORITY"
 
 
@@ -1230,7 +1256,6 @@ def test_discovery_selection_order_does_not_change_report(discovery_novel):
 def test_discovery_reproves_prior_audit_records(discovery_novel, damage):
     from production_failure_classification import ProductionIntegrityError
     case = discovery_novel(prior_record=True)
-    assert case.preflight()["proven_eligible_chapters"] == 3
     path = case.engine.AUDIT_DIR / "audit_0001_0025.json"
     if damage == "missing": path.unlink()
     elif damage == "tampered": path.write_bytes(b"{}")
@@ -1255,3 +1280,166 @@ def test_aut2_retained_contradictory_receipt_blocks_restart_without_writes(aut2_
     with pytest.raises(ProductionIntegrityError, match="FRESHNESS_MANIFEST_DRIFT"):
         final.finalize_periodic_audit(engine, 1, 10, *args)
     assert _review_snapshot(root) == before
+
+
+@pytest.mark.parametrize("competitor,entry,source,english,reason", [
+    ("韓先生", {"english": "Master Han", "category": "character"}, "韓先生", "Han.",
+     "source_absent_or_owned_by_longer_identity"),
+    ("漢", {"english": "Han", "category": "character"}, "韓", "Han.",
+     "competing_or_nested_target_ownership"),
+    ("漢", {"english": "Other", "category": "character", "accepted_inflections": ["Han"]}, "韓", "Han.",
+     "competing_or_nested_target_ownership"),
+    ("漢", {"english": "Other", "category": "character", "source_variants": ["韓先生"]}, "韓先生", "Han.",
+     "source_absent_or_owned_by_longer_identity"),
+    ("漢", {"english": "Han's House", "category": "character"}, "韓", "Han's House.",
+     "competing_or_nested_target_ownership"),
+])
+def test_discovery_d4_d5_verified_prior_intent_reserves_removed_identity(
+        discovery_novel, competitor, entry, source, english, reason):
+    import production_periodic_audit_finalization as final
+    case = discovery_novel(prior_extra={competitor: entry}, sources={1: source}, english={1: english})
+    prior = final.load_intent(case.engine, 1, 25)
+    assert competitor in prior["baseline"]["glossary"]["entries"]
+    assert competitor not in prior["post"]["glossary"]["entries"]
+    assert competitor not in case.intent["baseline"]["glossary"]["entries"]
+    # This exposes the old writer's unsafe proposal without executing it.
+    assert case.intent["transaction_plan"]["chapters"][0]["edits"]
+    before = _discovery_snapshot(case.root)
+    report = case.preflight()
+    item = report["chapters"][0]["decisions"][0]
+    assert item["outcome"] == "deferred" and item["potential_impact"]
+    assert "HISTORICAL_OWNERSHIP_RESERVATION" in item["reason_codes"]
+    assert reason in item["reason_codes"]
+    assert report["corrected_chapters"] == report["provider_calls"] == 0
+    assert case.preflight() == report
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("damage", ["missing_intent", "intent_hash", "rehashed_glossary", "missing_checkpoint",
+    "missing_transaction", "missing_state_backup", "source_unit", "history_fork", "foreign_novel", "missing_record"])
+def test_discovery_historical_ownership_missing_or_contradictory_blocks(discovery_novel, damage):
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel(prior_extra={"漢": {"english": "Han", "category": "character"}})
+    e = case.engine
+    path = final.intent_path(e, 1, 25)
+    value = final.load_intent(e, 1, 25)
+    if damage == "missing_intent": path.unlink()
+    elif damage == "intent_hash": path.write_bytes(b"{}")
+    elif damage == "missing_checkpoint": e.periodic_audit_checkpoint_path(1, 25).unlink()
+    elif damage == "missing_transaction":
+        next((e.RETROACTIVE_DIR / "transactions").glob("*.plan.json")).unlink()
+    elif damage == "missing_state_backup": (e.BACKUP_DIR / "checkpoint_0025" / e.GLOSSARY_FILE.name).unlink()
+    elif damage == "source_unit": e.chapter_map[1]["source_document_sha256"] = "changed"
+    elif damage == "missing_record": (e.AUDIT_DIR / "audit_0001_0025.json").unlink()
+    else:
+        if damage == "rehashed_glossary": value["baseline"]["glossary"]["entries"]["漢"]["english"] = "Changed"
+        elif damage == "history_fork": value["baseline"]["history"]["audits"] = [{"unproven": True}]
+        elif damage == "foreign_novel": value["transaction_plan"]["request"]["novel_id"] = "foreign"
+        value["historical_proof"]["plan_sha256"] = canonical_hash(value["transaction_plan"])
+        value["intent_sha256"] = canonical_hash({k: v for k, v in value.items() if k != "intent_sha256"})
+        final.atomic_write_json(path, value)
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError): case.preflight()
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_history_marker_alone_is_not_a_witness(discovery_novel):
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel(prior_record=True)
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
+        case.preflight()
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("language,unknown", [("zh", "韩"), ("zh", "無關"), ("ko", "한"), ("ko", "한민")])
+def test_discovery_j5b_unknown_source_identity_is_coverage_unproven(discovery_novel, language, unknown):
+    case = discovery_novel(language, sources={1: unknown}, english={1: "Nobody arrived."})
+    before = _discovery_snapshot(case.root)
+    report = case.preflight()
+    row = report["chapters"][0]
+    item = row["decisions"][0]
+    assert item["outcome"] == "coverage_unproven"
+    assert item["reason_codes"] == ["SOURCE_IDENTITY_COVERAGE_INCOMPLETE"]
+    assert not item["potential_impact"] and item["source_owned_count"] == 0
+    assert row["source_identity_coverage"] == "incomplete" and row["unowned_source_script_count"] > 0
+    assert report["coverage_unproven_chapters"] == 1
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_unaffected_requires_literal_coverage(discovery_novel):
+    case = discovery_novel(extra={"無關": {"english": "Other Person", "category": "character"}},
+                           sources={1: "無關"}, english={1: "Other Person arrived."})
+    before = _discovery_snapshot(case.root)
+    row = case.preflight()["chapters"][0]
+    assert row["decisions"][0]["outcome"] == "unaffected"
+    assert row["source_identity_coverage"] == "literal_inventory_covered"
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_discovery_chapter_300_stays_eligible(discovery_novel):
+    case = discovery_novel(count=401, sources={300: "KEY"}, english={300: "Han arrived."})
+    before = _discovery_snapshot(case.root)
+    report = case.preflight()
+    assert report["chapters"][299]["decisions"][0]["outcome"] == "proven_eligible"
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("competitor,entry,source", [
+    ("韓先生", {"english": "Master Han", "category": "character"}, "韓先生"),
+    ("漢", {"english": "Han", "category": "character"}, "韓"),
+])
+def test_legacy_writer_risk_d4_d5_reaches_actual_finalizer(discovery_novel, competitor, entry, source):
+    """Characterize an unresolved safety gap on disposable data, not approval."""
+    import production_periodic_audit_finalization as final
+    case = discovery_novel(prior_extra={competitor: entry}, sources={1: source}, english={1: "Han."})
+    e = case.engine
+    before = _discovery_snapshot(case.root)
+    assert case.preflight()["chapters"][0]["decisions"][0]["outcome"] == "deferred"
+    assert _discovery_snapshot(case.root) == before
+    # The production finalizer validates this same source-bound immutable audit,
+    # then the unchanged writer incorrectly edits the ambiguous referent.
+    result = final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert result["status"] == "FINALIZED"
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Hann."
+    assert final.load_intent(e, 26, 26) == case.intent
+    proof = final.transaction_proof(e, 26, 26, case.intent["baseline"]["glossary"],
+        case.intent["post"]["glossary"], case.intent["record"]["changes"])
+    assert proof["state"]["state"] == "FINALIZED"
+
+
+@pytest.mark.parametrize("subset", [[], list(range(2, 27))])
+def test_legacy_writer_risk_j3_j4_sparse_progress_reaches_finalizer_seam(discovery_novel, subset):
+    """Normal startup blocks, but the mutation boundary must also verify it."""
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    from noveltranslator_observability import progress_commit_integrity_errors
+    case = discovery_novel(committed_subset=subset)
+    e = case.engine
+    assert progress_commit_integrity_errors(e.progress, e.OUTPUT_DIR, case.root / "output/pending")
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="NONSEQUENTIAL_COMMITTED_INVENTORY"):
+        case.preflight()
+    assert _discovery_snapshot(case.root) == before
+    assert case.intent["transaction_plan"]["request"]["committed_chapters"] == subset
+    result = final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert result["status"] == "FINALIZED"
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == before["output/chapters/0001.md"][0]
+    if subset:
+        assert b"Hann" in (e.OUTPUT_DIR / "0025.md").read_bytes()
+
+
+
+def test_discovery_reservations_survive_multiple_verified_prior_intents(discovery_novel):
+    import production_periodic_audit_finalization as final
+    case = discovery_novel(prior_extra={"漢": {"english": "Han", "category": "character"}}, prior_midpoint=12)
+    first = final.load_intent(case.engine, 1, 12)
+    second = final.load_intent(case.engine, 13, 25)
+    assert "漢" in first["baseline"]["glossary"]["entries"]
+    assert "漢" not in second["baseline"]["glossary"]["entries"]
+    before = _discovery_snapshot(case.root)
+    item = case.preflight()["chapters"][0]["decisions"][0]
+    assert item["outcome"] == "deferred"
+    assert "HISTORICAL_OWNERSHIP_RESERVATION" in item["reason_codes"]
+    assert _discovery_snapshot(case.root) == before

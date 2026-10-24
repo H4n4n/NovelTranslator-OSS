@@ -7,6 +7,7 @@ Reports contain opaque identities/counts/hashes, never source or English prose.
 import copy
 import json
 import math
+import unicodedata
 from pathlib import Path
 
 from noveltranslator_core import atomic_write_json, strict_term_valid_targets
@@ -15,7 +16,7 @@ from retroactive_span_planning import canonical_hash, digest, target_spans, owne
 import retroactive_transactions as tx
 
 REVISION = "aut2-history-evidence-v1"
-PREFLIGHT_REVISION = "aut2-impact-preflight-v1"
+PREFLIGHT_REVISION = "aut2-impact-preflight-v2"
 MAX_DISCOVERY_CHAPTERS = 10000
 MAX_DISCOVERY_CHANGES = 64
 MAX_DISCOVERY_ROWS = 100000
@@ -123,10 +124,6 @@ def _discovery_intent(module, start, end, expected_sha):
             "DISCOVERY_SOURCE_UNIT_WITNESS_MISSING")
     require(module.progress["last_completed"] == end, "SUPERSEDED_AUDIT_REQUIRES_LINEAGE_REVIEW")
     verify_publication(module, intent)
-    for record in intent["baseline"]["history"]["audits"]:
-        record_path = plain(module.AUDIT_DIR /
-            f"audit_{record['start_chapter']:04d}_{record['end_chapter']:04d}.json")
-        require(read_object(record_path) == record, "DISCOVERY_PRIOR_AUDIT_RECORD_DRIFT")
     for key, name in (("glossary", "glossary"), ("progress", "progress"),
                       ("issues", "issues_data"), ("history", "audit_history")):
         require(read_object(state_paths(module)[key]) == getattr(module, name), "DISCOVERY_STATE_DRIFT")
@@ -153,6 +150,129 @@ def _discovery_intent(module, start, end, expected_sha):
     return intent, proof
 
 
+
+def _historical_reservations(module, selected):
+    """Prove prior immutable publications before reserving their ownership.
+
+    Only a veto inventory: never feed it into positive edit authorization.
+    A history marker, hash-consistent intent alone, or incomplete lineage is
+    insufficient. Older transactions are reconstructed from verified BEFORE
+    backups/current bytes, then reproved by their original finalizer.
+    """
+    from types import SimpleNamespace
+    from production_periodic_audit_finalization import (
+        transaction_proof, prepare_finalization, state_paths,
+    )
+    try:
+        records = selected["baseline"]["history"]["audits"]
+        paths = list(plain(module.AUDIT_DIR).glob("*.finalization.json"))
+        intents = [audit_intent(module, path) for path in paths]
+        prior = sorted((i for i in intents if i["end"] < selected["start"]),
+                       key=lambda i: (i["start"], i["end"]))
+        require(len(intents) == len(prior) + 1 and selected in intents,
+                "UNRELATED_OR_COMPETING_OWNERSHIP_INTENT")
+        require([i["record"] for i in prior] == records,
+                "PRIOR_RECORD_WITHOUT_VALIDATING_INTENT")
+        blobs = {digest(raw): raw for raw in (
+            plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+            for n in module.progress["completed"])}
+        for intent in intents:
+            for item in intent["transaction_plan"]["chapters"]:
+                backup = plain(module.BACKUP_DIR / f"retroactive_{intent['transaction_plan']['transaction_id']}" /
+                               "chapters_before" / f"{item['chapter']:04d}.md")
+                if item["edits"] and backup.exists():
+                    raw = backup.read_bytes()
+                    require(digest(raw) == item["before_sha256"], "HISTORICAL_BACKUP_DRIFT")
+                    blobs[digest(raw)] = raw
+        policy, evidence, latest, previous_end = {}, [], {}, 0
+        novel = selected["transaction_plan"]["request"]["novel_id"]
+        for index, intent in enumerate(prior):
+            start, end = intent["start"], intent["end"]
+            request = intent["transaction_plan"]["request"]
+            require(start == previous_end + 1 and request["novel_id"] == novel
+                    and request["audit_label"] == f"{start:04d}_{end:04d}"
+                    and request["through_chapter"] == end, "HISTORICAL_OWNERSHIP_LINEAGE_GAP")
+            require("historical_proof" in intent and "historical_reconciliation" in intent["record"],
+                    "HISTORICAL_OWNERSHIP_SOURCE_WITNESS_MISSING")
+            require(intent["baseline"]["history"]["audits"] == records[:index]
+                    and intent["post"]["history"]["audits"] == records[:index + 1],
+                    "HISTORICAL_OWNERSHIP_HISTORY_FORK")
+            require(request["committed_chapters"] == list(range(1, end + 1)),
+                    "HISTORICAL_OWNERSHIP_INVENTORY_INCOMPLETE")
+            detached = SimpleNamespace(**vars(module))
+            for key, name in (("glossary", "glossary"), ("progress", "progress"),
+                              ("issues", "issues_data"), ("history", "audit_history")):
+                setattr(detached, name, copy.deepcopy(intent["baseline"][key]))
+                require(read_object(plain(module.BACKUP_DIR / f"checkpoint_{end:04d}" /
+                                          state_paths(module)[key].name)) == intent["post"][key],
+                        "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
+            checkpoint = plain(module.periodic_audit_checkpoint_path(start, end))
+            require(digest(checkpoint.read_bytes()) == intent["checkpoint_sha256"],
+                    "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
+            require(digest(plain(module.BACKUP_DIR / f"checkpoint_{end:04d}" /
+                                 module.CONTINUITY_FILE.name).read_bytes()) == intent["continuity_sha256"],
+                    "HISTORICAL_OWNERSHIP_CONTINUITY_DRIFT")
+            if detached.progress.get("provider") == "command_code_provider" and intent["chunking"].get("candidate_count", 0):
+                from goat_periodic_audit_finalize_plan import checkpoint_proof
+                paid = checkpoint_proof(detached, start, end)
+                require(all(paid[k] == intent[k] for k in ("audit_result", "audit_stats")),
+                        "HISTORICAL_OWNERSHIP_PAID_EVIDENCE_DRIFT")
+            after = {}
+            for item in intent["transaction_plan"]["chapters"]:
+                n = item["chapter"]
+                raw = blobs.get(item["before_sha256"])
+                require(raw is not None and (n not in latest or latest[n] == item["before_sha256"]),
+                        "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
+                after[n] = tx.transform_bytes(raw, item["edits"])
+                latest[n] = item["after_sha256"]
+            proof = transaction_proof(detached, start, end, intent["baseline"]["glossary"],
+                intent["post"]["glossary"], intent["record"]["changes"], chapter_bytes=after)
+            require(proof["state"] and proof["state"]["state"] == "FINALIZED",
+                    "HISTORICAL_OWNERSHIP_NOT_FINALIZED")
+            prepared = prepare_finalization(detached, start, end, intent["audit_result"],
+                intent["audit_stats"], intent["chunking"], timestamp=intent["record"]["timestamp_unix"],
+                chapter_bytes=after)
+            for record in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
+                record["retroactive"] = intent["record"]["retroactive"]
+            require(all(prepared[k] == intent[k] for k in ("post", "record", "transaction_plan", "operation_id")),
+                    "HISTORICAL_OWNERSHIP_AUTHORIZATION_DRIFT")
+            require(read_object(module.AUDIT_DIR / f"audit_{start:04d}_{end:04d}.json") == intent["record"],
+                    "HISTORICAL_OWNERSHIP_RECORD_DRIFT")
+            _reserve_policy(policy, ownership_policy(intent["baseline"]["glossary"], intent["post"]["glossary"]))
+            evidence.append(intent["intent_sha256"])
+            previous_end = end
+        require(previous_end == selected["start"] - 1, "HISTORICAL_OWNERSHIP_LINEAGE_GAP")
+        selected_before = {i["chapter"]: i["before_sha256"] for i in selected["transaction_plan"]["chapters"]}
+        require(all(selected_before.get(n) == sha for n, sha in latest.items()),
+                "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
+        return policy, evidence
+    except (ProductionIntegrityError, OSError, KeyError, TypeError, ValueError) as exc:
+        raise ProductionIntegrityError("AUT2: HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN") from exc
+
+
+def _reserve_policy(policy, extra):
+    for key, value in extra.items():
+        item = policy.setdefault(key, {"targets": [], "source_forms": [], "alias_of": [], "contextual": False})
+        item["contextual"] |= value["contextual"]
+        for field in ("targets", "source_forms", "alias_of"):
+            item[field] = sorted(set(item[field]) | set(value[field]))
+
+
+def _unowned_source_script_count(source, policy):
+    # Literal forms only. Unknown script is uncertainty, never referent evidence.
+    from noveltranslator_core import _claim_longest_non_overlapping_occurrences
+    claims = _claim_longest_non_overlapping_occurrences(
+        source, [(key, item["source_forms"]) for key, item in policy.items()])
+    covered = set()
+    for anchors in claims.values():
+        for anchor in anchors:
+            covered.update(range(anchor["start"], anchor["end"]))
+    return sum(index not in covered and (
+        "CJK UNIFIED IDEOGRAPH" in unicodedata.name(char, "") or
+        "CJK COMPATIBILITY IDEOGRAPH" in unicodedata.name(char, "") or
+        "HANGUL" in unicodedata.name(char, "")) for index, char in enumerate(source))
+
+
 def historical_impact_preflight(module, changes, *, through_chapter,
                                audit_start=None, audit_end=None, expected_intent_sha256=None):
     """Bounded read-only discovery over 1..through_chapter, with no cache.
@@ -165,7 +285,9 @@ def historical_impact_preflight(module, changes, *, through_chapter,
     Caller supplies the existing initialized local module under the cooperative
     novel writer exclusion; this API does not load a provider, take a writing
     lock, persist a report, or expand transaction authority. Eligibility means
-    only that CURRENT plan_chapter policy can prove the current bytes.
+    only that CURRENT plan_chapter policy can prove the current bytes and
+    verified historical reservations do not veto it. Unclaimed source script
+    prevents a literal-inventory absence finding; it never proves a referent.
     """
     from noveltranslator_core import _claim_longest_non_overlapping_occurrences
     from retroactive_span_planning import POLICY_VERSION
@@ -198,7 +320,8 @@ def historical_impact_preflight(module, changes, *, through_chapter,
         paths = set(state_paths(module).values()) | {module.CONTINUITY_FILE}
         for folder, pattern in ((module.OUTPUT_DIR, "*.md"), (module.AUDIT_DIR, "*.json"),
                                 (module.RETROACTIVE_DIR / "transactions", "*.json"),
-                                (module.BACKUP_DIR, "retroactive_*/chapters_before/*.md")):
+                                (module.BACKUP_DIR, "retroactive_*/chapters_before/*.md"),
+                                (module.BACKUP_DIR, "checkpoint_*/*")):
             paths.update(p for p in plain(folder).glob(pattern) if p.is_file())
         require(len(paths) <= MAX_DISCOVERY_ROWS, "DISCOVERY_EVIDENCE_FILE_LIMIT")
         return {str(p): digest(plain(p).read_bytes()) for p in paths}
@@ -226,6 +349,9 @@ def historical_impact_preflight(module, changes, *, through_chapter,
     baseline = intent["baseline"]["glossary"] if intent else module.glossary
     staged = intent["post"]["glossary"] if intent else module.glossary
     policy = ownership_policy(baseline, staged)
+    reservations, historical_intents = _historical_reservations(module, intent) if intent else ({}, [])
+    reserved_policy = copy.deepcopy(policy)
+    _reserve_policy(reserved_policy, reservations)
     categories = sorted(module.ACTIVE_PROFILE.retroactive_safe_categories)
     accepted = normalized_rules(intent["record"]["changes"]["retroactive_replacements"]) if intent else []
     provenance = []
@@ -258,8 +384,10 @@ def historical_impact_preflight(module, changes, *, through_chapter,
         claims = _claim_longest_non_overlapping_occurrences(
             source, [(key, item["source_forms"]) for key, item in policy.items()])
         _, decisions = plan_chapter(source, raw, rules, policy, categories)
+        _, reserved_decisions = plan_chapter(source, raw, rules, reserved_policy, categories)
+        unowned_script = _unowned_source_script_count(source, reserved_policy)
         findings = []
-        for rule, decision, missing in zip(rules, decisions, provenance):
+        for rule, decision, reserved, missing in zip(rules, decisions, reserved_decisions, provenance):
             anchors = claims.get(rule["chinese"], [])
             old_count = decision["target_candidate_count"]
             new_count = len(target_spans(text, rule["new_english"])) if rule["new_english"] else 0
@@ -278,14 +406,23 @@ def historical_impact_preflight(module, changes, *, through_chapter,
                 reasons.append("repeated_target_occurrences_require_independent_pairing")
             outcome = "deferred"
             if not missing and decision["status"] == "planned":
-                outcome, reasons = "proven_eligible", ["OWNED_SINGLE_SPAN"]
+                if reserved["status"] == "planned":
+                    outcome, reasons = "proven_eligible", ["OWNED_SINGLE_SPAN"]
+                else:
+                    reasons.extend(["HISTORICAL_OWNERSHIP_RESERVATION", reserved["skip_reason"]])
             elif not missing and not potential:
-                outcome, reasons = "unaffected", ["NO_SOURCE_OR_BOUNDED_TARGET_CANDIDATE"]
+                if unowned_script:
+                    outcome, reasons = "coverage_unproven", ["SOURCE_IDENTITY_COVERAGE_INCOMPLETE"]
+                else:
+                    outcome, reasons = "unaffected", ["NO_SOURCE_OR_BOUNDED_TARGET_CANDIDATE"]
             elif not missing and not old_count and new_count:
                 reverse = {**rule, "old_english": rule["new_english"], "new_english": rule["old_english"]}
                 owned, reverse_decisions = plan_chapter(source, raw, [reverse], policy, categories)
-                if owned:
+                reserved_owned, reserved_reverse = plan_chapter(source, raw, [reverse], reserved_policy, categories)
+                if owned and reserved_owned:
                     outcome, reasons = "already_current", ["OWNED_APPROVED_RENDERING"]
+                elif owned:
+                    reasons.extend(["HISTORICAL_OWNERSHIP_RESERVATION", reserved_reverse[0]["skip_reason"]])
                 else:
                     reasons.append(reverse_decisions[0]["skip_reason"])
             else:
@@ -297,7 +434,8 @@ def historical_impact_preflight(module, changes, *, through_chapter,
                 "english_candidate_count": old_count, "approved_candidate_count": new_count})
         rows.append({"chapter": n, "unit_sha256": canonical_hash(module.chapter_map[n]),
                      "source_sha256": digest(source.encode("utf-8")), "english_sha256": digest(raw),
-                     "decisions": findings})
+                     "source_identity_coverage": "incomplete" if unowned_script else "literal_inventory_covered",
+                     "unowned_source_script_count": unowned_script, "decisions": findings})
     require(snapshot() == witness and source_inventory({n: module.chapter_map[n] for n in completed}) == inventory,
             "DISCOVERY_INPUT_DRIFT")
     report = {"revision": PREFLIGHT_REVISION, "policy_version": POLICY_VERSION,
@@ -307,12 +445,15 @@ def historical_impact_preflight(module, changes, *, through_chapter,
         "source_inventory_sha256": canonical_hash(inventory), "evidence_sha256": canonical_hash(witness),
         "baseline_glossary_sha256": canonical_hash(baseline), "staged_glossary_sha256": canonical_hash(staged),
         "current_glossary_sha256": canonical_hash(module.glossary), "ownership_policy_sha256": canonical_hash(policy),
+        "historical_reservation_policy_sha256": canonical_hash(reserved_policy),
+        "historical_intents_sha256": canonical_hash(historical_intents),
+        "source_identity_coverage_scope": "LITERAL_INVENTORY_ONLY_NO_SEMANTIC_COMPLETENESS",
         "safe_categories_sha256": canonical_hash(categories), "selected_changes_sha256": canonical_hash(
             sorted(changes, key=canonical_hash)),
         "intent_sha256": intent["intent_sha256"] if intent else None,
         "transaction_id": proof["plan"]["transaction_id"] if proof else None,
         "chapters": rows, "corrected_chapters": 0, "provider_calls": 0}
-    for outcome in ("proven_eligible", "deferred", "already_current", "unaffected"):
+    for outcome in ("proven_eligible", "deferred", "already_current", "unaffected", "coverage_unproven"):
         report[outcome + "_chapters"] = sum(any(d["outcome"] == outcome for d in row["decisions"]) for row in rows)
     report["potential_impact_chapters"] = sum(any(d["potential_impact"] for d in row["decisions"]) for row in rows)
     report["report_sha256"] = canonical_hash(report)

@@ -326,6 +326,23 @@ def _snapshot_baseline(
             "periodic-audit recovery window is not the next scheduled audit"
         )
 
+    # An acquisition backup is not edit authority. Prove independent inventory
+    # and prior ownership before creating even this pre-audit baseline.
+    from historical_reconciliation import writer_module, writer_inventory, writer_authorization
+    from retroactive_transactions import build_plan, ownership_policy
+    from production_failure_classification import ProductionIntegrityError
+    try:
+        novel = _read_object(project_root / "novel.json", "novel config")["id"]
+        context = writer_module(project_root / "output/chapters", novel)
+        writer_inventory(context, progress.get("completed"), end_chapter)
+        request = dict(novel_id=novel, audit_label=f"{start_chapter:04d}_{end_chapter:04d}",
+            through_chapter=end_chapter, rules=[], ownership_policy=ownership_policy(context.glossary),
+            safe_categories=sorted(context.ACTIVE_PROFILE.retroactive_safe_categories),
+            committed_chapters=list(range(1, end_chapter + 1)))
+        writer_authorization(context, build_plan(request, {n: (context.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+            for n in request["committed_chapters"]}, context.chapter_map))
+    except (ProductionIntegrityError, OSError, ValueError) as exc:
+        raise FullPipelinePeriodicAuditRecoveryError("local retroactive baseline blocked: " + str(exc)) from exc
     root = _recovery_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     staging = root / f".{slot.name}.creating-{uuid.uuid4().hex}"
@@ -488,12 +505,13 @@ def _restore_baseline(project_root: Path, manifest: Mapping[str, Any]) -> None:
     # The local span engine owns restart reconciliation. Never erase its durable
     # intent or restore its AFTER prose to BEFORE through a whole-tree rollback.
     from retroactive_transactions import RetroactiveBlocked, verify_audit_recovery_baseline
+    from production_failure_classification import ProductionIntegrityError
     try:
         preserve_span_transaction = verify_audit_recovery_baseline(
             project_root, baseline, manifest["project_id"],
             f"{start_chapter:04d}_{end_chapter:04d}", end_chapter,
         )
-    except (RetroactiveBlocked, OSError, ValueError) as exc:
+    except (RetroactiveBlocked, ProductionIntegrityError, OSError, ValueError) as exc:
         raise FullPipelinePeriodicAuditRecoveryError(
             f"local retroactive transaction recovery blocked: {exc}"
         ) from exc

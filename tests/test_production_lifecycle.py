@@ -524,7 +524,7 @@ def aut1_engine(monkeypatch, tmp_path):
              "RETROACTIVE_DIR": "output/retroactive_fixes", "PAID_REQUEST_JOURNAL_DIR": "data/provider_request_journal",
              "GLOSSARY_FILE": "data/glossary.json", "PROGRESS_FILE": "data/progress.json",
              "CONTINUITY_FILE": "data/continuity.json", "ISSUES_FILE": "data/issues.json",
-             "AUDIT_HISTORY_FILE": "data/audit_history.json"}
+             "AUDIT_HISTORY_FILE": "data/audit_history.json", "CHAPTERS_FILE": "data/chapters.json"}
     for name, rel in paths.items():
         path = tmp_path / rel
         (path.parent if path.suffix else path).mkdir(parents=True, exist_ok=True)
@@ -551,6 +551,8 @@ def aut1_engine(monkeypatch, tmp_path):
         "RUN_LOGGER": NS(path=None), "AUTO_OFF_PEAK_ONLY": False}
     for name, value in values.items():
         monkeypatch.setattr(engine, name, value)
+    engine.save_json(tmp_path / "novel.json", config.to_dict())
+    engine.save_json(engine.CHAPTERS_FILE, list(chapters.values()))
     calls, events, queue, audits = [], [], [], []
     monkeypatch.setattr(engine, "log_event", lambda event, **fields: events.append((event, fields)))
     monkeypatch.setattr(engine, "log_error", lambda *a, **k: None)
@@ -749,10 +751,14 @@ def test_aut1_real_audit_publication_reconciles_once_without_reacquisition(aut1_
     before = (h.engine.OUTPUT_DIR / "0001.md").read_bytes()
     if drift:
         with pytest.raises(ProductionIntegrityError):
-            h.real_audit(1, 1)
+            from production_run_lock import production_run_lock
+            with production_run_lock(h.root):
+                h.real_audit(1, 1)
         assert h.engine.progress["last_audited_chapter"] == 0
     else:
-        h.real_audit(1, 1)
+        from production_run_lock import production_run_lock
+        with production_run_lock(h.root):
+            h.real_audit(1, 1)
         assert h.engine.progress["last_audited_chapter"] == 1
         assert (h.engine.OUTPUT_DIR / "0001.md").read_bytes() == before
         assert any(fields.get("reason_code") == "LOCAL_AUDIT_RECONCILED" for _, fields in h.events)
@@ -919,6 +925,8 @@ def aut2_history_novel(aut1_engine, monkeypatch, request):
     monkeypatch.setattr(e, "apply_periodic_audit", lambda start, end, result, glossary_data=None:
         original_apply(start, end, result, glossary_data, targets=[{"chinese": key}]))
     e.save_json(e.GLOSSARY_FILE, e.glossary)
+    e.save_json(h.root / "novel.json", e.ACTIVE_NOVEL_CONFIG.to_dict())
+    e.save_json(e.CHAPTERS_FILE, list(chapters.values()))
     publication_dir = h.root / "final/epub"
     publication_dir.mkdir(parents=True)
     (publication_dir / "prior.epub").write_bytes(b"synthetic prior published bytes")
@@ -932,12 +940,15 @@ def aut2_history_novel(aut1_engine, monkeypatch, request):
     stats["api_request_count"] = 0
     chunking = {"candidate_count": 1, "candidate_set_hash": canonical_hash("synthetic-accepted-decisions"), "api_request_count": 0}
     e.save_json(e.periodic_audit_checkpoint_path(1, 25), {"synthetic_accepted_decisions": True})
-    final.finalize_periodic_audit(e, 1, 25, {"decisions": [{"chinese": key, "action": "keep"}], "issues": []}, stats, chunking)
+    from production_run_lock import production_run_lock
+    with production_run_lock(h.root):
+        final.finalize_periodic_audit(e, 1, 25, {"decisions": [{"chinese": key, "action": "keep"}], "issues": []}, stats, chunking)
     (e.OUTPUT_DIR / "0026.md").write_bytes(before[26])
     e.progress.update(completed=list(range(1, 27)), last_completed=26, next_chapter=27)
     e.save_json(e.PROGRESS_FILE, e.progress)
     e.save_json(e.periodic_audit_checkpoint_path(26, 26), {"synthetic_accepted_decisions": True})
-    final.finalize_periodic_audit(e, 26, 26, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []}, stats, chunking)
+    with production_run_lock(h.root):
+        final.finalize_periodic_audit(e, 26, 26, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []}, stats, chunking)
     return h, before
 
 

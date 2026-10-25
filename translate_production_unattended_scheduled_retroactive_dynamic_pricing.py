@@ -568,6 +568,7 @@ def apply_retroactive_replacements(
 ):
     """Plan and reconcile exact owned historical spans locally, with durable evidence."""
     from retroactive_transactions import execute_retroactive_transaction
+    from types import SimpleNamespace
 
     result = execute_retroactive_transaction(
         novel_id=ACTIVE_NOVEL_CONFIG.id if ACTIVE_NOVEL_CONFIG else "legacy_single_novel",
@@ -576,6 +577,7 @@ def apply_retroactive_replacements(
         safe_categories=ACTIVE_PROFILE.retroactive_safe_categories,
         committed_chapters=progress.get("completed", []), chapter_map=chapter_map,
         output_dir=OUTPUT_DIR, retroactive_dir=RETROACTIVE_DIR, backup_dir=BACKUP_DIR,
+        writer_context=SimpleNamespace(**globals()),
     )
     print(f"Retroactive {audit_label}: rules={result['replacement_rules_considered']}, "
           f"category eligible={result['rules_eligible_by_category']}, "

@@ -26,6 +26,12 @@ CLOCK = lambda: datetime(2026, 10, 12, 11, tzinfo=timezone.utc)
 pytestmark = pytest.mark.usefixtures("synthetic_goat_hard_bound")
 
 
+def locked_finalize(module, *args, **kwargs):
+    from production_run_lock import production_run_lock
+    with production_run_lock(Path(module.OUTPUT_DIR).absolute().parent.parent):
+        return final.finalize_periodic_audit(module, *args, **kwargs)
+
+
 def snapshot(project):
     return {str(p.relative_to(project.root)): p.read_bytes() for p in project.root.rglob("*") if p.is_file()}
 
@@ -73,6 +79,14 @@ def incident(tmp_path, monkeypatch, request):
             (project.chapter_dir / "0388.md").write_bytes(b"Mount Yourong stood there.\r\n")
     project = load_novel_project("fixture", repo_root=tmp_path)
     module = local_module(project)
+    # The old fixture asserted an audited prefix without any immutable lineage.
+    # Supply a genuine local zero-send prior intent/checkpoint instead.
+    module.progress["last_audited_chapter"] = 0
+    _write_json(project.progress_file, module.progress)
+    _write_json(module.periodic_audit_checkpoint_path(1, 375), {"synthetic_zero_send": True})
+    locked_finalize(module, 1, 375, {"decisions": [], "issues": []},
+        {field: 0 for field in final.STAT_TOTAL_FIELDS},
+        {"candidate_count": 0, "api_request_count": 0, "candidate_set_hash": "synthetic-zero-prefix"})
     if fixture_mode == "relative":
         monkeypatch.chdir(project.root)
         for name in ("CHAPTERS_FILE", "GLOSSARY_FILE", "PROGRESS_FILE", "CONTINUITY_FILE", "ISSUES_FILE", "AUDIT_HISTORY_FILE",
@@ -129,7 +143,9 @@ def incident(tmp_path, monkeypatch, request):
     prepared = final.prepare_finalization(module, 376, 400, audit_result, stats, chunking)
     # Reproduce the live failure prefix: durable PR155 transaction, old state.
     if not fixture_mode.startswith("mixed"):
-        module.apply_retroactive_replacements("0376_0400", 400, prepared["record"]["changes"]["retroactive_replacements"], staged_glossary=prepared["post"]["glossary"])
+        from production_run_lock import production_run_lock
+        with production_run_lock(project.root):
+            module.apply_retroactive_replacements("0376_0400", 400, prepared["record"]["changes"]["retroactive_replacements"], staged_glossary=prepared["post"]["glossary"])
     return project, module, audit_result, stats, chunking
 
 
@@ -167,7 +183,7 @@ def test_live_shaped_local_recovery_and_already_finalized(incident, monkeypatch)
     glossary = json.loads(project.glossary_file.read_bytes())
     assert glossary["entries"]["有榮山"]["english"] == "Mount Yourong"
     assert glossary["entries"]["有熙氏"] == module.glossary["entries"]["有熙氏"]
-    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 1
+    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 2
     for key, payload in before_tx.items():
         assert (project.root / key).read_bytes() == payload
     after = snapshot(project)
@@ -201,7 +217,7 @@ def test_accounting_failure_before_any_prose_transaction(incident, monkeypatch):
     before = snapshot(project)
     monkeypatch.setattr(final.tx, "execute_retroactive_transaction", lambda **k: pytest.fail("transaction before accounting validation"))
     with pytest.raises((RuntimeError, ProductionProviderError)):
-        final.finalize_periodic_audit(module, 376, 400, result, bad, chunking)
+        locked_finalize(module, 376, 400, result, bad, chunking)
     assert snapshot(project) == before
 
 
@@ -231,12 +247,12 @@ def test_every_local_publication_prefix_reconciles_without_duplicates(incident, 
             raise KeyboardInterrupt("synthetic backup crash")
     monkeypatch.setattr(final, "atomic_write_bytes", crash_backup)
     with pytest.raises(KeyboardInterrupt):
-        final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+        locked_finalize(module, 376, 400, result, stats, chunking)
     monkeypatch.setattr(module, "save_json", original)
     monkeypatch.setattr(final, "atomic_write_bytes", original_bytes)
-    outcome = final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+    outcome = locked_finalize(module, 376, 400, result, stats, chunking)
     assert outcome["status"] in {"FINALIZED", "ALREADY_FINALIZED"}
-    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 1
+    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 2
     assert len(json.loads(project.progress_file.read_bytes())["accounted_api_operation_ids"]) == 1
     assert plan(project)["status"] == "ALREADY_FINALIZED"
 
@@ -282,17 +298,17 @@ def test_recovery_drift_fails_closed(incident, fault):
 
 def test_zero_candidate_goat_audit_no_fabricated_paid_accounting(incident):
     project, module, result, stats, chunking = incident
-    module.progress["last_audited_chapter"] = 400
+    locked_finalize(module, 376, 400, result, stats, chunking)
     module.progress.update(last_completed=425, next_chapter=426, completed=list(range(1, 426)))
     for n in range(401, 426): (project.chapter_dir / f"{n:04d}.md").write_bytes(b"English.")
     _write_json(project.progress_file, module.progress)
     _write_json(project.continuity_file, dict(latest_chapter=425, summary="fixture"))
     zero_result, zero_stats, zero_chunking = module.call_periodic_audit(401, 425)
     before = copy.deepcopy(module.progress)
-    final.finalize_periodic_audit(module, 401, 425, zero_result, zero_stats, zero_chunking)
+    locked_finalize(module, 401, 425, zero_result, zero_stats, zero_chunking)
     assert module.progress == {**before, "last_audited_chapter": 425}
     assert "provider" not in zero_stats and "accounting_components" not in zero_stats
-    assert final.finalize_periodic_audit(module, 401, 425, zero_result, zero_stats, zero_chunking)["status"] == "ALREADY_FINALIZED"
+    assert locked_finalize(module, 401, 425, zero_result, zero_stats, zero_chunking)["status"] == "ALREADY_FINALIZED"
 
 
 def test_direct_generic_aggregate_unchanged():
@@ -322,7 +338,9 @@ def test_shared_finalizer_reconciles_interrupted_new_pr155_transaction(incident,
     project, module, result, stats, chunking = incident
     original_bytes = next(project.backup_dir.rglob("0388.md")).read_bytes()
     (project.chapter_dir / "0388.md").write_bytes(original_bytes)
-    for path in (project.retroactive_dir / "transactions").glob("*.json"): path.unlink()
+    from retroactive_span_planning import canonical_hash
+    slot = canonical_hash(dict(novel_id=project.config.id, audit_label="0376_0400", through_chapter=400))
+    for path in (project.retroactive_dir / "transactions").glob(f"{slot}.*.json"): path.unlink()
     # This starts an independent synthetic new transaction from exact BEFORE.
     original_json, original_write = final.tx.atomic_write_json, final.tx.atomic_write_bytes
     def json_crash(path, data):
@@ -341,7 +359,7 @@ def test_shared_finalizer_reconciles_interrupted_new_pr155_transaction(incident,
     monkeypatch.setattr(final.tx, "atomic_write_json", json_crash)
     monkeypatch.setattr(final.tx, "atomic_write_bytes", byte_crash)
     with pytest.raises(KeyboardInterrupt):
-        final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+        locked_finalize(module, 376, 400, result, stats, chunking)
     monkeypatch.setattr(final.tx, "atomic_write_json", original_json)
     monkeypatch.setattr(final.tx, "atomic_write_bytes", original_write)
     assert plan(project)["status"] == "READY"
@@ -404,7 +422,7 @@ def test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh
                 raise KeyboardInterrupt("before outer publication")
         with monkeypatch.context() as mp:
             mp.setattr(final.tx, "atomic_write_json", stop)
-            with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(module,376,400,result,stats,chunking)
+            with pytest.raises(KeyboardInterrupt): locked_finalize(module,376,400,result,stats,chunking)
     if damage == "backup":
         path = next(project.backup_dir.rglob("0388.md"))
     else:
@@ -465,7 +483,7 @@ def test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once(incide
         mp.setattr(final.tx, "atomic_write_json", crash_json)
         mp.setattr(final.tx, "atomic_write_bytes", crash_bytes)
         mp.setattr(module, "save_json", crash_json)
-        with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(module,376,400,result,stats,chunking)
+        with pytest.raises(KeyboardInterrupt): locked_finalize(module,376,400,result,stats,chunking)
     assert fired
     from production_uncertain_request_disposition import effective_paid_request_inventory
     if boundary != "progress":
@@ -474,7 +492,7 @@ def test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once(incide
     assert execute(project, approved)["status"] in {"FINALIZED", "ALREADY_FINALIZED"}
     assert (project.chapter_dir / "0002.md").read_bytes() == preferred
     assert len(json.loads(project.progress_file.read_bytes())["accounted_api_operation_ids"]) == 1
-    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 1
+    assert len(json.loads(project.audit_history_file.read_bytes())["audits"]) == 2
     before = snapshot(project)
     assert execute(project)["status"] == "ALREADY_FINALIZED"
     assert before == snapshot(project)
@@ -490,7 +508,7 @@ def test_out_of_order_chapter_after_prefix_blocks_local_reconciliation(incident,
             raise KeyboardInterrupt("after first historical edit")
     with monkeypatch.context() as mp:
         mp.setattr(final.tx, "atomic_write_bytes", stop)
-        with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(module,376,400,result,stats,chunking)
+        with pytest.raises(KeyboardInterrupt): locked_finalize(module,376,400,result,stats,chunking)
     intent = final.load_intent(module,376,400)
     items = [i for i in intent["transaction_plan"]["chapters"] if i["edits"]]
     assert [i["chapter"] for i in items] == [1,388]
@@ -518,7 +536,7 @@ def test_legacy_intent_preserves_completion_but_cannot_regenerate_plan(incident,
             if Path(path) == project.glossary_file: raise KeyboardInterrupt("legacy outer tail")
         with monkeypatch.context() as mp:
             mp.setattr(module,"save_json",stop)
-            with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(module,376,400,result,stats,chunking)
+            with pytest.raises(KeyboardInterrupt): locked_finalize(module,376,400,result,stats,chunking)
     path = next(project.audit_dir.glob("*.finalization.json"))
     value = json.loads(path.read_bytes())
     value.pop("historical_proof")
@@ -550,7 +568,7 @@ def test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix(incid
             raise KeyboardInterrupt("intent before plan")
     with monkeypatch.context() as mp:
         mp.setattr(final,"atomic_write_json",stop)
-        with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(module,376,400,result,stats,chunking)
+        with pytest.raises(KeyboardInterrupt): locked_finalize(module,376,400,result,stats,chunking)
     intent = final.load_intent(module,376,400)
     checkpoint = project.backup_dir / "checkpoint_0400"
     checkpoint.mkdir(parents=True)
@@ -615,14 +633,14 @@ def test_aut2_crash_invalidation_precedes_edits_and_progress_last(incident, monk
         mp.setattr(final.tx, "atomic_write_bytes", prose)
         mp.setattr(module, "save_json", save)
         with pytest.raises(KeyboardInterrupt):
-            final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+            locked_finalize(module, 376, 400, result, stats, chunking)
     journals = {p.name: p.read_bytes() for p in module.PAID_REQUEST_JOURNAL_DIR.glob("*.json")}
     reloaded = local_module(project)
-    final.finalize_periodic_audit(reloaded, 376, 400, result, stats, chunking)
+    locked_finalize(reloaded, 376, 400, result, stats, chunking)
     assert journals == {p.name: p.read_bytes() for p in module.PAID_REQUEST_JOURNAL_DIR.glob("*.json")}
     assert history.publication_freshness(project)["status"] == "STALE"
     before = snapshot(project)
-    final.finalize_periodic_audit(local_module(project), 376, 400, result, stats, chunking)
+    locked_finalize(local_module(project), 376, 400, result, stats, chunking)
     assert snapshot(project) == before
 
 
@@ -661,7 +679,7 @@ def test_aut2_review_paid_proof_failure_precedes_first_receipt(incident, monkeyp
     with monkeypatch.context() as mp:
         mp.setattr(final, "atomic_write_json", stop)
         with pytest.raises(KeyboardInterrupt):
-            final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+            locked_finalize(module, 376, 400, result, stats, chunking)
     if damage == "checkpoint":
         module.periodic_audit_checkpoint_path(376, 400).write_bytes(b"stale checkpoint")
     else:
@@ -673,7 +691,8 @@ def test_aut2_review_paid_proof_failure_precedes_first_receipt(incident, monkeyp
     before = snapshot(project)
     directories = {p.relative_to(project.root).as_posix() for p in project.root.rglob("*") if p.is_dir()}
     with pytest.raises((RuntimeError, ValueError)):
-        final.finalize_periodic_audit(module, 376, 400, result, stats, chunking)
+        locked_finalize(module, 376, 400, result, stats, chunking)
     assert snapshot(project) == before
     assert {p.relative_to(project.root).as_posix() for p in project.root.rglob("*") if p.is_dir()} == directories
-    assert not (project.root / "output/publication_freshness").exists()
+    intent = final.load_intent(module, 376, 400)
+    assert not history.invalidation_path(module, intent).exists()

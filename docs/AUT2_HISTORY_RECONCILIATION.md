@@ -1,5 +1,158 @@
 # AUT-2: historical evidence and publication invalidation (first vertical slice)
 
+## Historical writer safety candidate (separate local descendant of PR #15)
+
+This slice starts exactly at `8b60e9c2add101c32792e4698725f97a2cc5d307`
+(tree `a5d895ebbf9cbdf65ecbc86cd8358d12a8ba080d`). PR #15's worktree,
+branch, commits and evidence are unchanged. This is a local implementation
+candidate awaiting Command Code's independent writer qualification; **L4 remains
+NOT VERIFIED**. The independently frozen legacy matrix remains recorded as
+50 PASS / 12 FAIL. It has not been modified, replaced or reclassified. Its
+J5/J8 literal-source-variant limitations remain outside this correction.
+
+### Boundaries and proof
+
+The active lifecycle dispatches through the existing shared periodic finalizer.
+That finalizer, the direct transaction entry, its internal execution seam, the
+known-fix compatibility adapter, and the experimental baseline/restoration
+adapter now require safety proof before new transaction/publication artifacts.
+The local finalization executor still owns its existing novel lock and calls
+that same finalizer; it has no alternate prose writer. Archived standalone
+translator versions remain unsupported operator entry points.
+
+The guard requires the actual caller-held novel lock lease, verified against
+the existing process/thread registry and open descriptor. A rendezvous file's
+existence is insufficient. The existing nested transaction lock is retained.
+Direct callers can derive local context from canonical novel files; supplying
+a discovery report or an eligibility count never grants authority.
+
+Authoritative on-disk progress must be typed, ordered and continuous from
+Chapter 1 through `last_completed`, with the exact next boundary. Its complete
+canonical committed Markdown inventory must agree, including chapters skipped
+by the span planner. Caller inventories must equal the complete current list
+or its exact `1..through_chapter` prefix; empty, sparse, duplicated, reordered,
+non-integer, omitted, extra and nested chapter inventories block. The original
+on-disk source library is independently indexed under the novel configuration;
+all source-unit metadata, configuration and safe-category policy are bound and
+must agree with the live context. The engine does not trust a caller's subset.
+
+All prior applicable immutable finalization intents are independently reproved
+using the qualified reservation loader: ordered history, original source/unit
+witnesses, baseline/post glossary ownership, deterministic plans, BEFORE backups,
+byte chains, checkpoint state and paid leaf proofs where required. Removed
+longer source identities and shared English target families remain reservations.
+They can only veto edits independently selected by the existing
+`owned-single-span-v1` planner. They cannot add anchors, accepted changes, aliases,
+normalization, repeated-span pairing, or new positive eligibility. D4/D5 stop the
+whole operation with `HISTORICAL_OWNERSHIP_RESERVATION`; conflicting saved plans
+stop with `IMMUTABLE_PLAN_POLICY_CONFLICT`. Missing/unproven historical evidence
+fails closed. No old plan is trimmed, rehashed, overwritten or migrated.
+
+New authorization uses an immutable per-slot `.authorization.json` sidecar with
+revision `historical-writer-authorization-v1`. It binds the exact original plan,
+complete inventory/BEFORE revision, accepted-change/source witness, reservation
+policy, prior intent identities and physical historical evidence hashes. It is
+always rederived under the actual lock. A changed receipt/evidence/rule/config/
+source inventory blocks; the receipt is never an independent authorization token.
+A crash before plan publication can leave a proof-bound authorization prefix;
+restart may reuse it only after exact reproof, never repair or replace it.
+
+The transaction plan schema, operation slots, transaction IDs, exact UTF-8 byte
+spans, original backups and result records remain unchanged. The finalizer also
+binds authorization before an already-applied transaction's associated-state
+publication tail. Invalidation still precedes prose; progress remains last.
+Finalized direct replay verifies result/reconciliation hashes, exact state,
+AFTER prose and BEFORE backups, and returns diagnostics without rewriting any
+finalized artifact. BLOCKED or contradictory old states require disposition.
+
+Zero-candidate audits remain local-only. The established no-request path may
+have no acquisition checkpoint; absence is accepted only for an immutable,
+reconstructed zero-send/zero-decision/zero-edit audit with unchanged glossary and
+zero usage. Its absence is explicitly hashed as `ABSENT_ZERO_SEND`. No fake
+checkpoint is manufactured. This exception is writer-specific; the qualified
+preflight's default reservation behavior is unchanged.
+
+### Deliberate compatibility limits — LOCAL_BLOCKED until proof exists
+
+- Historical mutation must run under the actual novel lock with canonical,
+  independently readable disk state. Sparse ad-hoc fixtures and unhydrated API
+  contexts no longer authorize writes.
+- Direct periodic requests require their matching immutable accepted intent.
+  The existing legacy GOAT before-intent path can derive the exact candidate
+  from the transport-free paid-checkpoint owner. An unprovable Direct periodic
+  request fails closed rather than treating a checkpoint marker as approval.
+- An old standalone plan without a bound authorization or original immutable
+  source-unit witness cannot acquire a newly invented baseline. Unbound plans,
+  incomplete/superseded/forked intent chains and legacy missing provenance remain
+  blocked; this slice supplies no evidence migration or operator override.
+  This also limits continuation after a newly guarded standalone known-fix
+  transaction: a later periodic audit cannot bridge that standalone operation
+  using only its plan and authorization digest. It remains blocked instead of
+  guessing the intervening original glossary/source-unit state. A separately
+  qualified standalone lineage adapter must persist/reconstruct the original
+  ownership and inventory witnesses and compose their ordered BEFORE/AFTER chain
+  with periodic intents. No such format/evidence migration is implemented here.
+- Extra next-chapter final output belongs to the existing reviewed partial-commit
+  startup reconciler, which still runs before due audits. Historical mutation
+  blocks until that owner completes its independently proven tail. Matching
+  pending Markdown alone is not an inventory exception or committed edit input.
+  Pending work is preserved; the writer does not finish, delete or retranslate it.
+- Experimental legacy prose rollback is blocked when a complete source/ownership
+  proof cannot be established. Valid owned-span BEFORE/AFTER recovery is retained.
+
+These are explicit fail-closed boundaries, not a claim that all historical
+production data can already be migrated or that unrestricted historical mutation
+is safe. No provider execution, production input, paid replay, publication
+currentness assertion, CI policy change, push or new PR is authorized here.
+
+### Writer regression qualification
+
+New `writer_safety` tests map to WS-D4/D5, WS-J3/J4, WS-HIST, WS-ATOM, WS-GUARD,
+WS-HASH, WS-LOCK, WS-IDEM and WS-GREEN from the external frozen handoff. They cover
+the actual finalizer, direct/internal transaction, startup known-fix and real
+restoration boundaries, including unsafe PLANNED/APPLIED/FINALIZED legacy
+prefixes. Blocked cases compare complete disposable novel bytes and mtimes;
+held Windows rendezvous files are compared by inode/size/mtime because their
+locked bytes intentionally cannot be read. Journals, pending work, backups,
+receipts, audit evidence, final/EPUB stand-ins and unrelated novels are preserved.
+
+Existing sparse synthetic fixtures now use actual complete canonical disk
+inventories. Integration fixtures that previously asserted an audited prefix
+without intents now finalize a genuine zero-send prior audit. Their deletion /
+corruption injections target the current transaction and preserve prior lineage.
+The four original unsafe characterization nodes now assert blocking; their old
+unsafe observations and the independent 62-case evidence remain preserved.
+
+Python 3.14.4 guarded zero-provider qualification (each run used a fresh GUID
+child of the external system TEMP directory and explicitly deselected
+`tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip`):
+
+- `tests/test_retroactive_transactions.py -k writer_safety`: **77 passed,
+  193 deselected, exit 0** (169.15 s).
+- `tests/test_retroactive_transactions.py tests/test_production_lifecycle.py`:
+  **355 passed, exit 0** (844.78 s). This collection preceded the single
+  standalone-continuation regression appended below; runtime code did not change.
+- `tests/test_retroactive_transactions.py -k standalone_known_fix_continuation`:
+  **1 passed, 270 deselected, exit 0** (8.00 s), confirming the documented
+  compatibility block without mutation.
+- `tests/test_goat_periodic_audit_finalization.py -k
+  'fresh_audit_mixed_old_and_preferred_baseline_finalizes_once or
+  zero_candidate_goat_audit_no_fabricated_paid_accounting or
+  aut2_review_paid_proof_failure_precedes_first_receipt or
+  shared_finalizer_reconciles_interrupted_new_pr155_transaction'`:
+  **9 passed, 88 deselected, exit 0** (1285.28 s).
+
+`python -m py_compile` passed for all eight changed Python files; whitespace
+checks passed. The staged publication guard passed for 490 files. The exact
+committed-tree guard must also pass after the local commit. The finalizer
+selection is focused integration evidence, not a qualification claim for its
+entire module or the frozen independent matrix. No private fixture, production
+input, real provider or real DPAPI was accessed.
+
+Stop after the local correction commit for Command Code's independent exact-tree
+qualification. Do not push, open another PR, activate production or infer an
+exception from any earlier PR's disposition.
+
 ## Phase 3 adversarial correction: local candidate, writer still blocked
 
 The original candidate `505057f38250cda0664009dbc0065008b4f049d3`

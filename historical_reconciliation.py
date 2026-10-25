@@ -151,7 +151,7 @@ def _discovery_intent(module, start, end, expected_sha):
 
 
 
-def _historical_reservations(module, selected):
+def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False):
     """Prove prior immutable publications before reserving their ownership.
 
     Only a veto inventory: never feed it into positive edit authorization.
@@ -167,6 +167,10 @@ def _historical_reservations(module, selected):
         records = selected["baseline"]["history"]["audits"]
         paths = list(plain(module.AUDIT_DIR).glob("*.finalization.json"))
         intents = [audit_intent(module, path) for path in paths]
+        if unpublished:
+            require(not any(i["start"] == selected["start"] for i in intents),
+                    "COMPETING_UNPUBLISHED_OWNERSHIP_INTENT")
+            intents.append(selected)
         prior = sorted((i for i in intents if i["end"] < selected["start"]),
                        key=lambda i: (i["start"], i["end"]))
         require(len(intents) == len(prior) + 1 and selected in intents,
@@ -207,8 +211,11 @@ def _historical_reservations(module, selected):
                                           state_paths(module)[key].name)) == intent["post"][key],
                         "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
             checkpoint = plain(module.periodic_audit_checkpoint_path(start, end))
-            require(digest(checkpoint.read_bytes()) == intent["checkpoint_sha256"],
-                    "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
+            if writer_zero_send:
+                _writer_checkpoint(module, intent)
+            else:
+                require(digest(checkpoint.read_bytes()) == intent["checkpoint_sha256"],
+                        "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
             require(digest(plain(module.BACKUP_DIR / f"checkpoint_{end:04d}" /
                                  module.CONTINUITY_FILE.name).read_bytes()) == intent["continuity_sha256"],
                     "HISTORICAL_OWNERSHIP_CONTINUITY_DRIFT")
@@ -256,6 +263,273 @@ def _reserve_policy(policy, extra):
         item["contextual"] |= value["contextual"]
         for field in ("targets", "source_forms", "alias_of"):
             item[field] = sorted(set(item[field]) | set(value[field]))
+
+
+
+WRITER_AUTHORIZATION_REVISION = "historical-writer-authorization-v1"
+
+
+def _writer_checkpoint(module, intent):
+    """No-send audit absence is an explicit local fact, never a paid witness."""
+    path = plain(module.periodic_audit_checkpoint_path(intent["start"], intent["end"]))
+    if path.is_file():
+        require(digest(path.read_bytes()) == intent["checkpoint_sha256"], "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+        read_object(path)
+        return
+    from production_periodic_audit_finalization import STAT_TOTAL_FIELDS
+    require(intent["checkpoint_sha256"] == "" and intent["chunking"].get("candidate_count") == 0
+            and intent["chunking"].get("api_request_count", 0) == 0
+            and intent["audit_result"].get("decisions") == []
+            and intent["audit_stats"].get("api_request_count", 0) == 0
+            and not intent["audit_stats"].get("accounting_components")
+            and all(intent["audit_stats"].get(k, 0) == 0 for k in STAT_TOTAL_FIELDS)
+            and intent["post"]["glossary"] == intent["baseline"]["glossary"]
+            and not intent["transaction_plan"]["request"]["rules"]
+            and not any(item["edits"] for item in intent["transaction_plan"]["chapters"]),
+            "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+
+
+def writer_module(output_dir, novel_id):
+    """Derive context from canonical novel files, never a caller's report."""
+    from novel_project import NovelProject, NovelConfig, repository_root, legacy_project
+    from goat_periodic_audit_finalize_plan import local_module
+    output = plain(Path(output_dir).absolute())
+    root = output.parent.parent
+    require(output == root / "output/chapters", "AUTHORITATIVE_WRITER_CONTEXT_UNAVAILABLE")
+    config_path = plain(root / "novel.json")
+    if config_path.is_file():
+        config = NovelConfig.from_dict(read_object(config_path))
+        require(config.id == novel_id, "FOREIGN_WRITER_NOVEL")
+        project = NovelProject(repository_root(), root, config)
+    else:
+        require(novel_id == "legacy_single_novel", "AUTHORITATIVE_WRITER_CONTEXT_UNAVAILABLE")
+        project = legacy_project(root)
+    from production_run_lock import held_production_run_lock, ProductionRunLockedError
+    try:
+        held_production_run_lock(root)
+    except RuntimeError as exc:
+        raise ProductionRunLockedError("Actual caller-held novel production lock required") from exc
+    module = local_module(project)
+    if project.is_legacy:
+        module.ACTIVE_NOVEL_CONFIG = None
+    return module
+
+
+def writer_inventory(module, supplied, through):
+    """Independent disk inventory under the actual caller-held novel lock."""
+    from chapter_library import index_chapter_library
+    from production_run_lock import held_production_run_lock, ProductionRunLockedError
+    root = plain(Path(module.OUTPUT_DIR).absolute()).parent.parent
+    try:
+        held_production_run_lock(root)  # Registry/descriptor proof, not file existence.
+    except RuntimeError as exc:
+        raise ProductionRunLockedError("Actual caller-held novel production lock required") from exc
+    expected_paths = dict(OUTPUT_DIR="output/chapters", RETROACTIVE_DIR="output/retroactive_fixes",
+        BACKUP_DIR="backup", AUDIT_DIR="output/audits", CHAPTERS_FILE="data/chapters.json",
+        PROGRESS_FILE="data/progress.json", GLOSSARY_FILE="data/glossary.json",
+        AUDIT_HISTORY_FILE="data/audit_history.json", ISSUES_FILE="data/issues.json",
+        CONTINUITY_FILE="data/continuity.json")
+    for name, relative in expected_paths.items():
+        require(plain(Path(getattr(module, name)).absolute()) == root / relative,
+                "FOREIGN_WRITER_ROOT")
+    progress = read_object(module.PROGRESS_FILE)
+    last, numbers = progress.get("last_completed"), progress.get("completed")
+    require(type(last) is int and last > 0 and isinstance(numbers, list)
+            and all(type(n) is int for n in numbers) and numbers == list(range(1, last + 1))
+            and type(progress.get("next_chapter")) is int and progress["next_chapter"] == last + 1,
+            "NONSEQUENTIAL_COMMITTED_INVENTORY")
+    require(type(through) is int and 1 <= through <= last, "COMMITTED_INVENTORY_DRIFT")
+    require(isinstance(supplied, list) and all(type(n) is int for n in supplied)
+            and supplied == sorted(set(supplied)), "NONSEQUENTIAL_COMMITTED_INVENTORY")
+    require(supplied in (numbers, list(range(1, through + 1))), "COMMITTED_INVENTORY_INCOMPLETE")
+    require(module.progress.get("completed") == numbers and module.progress.get("last_completed") == last
+            and module.progress.get("next_chapter") == last + 1, "COMMITTED_INVENTORY_DRIFT")
+    library = read_value(module.CHAPTERS_FILE)
+    require(isinstance(library, list) and library, "SOURCE_INVENTORY_UNPROVEN")
+    from novel_project import NovelConfig, legacy_project
+    if (root / "novel.json").is_file():
+        config = NovelConfig.from_dict(read_object(root / "novel.json"))
+        require(module.ACTIVE_NOVEL_CONFIG is not None and module.ACTIVE_NOVEL_CONFIG.id == config.id,
+                "FOREIGN_WRITER_NOVEL")
+    else:
+        require(module.ACTIVE_NOVEL_CONFIG is None, "FOREIGN_WRITER_NOVEL")
+        config = legacy_project(root).config
+    try:
+        source_map = index_chapter_library(library, config.final_chapter, config.chapter_numbering)
+    except ValueError as exc:
+        raise ProductionIntegrityError("AUT2: SOURCE_INVENTORY_DRIFT") from exc
+    require(len(source_map) == len(library) and list(source_map) == list(range(1, len(library) + 1))
+            and set(numbers) <= source_map.keys() and source_map == module.chapter_map,
+            "SOURCE_INVENTORY_DRIFT")
+    source_inventory(source_map)
+    files = {p.relative_to(module.OUTPUT_DIR).as_posix(): plain(p)
+             for p in plain(module.OUTPUT_DIR).rglob("*.md")}
+    expected = {f"{n:04d}.md" for n in numbers}
+    require(expected <= files.keys(), "COMMITTED_INVENTORY_INCOMPLETE")
+    extra = files.keys() - expected
+    # The existing startup reconciler owns its exact reviewed-pending exception
+    # BEFORE due audits. A historical writer cannot certify or consume it.
+    require(not extra, "COMMITTED_INVENTORY_EXTRA")
+    from translation_profile import load_translation_profile
+    from novel_project import repository_root
+    profile = load_translation_profile(config.profile, repository_root())
+    require(set(module.ACTIVE_PROFILE.retroactive_safe_categories) == set(profile.retroactive_safe_categories),
+            "WRITER_POLICY_DRIFT")
+    return dict(novel_id=(module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"),
+                config_sha256=canonical_hash(config.to_dict()), committed=numbers, through=through, source_inventory=source_inventory(source_map),
+                pending_exception={name: digest(files[name].read_bytes()) for name in extra})
+
+
+def writer_authorization(module, plan, *, selected=None, unpublished=False):
+    """Fresh veto proof for this exact immutable plan; never edit authority alone.
+
+    This is not the discovery report. Both callers rederive disk inventory and
+    prior-intent proofs before persistence; the receipt binds their versioned
+    hashes to the original plan without rewriting that plan's schema or bytes.
+    """
+    from production_periodic_audit_finalization import load_intent, verify_publication
+    request = plan["request"]
+    inventory = writer_inventory(module, request["committed_chapters"], request["through_chapter"])
+    require(request["novel_id"] == inventory["novel_id"], "FOREIGN_WRITER_NOVEL")
+    require(request["safe_categories"] == sorted(module.ACTIVE_PROFILE.retroactive_safe_categories),
+            "WRITER_POLICY_DRIFT")
+    tx.validate_plan(plan, request, module.chapter_map)
+    originals = {}
+    for item in plan["chapters"]:
+        n = item["chapter"]
+        path = plain(module.OUTPUT_DIR / f"{n:04d}.md")
+        raw = path.read_bytes()
+        require(digest(raw) in {item["before_sha256"], item["after_sha256"]},
+                f"Chapter {n}: current SHA neither BEFORE nor AFTER")
+        backup = plain(module.BACKUP_DIR / f"retroactive_{plan['transaction_id']}" / "chapters_before" / path.name)
+        if backup.exists():
+            require(digest(backup.read_bytes()) == item["before_sha256"], f"Chapter {n}: backup hash mismatch")
+        if item["edits"] and digest(raw) == item["after_sha256"]:
+            require(backup.is_file(), f"Chapter {n}: AFTER lacks BEFORE backup")
+            raw = backup.read_bytes()
+        originals[n] = raw
+    require(tx.build_plan(request, originals, module.chapter_map) == plan, "IMMUTABLE_PLAN_POLICY_CONFLICT")
+    if selected is None:
+        import re
+        match = re.fullmatch(r"(\d{4,})_(\d{4,})", request["audit_label"])
+        if match:
+            start, end = map(int, match.groups())
+            require(end == request["through_chapter"], "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+            selected = load_intent(module, start, end)
+            if selected is None and request["rules"]:
+                # The legacy GOAT direct-before-intent prefix has a transport-
+                # free accepted-checkpoint owner. Derive its candidate afresh.
+                # Other periodic callers need an immutable accepted intent.
+                require(module.progress.get("provider") == "command_code_provider",
+                        "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+                from goat_periodic_audit_finalize_plan import checkpoint_proof
+                from production_periodic_audit_finalization import prepare_finalization, publication_timestamp
+                paid = checkpoint_proof(module, start, end)
+                selected = prepare_finalization(module, start, end, paid["audit_result"], paid["audit_stats"],
+                    paid["chunking"], timestamp=publication_timestamp(module, start, end))
+                require(selected["transaction_plan"] == plan, "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+                unpublished = True
+        if selected is None:
+            history = read_object(module.AUDIT_HISTORY_FILE)
+            last_audit = read_object(module.PROGRESS_FILE).get("last_audited_chapter", 0)
+            require(type(last_audit) is int and 0 <= last_audit <= request["through_chapter"],
+                    "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
+            selected = dict(start=last_audit + 1, end=request["through_chapter"],
+                baseline=dict(history=history), transaction_plan=plan)
+            unpublished = True
+        else:
+            require(selected["transaction_plan"] == plan, "IMMUTABLE_PLAN_POLICY_CONFLICT")
+            verify_publication(module, selected)
+            # Direct recovery must reprove the current accepted audit too, not
+            # merely trust a self-consistent stored intent/hash.
+            from types import SimpleNamespace
+            from production_periodic_audit_finalization import prepare_finalization, transaction_proof
+            detached = SimpleNamespace(**vars(module))
+            for key, name in (("glossary", "glossary"), ("progress", "progress"),
+                              ("issues", "issues_data"), ("history", "audit_history")):
+                setattr(detached, name, copy.deepcopy(selected["baseline"][key]))
+            if detached.progress.get("provider") == "command_code_provider" and selected["chunking"].get("candidate_count", 0):
+                from goat_periodic_audit_finalize_plan import checkpoint_proof
+                paid = checkpoint_proof(detached, selected["start"], selected["end"])
+                require(all(paid[k] == selected[k] for k in ("audit_result", "audit_stats")),
+                        "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+            transaction_proof(detached, selected["start"], selected["end"], selected["baseline"]["glossary"],
+                              selected["post"]["glossary"], selected["record"]["changes"])
+            prepared = prepare_finalization(detached, selected["start"], selected["end"], selected["audit_result"],
+                selected["audit_stats"], selected["chunking"], timestamp=selected["record"]["timestamp_unix"])
+            for value in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
+                value["retroactive"] = selected["record"]["retroactive"]
+            require(all(prepared[k] == selected[k] for k in ("post", "record", "transaction_plan", "operation_id")),
+                    "WRITER_ACCEPTED_CHANGE_UNPROVEN")
+    slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+    directory = module.RETROACTIVE_DIR / "transactions"
+    if (directory / f"{slot}.plan.json").exists() and not (directory / f"{slot}.authorization.json").exists():
+        require(not unpublished and "historical_proof" in selected
+                and "historical_reconciliation" in selected.get("record", {}),
+                "IMMUTABLE_PLAN_POLICY_CONFLICT: HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
+    if "checkpoint_sha256" in selected:
+        require("historical_proof" in selected and "historical_reconciliation" in selected.get("record", {}),
+                "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
+        _writer_checkpoint(module, selected)
+    reservations, lineage = _historical_reservations(module, selected, unpublished=unpublished, writer_zero_send=True)
+    reserved = copy.deepcopy(request["ownership_policy"])
+    _reserve_policy(reserved, reservations)
+    for item in plan["chapters"]:
+        edits, _ = plan_chapter(module.chapter_map[item["chapter"]]["text"], originals[item["chapter"]],
+                               request["rules"], reserved, request["safe_categories"])
+        # A reservation is a veto, never a replacement plan or new source anchor.
+        require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
+    known_transactions = {plan["transaction_id"]}
+    for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
+        known_transactions.add(audit_intent(module, path)["transaction_plan"]["transaction_id"])
+    for path in plain(module.RETROACTIVE_DIR / "transactions").glob("*.plan.json"):
+        require(read_object(path).get("transaction_id") in known_transactions,
+                "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN: UNBOUND_HISTORICAL_TRANSACTION")
+    before_manifest = {f"{n:04d}.md": digest(plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes())
+                       for n in inventory["committed"]}
+    before_manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in plan["chapters"]})
+    historical_files = {}
+    # Bind physical immutable evidence as well as semantic intent identities.
+    # Current transaction/publication prefixes are deliberately excluded; their
+    # exact immutable plan and BEFORE inventory are bound separately below.
+    for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
+        prior = audit_intent(module, path)
+        if prior["intent_sha256"] not in lineage:
+            continue
+        prior_request = prior["transaction_plan"]["request"]
+        prior_slot = canonical_hash({k: prior_request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+        files = [path, module.AUDIT_DIR / f"audit_{prior['start']:04d}_{prior['end']:04d}.json"]
+        checkpoint = module.periodic_audit_checkpoint_path(prior["start"], prior["end"])
+        if checkpoint.is_file():
+            files.append(checkpoint)
+        else:
+            # _writer_checkpoint has already proved the exact no-send shape.
+            root = Path(module.OUTPUT_DIR).absolute().parent.parent
+            historical_files[Path(checkpoint).absolute().relative_to(root).as_posix()] = "ABSENT_ZERO_SEND"
+        files += list((module.RETROACTIVE_DIR / "transactions").glob(f"{prior_slot}.*.json"))
+        files += list((module.BACKUP_DIR / f"checkpoint_{prior['end']:04d}").glob("*"))
+        files += list((module.BACKUP_DIR / f"retroactive_{prior['transaction_plan']['transaction_id']}" /
+                       "chapters_before").glob("*.md"))
+        root = Path(module.OUTPUT_DIR).absolute().parent.parent
+        for evidence in files:
+            require(plain(evidence).is_file(), "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
+            historical_files[Path(evidence).absolute().relative_to(root).as_posix()] = digest(evidence.read_bytes())
+    accepted = ({k: selected[k] for k in ("start", "end", "baseline", "audit_result", "audit_stats",
+                 "checkpoint_sha256", "continuity_sha256")} if "checkpoint_sha256" in selected else
+                {"standalone_exact_policy": request["ownership_policy"]})
+    if "checkpoint_sha256" in selected:
+        accepted["post_glossary"] = selected["post"]["glossary"]
+        accepted["source_witness"] = selected["record"]["historical_reconciliation"]
+    proof = dict(revision=WRITER_AUTHORIZATION_REVISION, plan_sha256=canonical_hash(plan),
+        accepted_change_sha256=canonical_hash(accepted), historical_evidence_sha256=canonical_hash(historical_files),
+                 inventory_sha256=canonical_hash({**inventory, "before_chapters": before_manifest}),
+                 reservations_sha256=canonical_hash(reserved), prior_intents_sha256=canonical_hash(lineage))
+    proof["authorization_sha256"] = canonical_hash(proof)
+    slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+    receipt = plain(module.RETROACTIVE_DIR / "transactions" / f"{slot}.authorization.json")
+    require(not receipt.exists() or read_object(receipt) == proof,
+            "IMMUTABLE_PLAN_POLICY_CONFLICT: WRITER_AUTHORIZATION_DRIFT")
+    return proof
 
 
 def _unowned_source_script_count(source, policy):

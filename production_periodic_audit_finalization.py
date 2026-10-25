@@ -385,10 +385,20 @@ def verify_publication(module, intent):
 def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunking):
     """Common normal/recovery local seam. Caller owns the novel production lock."""
     from historical_reconciliation import ensure_invalidation, invalidation_path, validate_invalidation_identity, read_object
+    from historical_reconciliation import writer_inventory, writer_authorization
+    # Validate raw disk and caller inventories before even a new intent exists.
+    writer_inventory(module, module.progress.get("completed"), end)
     intent = load_intent(module, start, end)
     if intent is None:
+        if (module.progress.get("provider") == PROVIDER_COMMAND_CODE and chunking.get("candidate_count", 0)
+                and getattr(module, "_experimental_runtime", None) is None):
+            from goat_periodic_audit_finalize_plan import checkpoint_proof
+            paid = checkpoint_proof(module, start, end)
+            require(paid["audit_result"] == audit_result and paid["audit_stats"] == audit_stats,
+                    "audit finalization paid-evidence drift")
         intent = prepare_finalization(module, start, end, audit_result, audit_stats, chunking,
                                       timestamp=publication_timestamp(module, start, end))
+        writer_authorization(module, intent["transaction_plan"], selected=intent, unpublished=True)
         record_path = module.AUDIT_DIR / f"audit_{start:04d}_{end:04d}.json"
         require(not record_path.exists(), "audit record exists without proven intent")
         intent["intent_sha256"] = canonical_sha256(intent)
@@ -431,7 +441,25 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
     for path, sha in proof["evidence"].items():
         if sha and Path(path).suffix == ".json":
             read_object(path)
-    ensure_invalidation(module, intent)  # First receipt write, AFTER pure proof.
+    try:
+        authorization = writer_authorization(module, proof["plan"], selected=intent)
+    except ProductionIntegrityError as exc:
+        if proof["existing"] and "HISTORICAL_OWNERSHIP_RESERVATION" in str(exc):
+            raise AuditFinalizationBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: HISTORICAL_OWNERSHIP_RESERVATION") from exc
+        raise
+    if not finalized:
+        from production_run_lock import production_run_lock
+        request = proof["plan"]["request"]
+        slot = canonical_sha256({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+        directory = module.RETROACTIVE_DIR / "transactions"
+        directory.mkdir(parents=True, exist_ok=True)  # All safety proofs passed.
+        with production_run_lock(directory):
+            require(writer_authorization(module, proof["plan"], selected=intent) == authorization,
+                    "WRITER_AUTHORIZATION_DRIFT")
+            path = directory / f"{slot}.authorization.json"
+            if not path.exists():
+                atomic_write_json(path, authorization)
+    ensure_invalidation(module, intent)  # Publication invalidation still precedes prose.
     if not finalized and (not proof["state"] or proof["state"]["state"] != "FINALIZED"):
         tx.execute_retroactive_transaction(novel_id=proof["plan"]["request"]["novel_id"],
             audit_label=f"{start:04d}_{end:04d}", through_chapter=end,
@@ -439,7 +467,8 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
             glossary=intent["baseline"]["glossary"], staged_glossary=intent["post"]["glossary"],
             safe_categories=module.ACTIVE_PROFILE.retroactive_safe_categories,
             committed_chapters=intent["baseline"]["progress"]["completed"], chapter_map=module.chapter_map,
-            output_dir=module.OUTPUT_DIR, retroactive_dir=module.RETROACTIVE_DIR, backup_dir=module.BACKUP_DIR)
+            output_dir=module.OUTPUT_DIR, retroactive_dir=module.RETROACTIVE_DIR, backup_dir=module.BACKUP_DIR,
+            writer_context=module)
     # Reprove the immutable transaction, its result, backup and AFTER bytes.
     transaction_proof(detached, start, end, intent["baseline"]["glossary"], intent["post"]["glossary"], intent["record"]["changes"])
     paths = state_paths(module)

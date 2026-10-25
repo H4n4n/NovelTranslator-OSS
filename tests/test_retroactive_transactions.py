@@ -9,6 +9,7 @@ import pytest
 
 import retroactive_transactions as tx
 from noveltranslator_core import RETROACTIVE_SAFE_CATEGORIES, source_anchored_replacement
+from production_failure_classification import ProductionIntegrityError
 from retroactive_span_planning import (
     canonical_hash, digest, normalized_rules, ownership_policy, plan_chapter, transform_bytes,
 )
@@ -116,15 +117,69 @@ def test_category_alone_and_compatibility_helper_cannot_authorize():
                            ownership_policy(glossary()), set())[0]
 
 
+def _authoritative_fixture(root, data, chapter_map, last, novel="synthetic"):
+    """Public disposable canonical state; never fabricate a guard/report token."""
+    state = {"glossary": data, "progress": dict(completed=list(range(1, last + 1)),
+        last_completed=last, next_chapter=last + 1, last_audited_chapter=0),
+        "audit_history": {"audits": []}, "issues": {"issues": []}, "continuity": {}}
+    (root / "data").mkdir(parents=True, exist_ok=True)
+    for n, unit in chapter_map.items():
+        unit.setdefault("chapter", n)
+        unit.setdefault("production_index", n)
+    (root / "novel.json").write_text(json.dumps(dict(id=novel, title="Synthetic Writer Safety",
+        profile="historical_military", final_chapter=len(chapter_map), source_language="zh", target_language="en")), encoding="utf-8")
+    for name, value in state.items():
+        (root / "data" / f"{name}.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    (root / "data/chapters.json").write_text(json.dumps(list(chapter_map.values()), ensure_ascii=False), encoding="utf-8")
+
+
+def _extend_sandbox(sandbox, last):
+    root = sandbox["output_dir"].parent.parent
+    for n in range(1, last + 1):
+        sandbox["chapter_map"].setdefault(n, {"chapter": n, "text": ""})
+        path = sandbox["output_dir"] / f"{n:04d}.md"
+        if not path.exists(): path.write_bytes(b"Untouched.\r\n")
+    ordered = dict(sorted(sandbox["chapter_map"].items()))
+    sandbox["chapter_map"].clear()
+    sandbox["chapter_map"].update(ordered)
+    sandbox.update(committed_chapters=list(range(1, last + 1)), through_chapter=last)
+    _authoritative_fixture(root, sandbox["glossary"], sandbox["chapter_map"], last)
+
+
+def _fixture_lock(request, root):
+    from production_run_lock import production_run_lock
+    manager = production_run_lock(root)
+    manager.__enter__()
+    request.addfinalizer(lambda: manager.__exit__(None, None, None))
+
+
 @pytest.fixture
-def sandbox(tmp_path):
-    output = tmp_path / "chapters"
-    output.mkdir()
-    (output / "0010.md").write_bytes("# Héading\r\n\r\nHan entered. His Hand was injured.\r\n".encode())
-    return dict(novel_id="synthetic", audit_label="audit-10", through_chapter=30,
-                replacements=[rule()], glossary=glossary(), safe_categories=RETROACTIVE_SAFE_CATEGORIES,
-                committed_chapters=[10], chapter_map={10: {"text": "韓來了"}}, output_dir=output,
-                retroactive_dir=tmp_path / "retroactive", backup_dir=tmp_path / "backup")
+def sandbox(tmp_path, request):
+    output = tmp_path / "output/chapters"
+    output.mkdir(parents=True)
+    units = {n: {"chapter": n, "text": "韓來了" if n == 10 else ""} for n in range(1, 11)}
+    for n in units:
+        (output / f"{n:04d}.md").write_bytes(("# Héading\r\n\r\nHan entered. His Hand was injured.\r\n" if n == 10 else "Untouched.\r\n").encode())
+    data = glossary()
+    _authoritative_fixture(tmp_path, data, units, 10)
+    _fixture_lock(request, tmp_path)
+    return dict(novel_id="synthetic", audit_label="audit-10", through_chapter=10,
+                replacements=[rule()], glossary=data, safe_categories=RETROACTIVE_SAFE_CATEGORIES,
+                committed_chapters=list(units), chapter_map=units, output_dir=output,
+                retroactive_dir=tmp_path / "output/retroactive_fixes", backup_dir=tmp_path / "backup")
+
+
+def _chapter_item(items, number=10):
+    return next(item for item in items if item["chapter"] == number)
+
+
+def _snapshot_value(path):
+    # Windows byte-range locks intentionally forbid reading the rendezvous.
+    # Its identity, size and mtime still participate in no-mutation snapshots.
+    if path.name == ".production.lock":
+        info = path.stat()
+        return ("HELD_LOCK", info.st_ino, info.st_size, info.st_mtime_ns)
+    return (path.read_bytes(), path.stat().st_mtime_ns) if path.is_file() else None
 
 
 def records(sandbox):
@@ -143,8 +198,8 @@ def test_durable_plan_backup_hash_result_and_idempotence(sandbox, monkeypatch):
             durable = json.loads(plan_path.read_bytes())
             backup = next(sandbox["backup_dir"].rglob("0010.md"))
             assert backup.read_bytes() == before
-            assert digest(backup.read_bytes()) == durable["chapters"][0]["before_sha256"]
-            assert digest(content) == durable["chapters"][0]["after_sha256"]
+            assert digest(backup.read_bytes()) == _chapter_item(durable["chapters"])["before_sha256"]
+            assert digest(content) == _chapter_item(durable["chapters"])["after_sha256"]
             events.append("chapter")
         else:
             events.append("backup")
@@ -157,16 +212,16 @@ def test_durable_plan_backup_hash_result_and_idempotence(sandbox, monkeypatch):
     backup = next(sandbox["backup_dir"].rglob("0010.md"))
     backup_time = backup.stat().st_mtime_ns
     assert events == ["backup", "chapter"]
-    assert result["chapter_results"][0]["before_sha256"] == digest(before)
-    assert result["chapter_results"][0]["after_sha256"] == digest((sandbox["output_dir"] / "0010.md").read_bytes())
-    assert result["chapter_results"][0]["status"] == "newly_applied"
+    assert _chapter_item(result["chapter_results"])["before_sha256"] == digest(before)
+    assert _chapter_item(result["chapter_results"])["after_sha256"] == digest((sandbox["output_dir"] / "0010.md").read_bytes())
+    assert _chapter_item(result["chapter_results"])["status"] == "newly_applied"
     assert result["api_request_count"] == 0
     assert {"audit_label", "through_chapter", "replacement_rules_considered", "replacement_rules_applied",
             "chapters_changed", "replacement_count", "details"} <= result.keys()
     again = tx.execute_retroactive_transaction(**sandbox)
     assert events == ["backup", "chapter"]
     assert again["transaction_id"] == result["transaction_id"]
-    assert again["chapter_results"][0]["status"] == "already_applied"
+    assert _chapter_item(again["chapter_results"])["status"] == "already_applied"
     assert again["already_applied_edits_reconciled"] == 1
     assert plan_path.read_bytes() == plan_bytes
     assert backup.stat().st_mtime_ns == backup_time
@@ -203,7 +258,7 @@ def test_crash_at_every_durability_boundary(sandbox, monkeypatch, stage):
     assert result["transactions_resumed"] == 1
     assert result["replacement_count"] == 1
     expected = "already_applied" if stage in {"after_chapter", "after_applied", "after_result"} else "newly_applied"
-    assert result["chapter_results"][0]["status"] == expected
+    assert _chapter_item(result["chapter_results"])["status"] == expected
     assert plan_path.read_bytes() == saved_plan
     assert b"Hann entered" in (sandbox["output_dir"] / "0010.md").read_bytes()
     assert b"Hannn" not in (sandbox["output_dir"] / "0010.md").read_bytes()
@@ -213,7 +268,7 @@ def test_partial_multichapter_crash_reconciles_only_remaining_before(sandbox, mo
     for number in (20, 30):
         (sandbox["output_dir"] / f"{number:04d}.md").write_bytes(b"Han.\r\n")
         sandbox["chapter_map"][number] = {"text": "韓"}
-    sandbox["committed_chapters"] = [10, 20, 30]
+    _extend_sandbox(sandbox, 30)
     original = tx.atomic_write_bytes
     writes = []
 
@@ -230,7 +285,7 @@ def test_partial_multichapter_crash_reconciles_only_remaining_before(sandbox, mo
     assert writes == ["0010.md", "0020.md"]
     monkeypatch.setattr(tx, "atomic_write_bytes", original)
     result = tx.execute_retroactive_transaction(**sandbox)
-    assert [item["status"] for item in result["chapter_results"]] == [
+    assert [item["status"] for item in result["chapter_results"] if item["replacement_count"]] == [
         "already_applied", "already_applied", "newly_applied"]
     assert result["already_applied_edits_reconciled"] == 2
     assert result["replacement_count"] == 3
@@ -254,13 +309,13 @@ def test_restart_contradictions_block_without_prose_writes(sandbox, monkeypatch,
         sandbox["replacements"] = [rule(new="Different")]
     elif change == "plan":
         data = json.loads(plan_path.read_bytes())
-        data["chapters"][0]["edits"][0]["start"] += 1
+        _chapter_item(data["chapters"])["edits"][0]["start"] += 1
         plan_path.write_text(json.dumps(data), encoding="utf-8")
     else:
         backup.unlink()
     unchanged = path.read_bytes()
     monkeypatch.setattr(tx, "atomic_write_bytes", lambda *args: pytest.fail("blocked write"))
-    with pytest.raises(tx.RetroactiveBlocked):
+    with pytest.raises(ProductionIntegrityError):
         tx.execute_retroactive_transaction(**sandbox)
     assert path.read_bytes() == unchanged
 
@@ -272,7 +327,7 @@ def test_preflight_wrong_backup_blocks_before_any_other_chapter_write(sandbox):
     backup = next(sandbox["backup_dir"].rglob("0010.md"))
     backup.write_bytes(b"inconsistent")
     (sandbox["output_dir"] / "0010.md").write_bytes(b"external")
-    with pytest.raises(tx.RetroactiveBlocked, match="neither BEFORE"):
+    with pytest.raises(ProductionIntegrityError, match="neither BEFORE"):
         tx.execute_retroactive_transaction(**sandbox)
     assert durable["transaction_id"]
 
@@ -327,17 +382,17 @@ def test_first_final_evidence_preserved_after_reconciliation(sandbox):
     result_path = next((sandbox["retroactive_dir"] / "transactions").glob("*.result.json"))
     original_bytes = result_path.read_bytes()
     second = tx.execute_retroactive_transaction(**sandbox)
-    assert first["chapter_results"][0]["status"] == "newly_applied"
-    assert second["chapter_results"][0]["status"] == "already_applied"
+    assert _chapter_item(first["chapter_results"])["status"] == "newly_applied"
+    assert _chapter_item(second["chapter_results"])["status"] == "already_applied"
     assert result_path.read_bytes() == original_bytes
-    assert len(list(result_path.parent.glob("*.reconcile.*.json"))) == 2
+    assert len(list(result_path.parent.glob("*.reconcile.*.json"))) == 1
 
 
 def test_corrupt_final_result_not_overwritten(sandbox):
     tx.execute_retroactive_transaction(**sandbox)
     result_path = next((sandbox["retroactive_dir"] / "transactions").glob("*.result.json"))
     result_path.write_bytes(b"broken")
-    with pytest.raises(tx.RetroactiveBlocked, match="result hash mismatch"):
+    with pytest.raises(ProductionIntegrityError, match="result hash mismatch"):
         tx.execute_retroactive_transaction(**sandbox)
     assert result_path.read_bytes() == b"broken"
 
@@ -361,7 +416,7 @@ def test_atomic_failure_before_replace_preserves_exact_before(sandbox, monkeypat
     assert not list(path.parent.glob("*.tmp"))
     monkeypatch.setattr(core.os, "replace", original)
     result = tx.execute_retroactive_transaction(**sandbox)
-    assert result["chapter_results"][0]["status"] == "newly_applied"
+    assert _chapter_item(result["chapter_results"])["status"] == "newly_applied"
 
 
 def test_batch_preflight_blocks_remaining_writes_on_unrelated_mismatch(sandbox, monkeypatch):
@@ -369,6 +424,7 @@ def test_batch_preflight_blocks_remaining_writes_on_unrelated_mismatch(sandbox, 
     for number in (20, 30):
         (sandbox["output_dir"] / f"{number:04d}.md").write_bytes(b"Han.")
         sandbox["chapter_map"][number] = {"text": "韓"}
+    _extend_sandbox(sandbox, 30)
     original = tx.atomic_write_json
 
     def stop_after_plan(path, data):
@@ -382,7 +438,7 @@ def test_batch_preflight_blocks_remaining_writes_on_unrelated_mismatch(sandbox, 
     monkeypatch.setattr(tx, "atomic_write_json", original)
     (sandbox["output_dir"] / "0030.md").write_bytes(b"external change")
     monkeypatch.setattr(tx, "atomic_write_bytes", lambda *args: pytest.fail("batch should block before writes"))
-    with pytest.raises(tx.RetroactiveBlocked, match="Chapter 30"):
+    with pytest.raises(ProductionIntegrityError, match="Chapter 30"):
         tx.execute_retroactive_transaction(**sandbox)
     assert (sandbox["output_dir"] / "0020.md").read_bytes() == b"Han."
 
@@ -400,7 +456,7 @@ def test_wrong_backup_on_before_restart_never_overwritten(sandbox, monkeypatch):
     backup = next(sandbox["backup_dir"].rglob("0010.md"))
     backup.write_bytes(b"wrong")
     monkeypatch.setattr(tx, "atomic_write_bytes", lambda *args: pytest.fail("must preserve bad backup"))
-    with pytest.raises(tx.RetroactiveBlocked, match="backup hash mismatch"):
+    with pytest.raises(ProductionIntegrityError, match="backup hash mismatch"):
         tx.execute_retroactive_transaction(**sandbox)
     assert backup.read_bytes() == b"wrong"
 
@@ -410,17 +466,17 @@ def test_complete_transaction_revalidates_skipped_chapter_identity(sandbox):
     sandbox["chapter_map"][20] = {"text": "無"}
     path = sandbox["output_dir"] / "0020.md"
     path.write_bytes(b"Hand.")
+    _extend_sandbox(sandbox, 20)
     tx.execute_retroactive_transaction(**sandbox)
     path.write_bytes(b"changed even though not eligible")
-    with pytest.raises(tx.RetroactiveBlocked, match="Chapter 20"):
+    with pytest.raises(ProductionIntegrityError, match="Chapter 20"):
         tx.execute_retroactive_transaction(**sandbox)
 
 
 def test_empty_committed_inventory_never_edits_existing_files(sandbox):
     sandbox["committed_chapters"] = []
-    result = tx.execute_retroactive_transaction(**sandbox)
-    assert result["chapters_changed"] == []
-    assert result["replacement_count"] == 0
+    with pytest.raises(ProductionIntegrityError, match="COMMITTED_INVENTORY_INCOMPLETE"):
+        tx.execute_retroactive_transaction(**sandbox)
     assert b"Han entered" in (sandbox["output_dir"] / "0010.md").read_bytes()
 
 
@@ -428,8 +484,8 @@ def test_uncommitted_and_out_of_range_chapters_untouched(sandbox):
     for number in (1, 40):
         (sandbox["output_dir"] / f"{number:04d}.md").write_bytes(b"Han")
     sandbox["committed_chapters"].append(40)
-    result = tx.execute_retroactive_transaction(**sandbox)
-    assert result["chapters_changed"] == [10]
+    with pytest.raises(ProductionIntegrityError, match="COMMITTED_INVENTORY"):
+        tx.execute_retroactive_transaction(**sandbox)
     assert (sandbox["output_dir"] / "0001.md").read_bytes() == b"Han"
     assert (sandbox["output_dir"] / "0040.md").read_bytes() == b"Han"
 
@@ -439,21 +495,30 @@ def install_engine(monkeypatch, sandbox):
     monkeypatch.setattr(engine, "ACTIVE_NOVEL_CONFIG", SimpleNamespace(id="synthetic"))
     monkeypatch.setattr(engine, "ACTIVE_PROFILE", SimpleNamespace(
         retroactive_safe_categories=RETROACTIVE_SAFE_CATEGORIES, formal_named_categories=set()))
-    monkeypatch.setattr(engine, "progress", {"completed": [10], "last_completed": 10, "next_chapter": 11})
+    last = max(sandbox["chapter_map"])
+    monkeypatch.setattr(engine, "progress", {"completed": list(range(1, last + 1)), "last_completed": last,
+                                           "next_chapter": last + 1, "last_audited_chapter": 0})
     monkeypatch.setattr(engine, "glossary", copy.deepcopy(sandbox["glossary"]))
     monkeypatch.setattr(engine, "chapter_map", sandbox["chapter_map"])
+    monkeypatch.setattr(engine, "chapters", list(sandbox["chapter_map"].values()))
     monkeypatch.setattr(engine, "audit_history", {"audits": []})
     monkeypatch.setattr(engine, "issues_data", {"issues": []})
     for attr, key in (("OUTPUT_DIR", "output_dir"), ("RETROACTIVE_DIR", "retroactive_dir"), ("BACKUP_DIR", "backup_dir")):
         monkeypatch.setattr(engine, attr, sandbox[key])
-    root = sandbox["output_dir"].parent
-    monkeypatch.setattr(engine, "AUDIT_DIR", root / "audits")
+    root = sandbox["output_dir"].parent.parent
+    _authoritative_fixture(root, engine.glossary, engine.chapter_map, last)
+    monkeypatch.setattr(engine, "CHAPTERS_FILE", root / "data/chapters.json")
+    monkeypatch.setattr(engine, "AUDIT_DIR", root / "output/audits")
     for attr, value in (("GLOSSARY_FILE", engine.glossary), ("PROGRESS_FILE", engine.progress),
                         ("CONTINUITY_FILE", {"latest_chapter": 10}), ("ISSUES_FILE", engine.issues_data),
                         ("AUDIT_HISTORY_FILE", engine.audit_history)):
-        path = root / (attr.lower() + ".json")
+        name = {"GLOSSARY_FILE": "glossary", "PROGRESS_FILE": "progress", "CONTINUITY_FILE": "continuity",
+                "ISSUES_FILE": "issues", "AUDIT_HISTORY_FILE": "audit_history"}[attr]
+        path = root / "data" / (name + ".json")
         monkeypatch.setattr(engine, attr, path)
         engine.atomic_write_json(path, value)
+    engine.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    engine.atomic_write_json(engine.periodic_audit_checkpoint_path(1, last), {"synthetic_accepted_decision": True})
     return engine
 
 
@@ -493,12 +558,18 @@ def test_periodic_audit_replays_same_local_transaction_after_write_crash(sandbox
     assert calls[0] == "accounting"
     directory = sandbox["retroactive_dir"] / "transactions"
     result = json.loads(next(directory.glob("*.result.json")).read_bytes())
-    assert result["chapter_results"][0]["status"] == "already_applied"
+    assert _chapter_item(result["chapter_results"])["status"] == "already_applied"
     assert engine.progress["last_audited_chapter"] == 10
 
 
 def test_periodic_local_hash_failure_never_installs_or_advances(sandbox, monkeypatch):
     engine = install_engine(monkeypatch, sandbox)
+    # Accepted immutable source-bound current intent, not a sparse direct call.
+    import production_periodic_audit_finalization as final
+    monkeypatch.setattr(engine, "apply_periodic_audit", lambda *a, **k: {"retroactive_replacements": [rule()]})
+    prepared = final.prepare_finalization(engine, 1, 10, {"issues": []}, {}, {"candidate_set_hash": "validated-local-fixture"})
+    prepared["intent_sha256"] = canonical_hash(prepared)
+    engine.atomic_write_json(final.intent_path(engine, 1, 10), prepared)
     engine.apply_retroactive_replacements("0001_0010", 10, [rule()], staged_glossary=engine.glossary)
     (sandbox["output_dir"] / "0010.md").write_bytes(b"external")
     initial = copy.deepcopy(engine.progress)
@@ -507,7 +578,7 @@ def test_periodic_local_hash_failure_never_installs_or_advances(sandbox, monkeyp
     monkeypatch.setattr(engine, "apply_periodic_audit", lambda *args, **kwargs: {"retroactive_replacements": [rule()]})
     monkeypatch.setattr(engine, "save_json", lambda *args: pytest.fail("outer state write"))
     from production_periodic_audit_finalization import AuditFinalizationBlocked
-    with pytest.raises((tx.RetroactiveBlocked, AuditFinalizationBlocked)):
+    with pytest.raises((ProductionIntegrityError, AuditFinalizationBlocked)):
         engine.run_periodic_audit(1, 10)
     assert engine.progress == initial
 
@@ -520,6 +591,7 @@ def test_startup_known_fix_uses_hardened_engine_before_policy_install(sandbox, m
     sandbox["chapter_map"][10] = {"text": "蓋州游擊來了"}
     path = sandbox["output_dir"] / "0010.md"
     path.write_bytes(b"Ganzhou Mobile Corps Commander arrived.\r\n")
+    _authoritative_fixture(path.parent.parent.parent, engine.glossary, engine.chapter_map, 10)
     saved = []
     monkeypatch.setattr(engine, "save_json", lambda path, value: saved.append(copy.deepcopy(value)))
     original = tx.atomic_write_bytes
@@ -547,28 +619,30 @@ def test_staged_contextual_policy_never_becomes_global_retroactive(sandbox):
     result = tx.execute_retroactive_transaction(**sandbox)
     assert result["replacement_count"] == 0
     assert (sandbox["output_dir"] / "0010.md").read_bytes() == before
-    assert result["details"][0]["decisions"][0]["skip_reason"] == "contextual_identity_requires_manual_review"
+    assert _chapter_item(result["details"][0]["decisions"])["skip_reason"] == "contextual_identity_requires_manual_review"
 
 
 def audit_recovery_fixture(sandbox):
     from full_pipeline_periodic_audit_recovery import _snapshot_baseline
-    root = sandbox["retroactive_dir"].parent
-    output = root / "output/chapters"
-    output.mkdir(parents=True)
-    (output / "0010.md").write_bytes((sandbox["output_dir"] / "0010.md").read_bytes())
-    sandbox.update(output_dir=output, retroactive_dir=root / "output/retroactive_fixes",
-                   audit_label="0001_0010", through_chapter=10)
-    data = root / "data"
-    data.mkdir()
-    (root / "novel.json").write_text(json.dumps({"id": "synthetic"}), encoding="utf-8")
-    state = {"glossary": sandbox["glossary"], "progress": {"last_completed": 10, "next_chapter": 11,
-             "last_audited_chapter": 0, "completed": [10]}, "issues": {"issues": []},
-             "audit_history": {"audits": []}, "continuity": {}}
-    for name, value in state.items():
-        (data / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
-    (data / "chapters.json").write_text(json.dumps([{"chapter": 10, "text": "韓來了"}]), encoding="utf-8")
+    from historical_reconciliation import writer_module
+    import production_periodic_audit_finalization as final
+    root = sandbox["output_dir"].parent.parent
+    sandbox.update(audit_label="0001_0010", through_chapter=10)
+    sandbox["glossary"]["entries"]["韓"]["first_chapter"] = 10
+    (root / "data/glossary.json").write_text(json.dumps(sandbox["glossary"], ensure_ascii=False), encoding="utf-8")
     manifest, created = _snapshot_baseline(root, 1, 10)
     assert created
+    module = writer_module(sandbox["output_dir"], "synthetic")
+    module.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    module.save_json(module.periodic_audit_checkpoint_path(1, 10), {"synthetic_accepted_decision": True})
+    result = {"decisions": [{"chinese": "韓", "action": "correct", "english": "Hann"}], "issues": []}
+    prepared = final.prepare_finalization(module, 1, 10, result,
+        {field: 0 for field in final.STAT_TOTAL_FIELDS},
+        {"candidate_count": 1, "api_request_count": 0, "candidate_set_hash": canonical_hash(result)})
+    prepared["intent_sha256"] = canonical_hash(prepared)
+    module.save_json(final.intent_path(module, 1, 10), prepared)
+    sandbox.update(replacements=prepared["record"]["changes"]["retroactive_replacements"],
+                   staged_glossary=prepared["post"]["glossary"])
     return root, manifest
 
 
@@ -594,7 +668,7 @@ def test_experiment_audit_recovery_preserves_after_prose_and_immutable_plan(sand
     assert plan_path.read_bytes() == plan_bytes
     monkeypatch.setattr(tx, "atomic_write_bytes", lambda *args: pytest.fail("duplicate edit after wrapper recovery"))
     result = tx.execute_retroactive_transaction(**sandbox)
-    assert result["chapter_results"][0]["status"] == "already_applied"
+    assert _chapter_item(result["chapter_results"])["status"] == "already_applied"
 
 
 @pytest.mark.parametrize("change", ["prose", "extra_chapter", "backup", "missing_plan", "source"])
@@ -642,7 +716,7 @@ def test_audit_diagnostics_do_not_read_translation_source_or_policy(sandbox, mon
 @pytest.mark.parametrize("damage", ["missing_source", "changed_source", "intent_range"])
 def test_historical_audit_range_cannot_bypass_source_or_intent_proof(sandbox, monkeypatch, damage):
     engine = install_engine(monkeypatch, sandbox)
-    assert 1 not in engine.chapter_map  # The legitimate range start is absent.
+    assert 1 in engine.chapter_map  # Historical input must now be complete.
     baseline = copy.deepcopy(engine.progress)
     monkeypatch.setattr(engine, "log_event", lambda *args, **kwargs: None)
     acquisitions = []
@@ -674,13 +748,13 @@ def test_historical_audit_range_cannot_bypass_source_or_intent_proof(sandbox, mo
         path.write_text(json.dumps(value), encoding="utf-8")
     root = sandbox["output_dir"].parent
     def snapshot():
-        return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+        return {str(p.relative_to(root)): _snapshot_value(p) for p in root.rglob("*")}
     before = snapshot()
     monkeypatch.setattr(engine, "call_periodic_audit", lambda *a: pytest.fail("audit reacquisition"))
     monkeypatch.setattr(engine, "save_json", lambda *a: pytest.fail("unproved state write"))
     monkeypatch.setattr(tx, "atomic_write_bytes", lambda *a: pytest.fail("unproved prose write"))
     from production_periodic_audit_finalization import AuditFinalizationBlocked
-    with pytest.raises((tx.RetroactiveBlocked, AuditFinalizationBlocked)):
+    with pytest.raises((ProductionIntegrityError, AuditFinalizationBlocked)):
         engine.run_periodic_audit(1, 10)
     assert acquisitions == [(1, 10)]
     assert engine.progress == baseline
@@ -688,7 +762,7 @@ def test_historical_audit_range_cannot_bypass_source_or_intent_proof(sandbox, mo
 
 
 @pytest.mark.parametrize("language,source_key", [("zh", "韓"), ("ko", "한민")])
-def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tmp_path, language, source_key):
+def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tmp_path, language, source_key, request):
     from historical_reconciliation import impact_report
     output = tmp_path / language / "output/chapters"
     output.mkdir(parents=True)
@@ -703,11 +777,13 @@ def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tm
     data = glossary(**{source_key: {"english": "Han", "category": "character", "status": "provisional"}})
     staged = copy.deepcopy(data)
     staged["entries"][source_key]["english"] = "Hann"
-    args = dict(novel_id=language, audit_label="0026_0052", through_chapter=52,
+    args = dict(novel_id=language, audit_label="synthetic-history", through_chapter=52,
                 replacements=[rule(source_key)], glossary=data, staged_glossary=staged,
                 safe_categories=RETROACTIVE_SAFE_CATEGORIES, committed_chapters=numbers, chapter_map=chapter_map,
                 output_dir=output, retroactive_dir=tmp_path / language / "output/retroactive_fixes",
                 backup_dir=tmp_path / language / "backup")
+    _authoritative_fixture(output.parent.parent, data, chapter_map, 52, novel=language)
+    _fixture_lock(request, output.parent.parent)
     result = tx.execute_retroactive_transaction(**args)
     plan_file = next((args["retroactive_dir"] / "transactions").glob("*.plan.json"))
     planned = json.loads(plan_file.read_bytes())
@@ -734,13 +810,15 @@ def test_aut2_full_history_discovery_is_source_bound_and_uses_existing_writer(tm
 
 
 @pytest.fixture
-def aut2_review_intent(sandbox, monkeypatch):
+def aut2_review_intent(sandbox, monkeypatch, request):
     """Small local audit interrupted after intent, before any receipt or prose write."""
     import production_periodic_audit_finalization as final
     root = sandbox["output_dir"].parent / "review_novel"
     output = root / "output/chapters"
     output.mkdir(parents=True)
-    (output / "0010.md").write_bytes((sandbox["output_dir"] / "0010.md").read_bytes())
+    for chapter in sandbox["output_dir"].glob("*.md"):
+        (output / chapter.name).write_bytes(chapter.read_bytes())
+    _fixture_lock(request, root)
     sandbox.update(output_dir=output, retroactive_dir=root / "output/retroactive_fixes", backup_dir=root / "backup")
     engine = install_engine(monkeypatch, sandbox)
     changes = {"retroactive_replacements": [rule()], "kept": [], "corrected": [],
@@ -748,7 +826,7 @@ def aut2_review_intent(sandbox, monkeypatch):
     monkeypatch.setattr(engine, "apply_periodic_audit", lambda *a, **k: copy.deepcopy(changes))
     monkeypatch.setattr(engine, "call_periodic_audit", lambda *a: pytest.fail("provider reacquisition"))
     monkeypatch.setattr(engine, "send_api_request_once", lambda **k: pytest.fail("provider send"))
-    engine.AUDIT_DIR.mkdir(parents=True)
+    engine.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     engine.save_json(engine.periodic_audit_checkpoint_path(1, 10), {"synthetic": "accepted local decision"})
     args = ({"issues": []}, {"cost_usd": 0}, {"candidate_set_hash": "synthetic-local-decision"})
     write = final.atomic_write_json
@@ -764,8 +842,7 @@ def aut2_review_intent(sandbox, monkeypatch):
 
 
 def _review_snapshot(root):
-    return {p.relative_to(root).as_posix(): None if p.is_dir() else p.read_bytes()
-            for p in root.rglob("*")}
+    return {p.relative_to(root).as_posix(): _snapshot_value(p) for p in root.rglob("*")}
 
 
 def _review_rehash_intent(engine, value):
@@ -818,7 +895,7 @@ def test_aut2_review_rejects_contradictory_intent_without_any_write(aut2_review_
     elif damage in {"post", "baseline"}: value[damage]["glossary"]["entries"]["韓"]["english"] = "Contradictory"
     elif damage == "checkpoint": engine.periodic_audit_checkpoint_path(1, 10).write_bytes(b"changed")
     elif damage == "plan":
-        plan["chapters"][0]["edits"][0]["start"] += 1
+        _chapter_item(plan["chapters"])["edits"][0]["start"] += 1
         plan["transaction_id"] = canonical_hash({k: v for k, v in plan.items() if k != "transaction_id"})
         value["record"]["historical_reconciliation"]["transaction_id"] = plan["transaction_id"]
     elif damage in {"transaction_json", "duplicate_transaction"}:
@@ -914,7 +991,7 @@ def test_aut2_review_new_foreign_namespace_does_not_persist_intent(aut2_review_i
     final.intent_path(engine, 1, 10).unlink()
     monkeypatch.setattr(engine, "RETROACTIVE_DIR", root.parent / "foreign/retroactive_fixes")
     before = _review_snapshot(root.parent)
-    with pytest.raises(ProductionIntegrityError, match="FOREIGN_INVALIDATION_ROOT"):
+    with pytest.raises(ProductionIntegrityError, match="FOREIGN_WRITER_ROOT|FOREIGN_INVALIDATION_ROOT"):
         final.finalize_periodic_audit(engine, 1, 10, *args)
     assert _review_snapshot(root.parent) == before
 
@@ -923,12 +1000,14 @@ def test_aut2_audit_inventory_ignores_uncommitted_source(aut2_review_intent):
     import production_periodic_audit_finalization as final
     root, engine, args = aut2_review_intent
     original = final.intent_path(engine, 1, 10).read_bytes()
-    # Both an uncommitted row within the boundary and a future row are outside
-    # this sparse fixture's exact committed set, [10].
-    engine.chapter_map.update({1: {"text": "Earlier uncommitted source"},
-                               11: {"text": "Future source"}})
+    # Registered future source units are bound but never historical edit input.
+    engine.chapter_map.update({11: {"chapter": 11, "text": "Future source"},
+                               12: {"chapter": 12, "text": "Later source"}})
+    engine.atomic_write_json(engine.CHAPTERS_FILE, list(engine.chapter_map.values()))
+    config = json.loads((root / "novel.json").read_bytes())
+    config["final_chapter"] = 12
+    engine.atomic_write_json(root / "novel.json", config)
     final.finalize_periodic_audit(engine, 1, 10, *args)
-    engine.chapter_map[12] = {"text": "Later acquired source"}
     before = _review_snapshot(root)
     final.finalize_periodic_audit(engine, 1, 10, *args)
     assert final.intent_path(engine, 1, 10).read_bytes() == original
@@ -948,13 +1027,13 @@ def test_aut2_audit_inventory_rejects_original_source_drift(aut2_review_intent, 
         # Same source text substituted from a different original source unit.
         engine.chapter_map[10] = {**engine.chapter_map[10], "source_document_sha256": "different-unit"}
     before = _review_snapshot(root)
-    with pytest.raises(ProductionIntegrityError, match="source hash mismatch|deterministic finalization drift"):
+    with pytest.raises(ProductionIntegrityError, match="SOURCE_INVENTORY_DRIFT|source hash mismatch|deterministic finalization drift"):
         final.finalize_periodic_audit(engine, 1, 10, *args)
     assert _review_snapshot(root) == before
 
 
 @pytest.fixture
-def discovery_novel(tmp_path, monkeypatch):
+def discovery_novel(tmp_path, monkeypatch, request):
     """Real local finalizer intent, stopped before ANY transaction writes."""
     import production_periodic_audit_finalization as final
     import historical_reconciliation as history
@@ -964,6 +1043,8 @@ def discovery_novel(tmp_path, monkeypatch):
         key = "韓" if language == "zh" else "한민"
         root = tmp_path / f"public_novel_{len(serial)}"
         serial.append(root)
+        root.mkdir()
+        _fixture_lock(request, root)
         output = root / "output/chapters"
         output.mkdir(parents=True)
         entries = {key: {"english": "Han", "category": "character", "status": "provisional"}, **(extra or {}), **(prior_extra or {})}
@@ -982,6 +1063,10 @@ def discovery_novel(tmp_path, monkeypatch):
         engine = install_engine(monkeypatch, setup)
         monkeypatch.setattr(engine.ACTIVE_PROFILE, "requires_formal_capitalization", lambda category: False, raising=False)
         monkeypatch.setattr(engine, "ACTIVE_NOVEL_CONFIG", SimpleNamespace(id=root.name))
+        config = json.loads((root / "novel.json").read_bytes())
+        config["id"] = root.name
+        config["source_language"] = language
+        (root / "novel.json").write_text(json.dumps(config), encoding="utf-8")
         engine.progress.update(completed=list(units), last_completed=count, next_chapter=count + 1,
                                last_audited_chapter=0)
         engine.save_json(engine.PROGRESS_FILE, engine.progress)
@@ -991,7 +1076,7 @@ def discovery_novel(tmp_path, monkeypatch):
         # Finalize a genuine prior publication. A marker in audit_history cannot
         # witness historical ownership. No provider is used by these fixtures.
         prior_end = 25 if count == 26 else 375
-        engine.AUDIT_DIR.mkdir(parents=True)
+        engine.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
         def prior_apply(start, end, result, glossary_data=None):
             return original_apply(start, end, result, glossary_data=glossary_data,
                                   targets=[{"chinese": d["chinese"]} for d in result["decisions"]] or [{"chinese": key}])
@@ -1036,14 +1121,12 @@ def discovery_novel(tmp_path, monkeypatch):
             directory = root / folder
             directory.mkdir(parents=True)
             (directory / name).write_bytes(b"Unrelated synthetic evidence; preserve exactly.\r\n")
-        write = final.atomic_write_json
-        def stop(path, value):
-            write(path, value)
-            if path.name.endswith(".finalization.json"): raise KeyboardInterrupt()
-        with monkeypatch.context() as mp:
-            mp.setattr(final, "atomic_write_json", stop)
-            with pytest.raises(KeyboardInterrupt):
-                final.finalize_periodic_audit(engine, start, count, result, stats, chunking)
+        # Immutable pre-patch selected intent: no transaction writer or safety
+        # guard is disabled. Tests can exercise recovery of this legacy prefix.
+        selected = final.prepare_finalization(engine, start, count, result, stats, chunking,
+            timestamp=final.publication_timestamp(engine, start, count))
+        selected["intent_sha256"] = canonical_hash(selected)
+        final.atomic_write_json(final.intent_path(engine, start, count), selected)
         intent = final.load_intent(engine, start, count)
         proposals = intent["record"]["changes"]["retroactive_replacements"] or [
             rule(key, "Han", "", reason="Accepted contextual classification.")]
@@ -1058,8 +1141,7 @@ def discovery_novel(tmp_path, monkeypatch):
 
 
 def _discovery_snapshot(root):
-    return {p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns) if p.is_file() else None
-            for p in root.rglob("*")}
+    return {p.relative_to(root).as_posix(): _snapshot_value(p) for p in root.rglob("*")}
 
 
 @pytest.mark.parametrize("language", ["zh", "ko"])
@@ -1400,13 +1482,11 @@ def test_legacy_writer_risk_d4_d5_reaches_actual_finalizer(discovery_novel, comp
     assert _discovery_snapshot(case.root) == before
     # The production finalizer validates this same source-bound immutable audit,
     # then the unchanged writer incorrectly edits the ambiguous referent.
-    result = final.finalize_periodic_audit(e, 26, 26, *case.args)
-    assert result["status"] == "FINALIZED"
-    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Hann."
-    assert final.load_intent(e, 26, 26) == case.intent
-    proof = final.transaction_proof(e, 26, 26, case.intent["baseline"]["glossary"],
-        case.intent["post"]["glossary"], case.intent["record"]["changes"])
-    assert proof["state"]["state"] == "FINALIZED"
+    from production_failure_classification import ProductionIntegrityError
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_RESERVATION"):
+        final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert _discovery_snapshot(case.root) == before
+
 
 
 @pytest.mark.parametrize("subset", [[], list(range(2, 27))])
@@ -1423,11 +1503,9 @@ def test_legacy_writer_risk_j3_j4_sparse_progress_reaches_finalizer_seam(discove
         case.preflight()
     assert _discovery_snapshot(case.root) == before
     assert case.intent["transaction_plan"]["request"]["committed_chapters"] == subset
-    result = final.finalize_periodic_audit(e, 26, 26, *case.args)
-    assert result["status"] == "FINALIZED"
-    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == before["output/chapters/0001.md"][0]
-    if subset:
-        assert b"Hann" in (e.OUTPUT_DIR / "0025.md").read_bytes()
+    with pytest.raises(ProductionIntegrityError, match="NONSEQUENTIAL_COMMITTED_INVENTORY"):
+        final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert _discovery_snapshot(case.root) == before
 
 
 
@@ -1442,4 +1520,428 @@ def test_discovery_reservations_survive_multiple_verified_prior_intents(discover
     item = case.preflight()["chapters"][0]["decisions"][0]
     assert item["outcome"] == "deferred"
     assert "HISTORICAL_OWNERSHIP_RESERVATION" in item["reason_codes"]
+    assert _discovery_snapshot(case.root) == before
+
+
+
+def _writer_args(case):
+    e, intent = case.engine, case.intent
+    return dict(novel_id=e.ACTIVE_NOVEL_CONFIG.id, audit_label="0026_0026", through_chapter=26,
+        replacements=intent["record"]["changes"]["retroactive_replacements"],
+        glossary=intent["baseline"]["glossary"], staged_glossary=intent["post"]["glossary"],
+        safe_categories=e.ACTIVE_PROFILE.retroactive_safe_categories,
+        committed_chapters=list(range(1, 27)), chapter_map=e.chapter_map,
+        output_dir=e.OUTPUT_DIR, retroactive_dir=e.RETROACTIVE_DIR, backup_dir=e.BACKUP_DIR,
+        writer_context=e)
+
+
+def _writer_invoke(case, boundary, args=None):
+    import production_periodic_audit_finalization as final
+    if boundary == "finalizer":
+        return final.finalize_periodic_audit(case.engine, 26, 26, *case.args)
+    return tx.execute_retroactive_transaction(**(_writer_args(case) if args is None else args))
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct", "compatibility"])
+@pytest.mark.parametrize("identity,english,source", [("韓先生", "Master Han", "韓先生"), ("漢", "Han", "韓")])
+def test_writer_safety_d4_d5_before_persistence(discovery_novel, boundary, identity, english, source):
+    """WS-D4-01 / WS-D5-01 / WS-GUARD-02 / WS-ATOM-01."""
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel(prior_extra={identity: {"english": english, "category": "character"}},
+                           sources={1: source}, english={1: "Han."})
+    if boundary != "direct":
+        final.intent_path(case.engine, 26, 26).unlink()  # Setup: no current intent.
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_RESERVATION"):
+        if boundary == "compatibility":
+            case.engine.apply_retroactive_replacements("startup", 26, case.proposals,
+                                                       staged_glossary=case.intent["post"]["glossary"])
+        else:
+            _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct"])
+@pytest.mark.parametrize("damage", ["intent_missing", "marker_only", "checkpoint", "state_backup", "tampered", "foreign", "fork"])
+def test_writer_safety_historical_witness_fail_closed(discovery_novel, boundary, damage):
+    """WS-HIST-01..06: no stand-alone history marker can supply authority."""
+    import production_periodic_audit_finalization as final
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel(prior_extra={"漢": {"english": "Han", "category": "character"}})
+    e = case.engine
+    path = final.intent_path(e, 1, 25)
+    if damage in {"intent_missing", "marker_only"}: path.unlink()
+    elif damage == "checkpoint": e.periodic_audit_checkpoint_path(1, 25).unlink()
+    elif damage == "state_backup": (e.BACKUP_DIR / "checkpoint_0025" / e.GLOSSARY_FILE.name).unlink()
+    elif damage == "tampered": path.write_bytes(b"{}")
+    else:
+        value = final.load_intent(e, 1, 25)
+        if damage == "foreign": value["transaction_plan"]["request"]["novel_id"] = "foreign"
+        else: value["baseline"]["history"]["audits"] = [{"foreign": True}]
+        value["historical_proof"]["plan_sha256"] = canonical_hash(value["transaction_plan"])
+        value["intent_sha256"] = canonical_hash({k: v for k, v in value.items() if k != "intent_sha256"})
+        final.atomic_write_json(path, value)
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
+        _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct"])
+@pytest.mark.parametrize("inventory", [[], list(range(2, 27)), list(range(26, 0, -1)), list(range(1, 27)) + [26], [True], [[1]]])
+def test_writer_safety_j3_independent_inventory(discovery_novel, boundary, inventory):
+    """WS-J3-01..03: disk remains authoritative, caller cannot select a subset."""
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel()
+    args = _writer_args(case)
+    args["committed_chapters"] = inventory
+    if boundary == "finalizer": case.engine.progress["completed"] = inventory
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="COMMITTED_INVENTORY|NONSEQUENTIAL_COMMITTED_INVENTORY"):
+        _writer_invoke(case, boundary, args)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct"])
+@pytest.mark.parametrize("extra", ["0027.md", "hidden/0001.md", "00001.md"])
+def test_writer_safety_j4_extra_canonical_files(discovery_novel, boundary, extra):
+    """WS-J4-01..02: existing omitted/nested/duplicate numeric paths block."""
+    from production_failure_classification import ProductionIntegrityError
+    case = discovery_novel()
+    path = case.engine.OUTPUT_DIR / extra
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"Uninventoried historical English.")
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="COMMITTED_INVENTORY_EXTRA"):
+        _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct", "recovery"])
+@pytest.mark.parametrize("prefix", ["planned", "applied", "finalized"])
+def test_writer_safety_saved_unsafe_plan_is_preserved(discovery_novel, boundary, prefix):
+    """WS-GUARD-01: immutable legacy plan cannot be trimmed or rehashed."""
+    from production_failure_classification import ProductionIntegrityError
+    from historical_reconciliation import writer_authorization
+    case = discovery_novel(prior_extra={"漢": {"english": "Han", "category": "character"}})
+    plan = case.intent["transaction_plan"]
+    request = plan["request"]
+    slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+    directory = case.engine.RETROACTIVE_DIR / "transactions"
+    case.engine.save_json(directory / f"{slot}.plan.json", plan)
+    if prefix != "planned":
+        for item in plan["chapters"]:
+            if not item["edits"]: continue
+            path = case.engine.OUTPUT_DIR / f"{item['chapter']:04d}.md"
+            raw = path.read_bytes()
+            backup = case.engine.BACKUP_DIR / f"retroactive_{plan['transaction_id']}" / "chapters_before" / path.name
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            backup.write_bytes(raw)
+            path.write_bytes(tx.transform_bytes(raw, item["edits"]))
+        result = case.intent["record"]["retroactive"]
+        case.engine.save_json(directory / f"{slot}.result.json", result)
+        state = dict(transaction_id=plan["transaction_id"], state="APPLIED", chapter_results=result["chapter_results"])
+        if prefix == "finalized":
+            reconciliation = directory / f"{slot}.reconcile.{canonical_hash(result)}.json"
+            case.engine.save_json(reconciliation, result)
+            state = dict(transaction_id=plan["transaction_id"], state="FINALIZED",
+                result_sha256=digest((directory / f"{slot}.result.json").read_bytes()),
+                reconciliation_sha256=digest(reconciliation.read_bytes()))
+        case.engine.save_json(directory / f"{slot}.state.json", state)
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="IMMUTABLE_PLAN_POLICY_CONFLICT|HISTORICAL_OWNERSHIP_RESERVATION"):
+        if boundary == "recovery": writer_authorization(case.engine, plan)
+        else: _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_writer_safety_unambiguous_receipt_and_exact_replay(discovery_novel):
+    """WS-HASH / WS-IDEM / WS-GREEN: proof binds bytes, inventory and history."""
+    from historical_reconciliation import WRITER_AUTHORIZATION_REVISION
+    case = discovery_novel()
+    first = _writer_invoke(case, "direct")
+    assert first["chapters_changed"] == [1, 25, 26]
+    receipt = next(p for p in (case.engine.RETROACTIVE_DIR / "transactions").glob("*.authorization.json")
+                   if json.loads(p.read_bytes())["plan_sha256"] == canonical_hash(case.intent["transaction_plan"]))
+    value = json.loads(receipt.read_bytes())
+    assert value["revision"] == WRITER_AUTHORIZATION_REVISION
+    assert value["authorization_sha256"] == canonical_hash({k: v for k, v in value.items() if k != "authorization_sha256"})
+    before = _discovery_snapshot(case.root)
+    again = _writer_invoke(case, "direct")
+    assert again["transaction_id"] == first["transaction_id"] and again["already_applied_edits_reconciled"] == 3
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("stage", ["authorization", "plan", "backup", "chapter", "result"])
+def test_writer_safety_crash_rechecks_authorization(sandbox, monkeypatch, stage):
+    """WS-IDEM-02: retain original plan and exact original bytes on restart."""
+    original_json, original_bytes = tx.atomic_write_json, tx.atomic_write_bytes
+    fired = []
+    def write_json(path, value):
+        original_json(path, value)
+        if not fired and ((stage == "authorization" and path.name.endswith(".authorization.json")) or
+            (stage == "plan" and path.name.endswith(".plan.json")) or
+            (stage == "result" and path.name.endswith(".result.json"))):
+            fired.append(True)
+            raise KeyboardInterrupt()
+    def write_bytes(path, value):
+        original_bytes(path, value)
+        if not fired and ((stage == "backup" and path.parent.name == "chapters_before") or
+                          (stage == "chapter" and path.parent == sandbox["output_dir"])):
+            fired.append(True)
+            raise KeyboardInterrupt()
+    with monkeypatch.context() as mp:
+        mp.setattr(tx, "atomic_write_json", write_json)
+        mp.setattr(tx, "atomic_write_bytes", write_bytes)
+        with pytest.raises(KeyboardInterrupt): tx.execute_retroactive_transaction(**sandbox)
+    result = tx.execute_retroactive_transaction(**sandbox)
+    assert result["replacement_count"] == 1
+    assert b"Hann entered" in (sandbox["output_dir"] / "0010.md").read_bytes()
+    before = _discovery_snapshot(sandbox["output_dir"].parent.parent)
+    tx.execute_retroactive_transaction(**sandbox)
+    assert _discovery_snapshot(sandbox["output_dir"].parent.parent) == before
+
+
+
+@pytest.mark.parametrize("damage", ["inventory", "extra", "source", "authorization"])
+def test_writer_safety_actual_restore_blocks_before_state_write(sandbox, damage):
+    """Actual experiment recovery boundary, not merely its proof helper."""
+    from full_pipeline_periodic_audit_recovery import _restore_baseline, FullPipelinePeriodicAuditRecoveryError
+    root, manifest = audit_recovery_fixture(sandbox)
+    tx.execute_retroactive_transaction(**sandbox)
+    if damage == "inventory":
+        path = root / "data/progress.json"
+        value = json.loads(path.read_bytes())
+        value["completed"] = []
+        path.write_text(json.dumps(value), encoding="utf-8")
+    elif damage == "extra": (root / "output/chapters/0011.md").write_bytes(b"Extra.")
+    elif damage == "source":
+        path = root / "data/chapters.json"
+        value = json.loads(path.read_bytes())
+        value[-1]["text"] = "Changed source."
+        path.write_text(json.dumps(value), encoding="utf-8")
+    else:
+        path = next((root / "output/retroactive_fixes/transactions").glob("*.authorization.json"))
+        value = json.loads(path.read_bytes())
+        value["inventory_sha256"] = "0" * 64
+        path.write_text(json.dumps(value), encoding="utf-8")
+    before = _discovery_snapshot(root)
+    with pytest.raises(FullPipelinePeriodicAuditRecoveryError): _restore_baseline(root, manifest)
+    assert _discovery_snapshot(root) == before
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct"])
+def test_writer_safety_authorization_drift_never_creates_receipt(discovery_novel, boundary):
+    case = discovery_novel()
+    _writer_invoke(case, "direct")
+    path = next(p for p in (case.engine.RETROACTIVE_DIR / "transactions").glob("*.authorization.json")
+                if json.loads(p.read_bytes())["plan_sha256"] == canonical_hash(case.intent["transaction_plan"]))
+    value = json.loads(path.read_bytes())
+    value["reservations_sha256"] = "f" * 64
+    path.write_text(json.dumps(value), encoding="utf-8")
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="WRITER_AUTHORIZATION_DRIFT"):
+        _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("exact", [True, False])
+def test_writer_safety_next_pending_exception_belongs_to_startup_reconciler(discovery_novel, exact):
+    case = discovery_novel()
+    e = case.engine
+    # This independently recognized next candidate exists before new audit
+    # authorization. It may not override a previously frozen file manifest.
+    import production_periodic_audit_finalization as final
+    final.intent_path(e, 26, 26).unlink()
+    e.chapter_map[27] = {"chapter": 27, "text": "Next source unit."}
+    e.atomic_write_json(e.CHAPTERS_FILE, list(e.chapter_map.values()))
+    config = json.loads((case.root / "novel.json").read_bytes())
+    config["final_chapter"] = 27
+    e.atomic_write_json(case.root / "novel.json", config)
+    (e.OUTPUT_DIR / "0027.md").write_bytes(b"Next partial commit.")
+    (case.root / "output/pending/0027.md").write_bytes(b"Next partial commit." if exact else b"Different.")
+    before = _discovery_snapshot(case.root)
+    from noveltranslator_observability import progress_commit_integrity_errors
+    errors = progress_commit_integrity_errors(e.progress, e.OUTPUT_DIR, case.root / "output/pending")
+    assert bool(errors) is not exact  # Existing startup recognition is preserved.
+    with pytest.raises(ProductionIntegrityError, match="COMMITTED_INVENTORY_EXTRA"):
+        _writer_invoke(case, "direct")
+    assert _discovery_snapshot(case.root) == before
+
+
+
+def test_writer_safety_reservations_never_grant_positive_eligibility(discovery_novel):
+    case = discovery_novel(prior_extra={"漢": {"english": "Han", "category": "character"}},
+        sources={1: "漢", 2: "韓", 25: "", 26: ""},
+        english={1: "Han.", 2: "Hann.", 25: "Unrelated.", 26: "Unrelated."})
+    before = {p.name: p.read_bytes() for p in case.engine.OUTPUT_DIR.glob("*.md")}
+    result = _writer_invoke(case, "direct")
+    assert result["chapters_changed"] == [] and result["replacement_count"] == 0
+    assert {p.name: p.read_bytes() for p in case.engine.OUTPUT_DIR.glob("*.md")} == before
+
+
+def test_writer_safety_unrelated_novel_and_journals_untouched(discovery_novel):
+    first = discovery_novel("zh")
+    journal = first.root / "data/provider_request_journal/paid.json"
+    journal.parent.mkdir()
+    journal.write_bytes(b'{"synthetic_paid_evidence":"preserve"}')
+    preserved = _discovery_snapshot(first.root)
+    second = discovery_novel("ko")
+    result = _writer_invoke(second, "direct")
+    assert result["chapters_changed"] == [1, 25, 26] and result["api_request_count"] == 0
+    assert _discovery_snapshot(first.root) == preserved
+
+
+def test_writer_safety_conflicting_novel_lock_blocks_direct_entry(sandbox):
+    import subprocess
+    import sys
+    root = sandbox["output_dir"].parent.parent
+    before = _discovery_snapshot(root)
+    script = """import sys
+from pathlib import Path
+from retroactive_transactions import execute_retroactive_transaction
+from production_run_lock import ProductionRunLockedError
+root = Path(sys.argv[1])
+try:
+    execute_retroactive_transaction(novel_id='synthetic', audit_label='audit-10', through_chapter=10,
+        replacements=[], glossary={}, safe_categories=set(), committed_chapters=[], chapter_map={},
+        output_dir=root/'output/chapters', retroactive_dir=root/'output/retroactive_fixes', backup_dir=root/'backup')
+except ProductionRunLockedError:
+    print('LOCK_BLOCKED')
+else:
+    raise RuntimeError('unheld root lock accepted')
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(root)], cwd=Path(__file__).resolve().parents[1],
+                            text=True, capture_output=True)
+    assert result.returncode == 0 and result.stdout.strip() == "LOCK_BLOCKED", result.stderr
+    assert _discovery_snapshot(root) == before
+
+
+
+@pytest.mark.parametrize("identity,prior_target,source", [
+    ("蓋州游擊將軍", "Longer Commander", "蓋州游擊將軍"),
+    ("漢", "Ganzhou Mobile Corps Commander", "蓋州游擊"),
+])
+def test_writer_safety_actual_known_fix_is_vetoed_before_glossary_install(
+        discovery_novel, monkeypatch, identity, prior_target, source):
+    import production_periodic_audit_finalization as final
+    old = "Ganzhou Mobile Corps Commander"
+    case = discovery_novel(extra={"蓋州游擊": {"english": old, "category": "historical office"}},
+        prior_extra={identity: {"english": prior_target, "category": "historical office"}},
+        sources={1: source}, english={1: old + " arrived."})
+    final.intent_path(case.engine, 26, 26).unlink()
+    monkeypatch.setattr(case.engine, "MING_COMPATIBILITY_MODE", True)
+    before = _discovery_snapshot(case.root)
+    memory = copy.deepcopy(case.engine.glossary)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_RESERVATION"):
+        case.engine.apply_known_glossary_fixes()
+    assert case.engine.glossary == memory
+    assert _discovery_snapshot(case.root) == before
+
+
+
+@pytest.mark.parametrize("boundary", ["finalizer", "direct"])
+@pytest.mark.parametrize("new_intent", [False, True])
+def test_writer_safety_missing_current_checkpoint_is_unproven(discovery_novel, boundary, new_intent):
+    case = discovery_novel()
+    case.engine.periodic_audit_checkpoint_path(26, 26).unlink()
+    if new_intent:
+        import production_periodic_audit_finalization as final
+        final.intent_path(case.engine, 26, 26).unlink()
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError): _writer_invoke(case, boundary)
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_writer_safety_source_metadata_change_under_saved_slot_blocks(sandbox):
+    tx.execute_retroactive_transaction(**sandbox)
+    sandbox["chapter_map"][10]["source_document_sha256"] = "changed-source-edition"
+    path = sandbox["output_dir"].parent.parent / "data/chapters.json"
+    path.write_text(json.dumps(list(sandbox["chapter_map"].values()), ensure_ascii=False), encoding="utf-8")
+    before = _discovery_snapshot(path.parent.parent)
+    with pytest.raises(ProductionIntegrityError, match="WRITER_AUTHORIZATION_DRIFT"):
+        tx.execute_retroactive_transaction(**sandbox)
+    assert _discovery_snapshot(path.parent.parent) == before
+
+
+
+@pytest.mark.parametrize("identity,english,source", [("韓先生", "Master Han", "韓先生"), ("漢", "Han", "韓")])
+def test_writer_safety_real_restore_vetoes_d4_d5(discovery_novel, identity, english, source):
+    """Freshly loaded production callbacks reprove genuine audit provenance."""
+    import production_periodic_audit_finalization as final
+    from full_pipeline_periodic_audit_recovery import _snapshot_baseline, _restore_baseline, FullPipelinePeriodicAuditRecoveryError
+    case = discovery_novel(extra={"韓": {"english": "Han", "category": "character", "status": "provisional", "first_chapter": 26}},
+        prior_extra={identity: {"english": english, "category": "character", "first_chapter": 1}},
+        sources={1: source}, english={1: "Han."})
+    e = case.engine
+    final.intent_path(e, 26, 26).unlink()
+    manifest, created = _snapshot_baseline(case.root, 26, 26)
+    assert created
+    # Reproduce an old persisted current intent/plan. The new writer is never
+    # disabled to create or execute unsafe English; this is setup-only evidence.
+    e.save_json(final.intent_path(e, 26, 26), case.intent)
+    plan = case.intent["transaction_plan"]
+    slot = canonical_hash({k: plan["request"][k] for k in ("novel_id", "audit_label", "through_chapter")})
+    e.save_json(e.RETROACTIVE_DIR / "transactions" / f"{slot}.plan.json", plan)
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(FullPipelinePeriodicAuditRecoveryError, match="HISTORICAL_OWNERSHIP_RESERVATION"):
+        _restore_baseline(case.root, manifest)
+    assert _discovery_snapshot(case.root) == before
+
+
+
+def test_writer_safety_consecutive_zero_send_audits_need_no_fake_checkpoint(sandbox, monkeypatch):
+    import production_periodic_audit_finalization as final
+    engine = install_engine(monkeypatch, sandbox)
+    engine.glossary["entries"].clear()
+    engine.save_json(engine.GLOSSARY_FILE, engine.glossary)
+    engine.periodic_audit_checkpoint_path(1, 10).unlink()
+    for start, end in ((1, 5), (6, 10)):
+        result = {"decisions": [], "issues": []}
+        stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
+        chunking = {"candidate_count": 0, "api_request_count": 0, "candidate_set_hash": ""}
+        assert not engine.periodic_audit_checkpoint_path(start, end).exists()
+        assert final.finalize_periodic_audit(engine, start, end, result, stats, chunking)["status"] == "FINALIZED"
+        assert not engine.periodic_audit_checkpoint_path(start, end).exists()
+    before = _discovery_snapshot(sandbox["output_dir"].parent.parent)
+    assert final.finalize_periodic_audit(engine, 6, 10, result, stats, chunking)["status"] == "ALREADY_FINALIZED"
+    assert _discovery_snapshot(sandbox["output_dir"].parent.parent) == before
+
+
+
+@pytest.mark.parametrize("damage", ["reconciliation", "blocked_state", "reverted_prose"])
+def test_writer_safety_finalized_replay_reproves_durable_evidence(sandbox, damage):
+    tx.execute_retroactive_transaction(**sandbox)
+    directory = sandbox["retroactive_dir"] / "transactions"
+    if damage == "reconciliation":
+        next(directory.glob("*.reconcile.*.json")).write_bytes(b"contradictory")
+    elif damage == "blocked_state":
+        path = next(directory.glob("*.state.json"))
+        value = json.loads(path.read_bytes())
+        value["state"] = "BLOCKED"
+        value["reason"] = "requires disposition"
+        path.write_text(json.dumps(value), encoding="utf-8")
+    else:
+        (sandbox["output_dir"] / "0010.md").write_bytes(next(sandbox["backup_dir"].rglob("0010.md")).read_bytes())
+    root = sandbox["output_dir"].parent.parent
+    before = _discovery_snapshot(root)
+    with pytest.raises(ProductionIntegrityError): tx.execute_retroactive_transaction(**sandbox)
+    assert _discovery_snapshot(root) == before
+
+
+
+def test_standalone_known_fix_continuation_remains_blocked(discovery_novel, monkeypatch):
+    """Explicit compatibility limit; do not manufacture a standalone lineage."""
+    import production_periodic_audit_finalization as final
+    case = discovery_novel(extra={"蓋州游擊": {"english": "Ganzhou Mobile Corps Commander", "category": "historical office"}},
+        sources={1: "蓋州游擊"}, english={1: "Ganzhou Mobile Corps Commander arrived."})
+    e = case.engine
+    final.intent_path(e, 26, 26).unlink()
+    monkeypatch.setattr(e, "MING_COMPATIBILITY_MODE", True)
+    e.apply_known_glossary_fixes()
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Gaizhou Mobile Corps Commander arrived."
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
+        final.finalize_periodic_audit(e, 26, 26, *case.args)
     assert _discovery_snapshot(case.root) == before

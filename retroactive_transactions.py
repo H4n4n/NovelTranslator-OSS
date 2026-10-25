@@ -22,13 +22,11 @@ class RetroactiveBlocked(ProductionIntegrityError):
 
 
 def _read_json(path):
+    from historical_reconciliation import read_object
     try:
-        value = json.loads(path.read_bytes())
-    except (ValueError, OSError) as exc:
+        return read_object(path)
+    except ProductionIntegrityError as exc:
         raise RetroactiveBlocked(f"unreadable retroactive evidence: {path}") from exc
-    if not isinstance(value, dict):
-        raise RetroactiveBlocked(f"retroactive evidence must be an object: {path}")
-    return value
 
 
 def _plain_path(path):
@@ -45,6 +43,9 @@ def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label
     """
     from chapter_library import chapter_production_index
     root, baseline = Path(project_root), Path(baseline)
+    from historical_reconciliation import writer_module, writer_inventory, writer_authorization, read_object
+    context = writer_module(root / "output/chapters", novel_id)
+    inventory = writer_inventory(context, read_object(context.PROGRESS_FILE).get("completed"), through)
     directory = root / "output/retroactive_fixes/transactions"
     baseline_directory = baseline / "retroactive_fixes/transactions"
     slot = canonical_hash({"novel_id": novel_id, "audit_label": audit_label, "through_chapter": through})
@@ -57,6 +58,21 @@ def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label
             previous = baseline_directory / evidence.name
             if not previous.is_file() or previous.read_bytes() != evidence.read_bytes():
                 raise RetroactiveBlocked("audit recovery has transaction evidence without the matching plan")
+        # Legacy whole-tree rollback cannot invent historical authority. It may
+        # restore associated state only when the chapter corpus is already exact
+        # and a zero-edit proof independently validates the full prior lineage.
+        current = {p.relative_to(root / "output/chapters").as_posix(): p.read_bytes()
+                   for p in (root / "output/chapters").rglob("*.md")}
+        before = {p.relative_to(baseline / "chapters").as_posix(): p.read_bytes()
+                  for p in (baseline / "chapters").rglob("*.md")}
+        if current != before:
+            raise RetroactiveBlocked("AUTHORITATIVE_WRITER_CONTEXT_UNAVAILABLE: legacy prose rollback")
+        probe = dict(novel_id=novel_id, audit_label=audit_label, through_chapter=through, rules=[],
+            ownership_policy=ownership_policy(context.glossary),
+            safe_categories=sorted(context.ACTIVE_PROFILE.retroactive_safe_categories),
+            committed_chapters=list(range(1, through + 1)))
+        writer_authorization(context, build_plan(probe, {n: (root / "output/chapters" / f"{n:04d}.md").read_bytes()
+            for n in probe["committed_chapters"]}, context.chapter_map))
         return False
     plan = _read_json(path)
     request = plan.get("request", {})
@@ -92,6 +108,11 @@ def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label
         current = digest((current_chapters / f"{number:04d}.md").read_bytes())
         if item["edits"] and current == item["after_sha256"] and not backup.exists():
             raise RetroactiveBlocked(f"Chapter {number}: audit recovery AFTER lacks backup")
+    # Same fresh ownership veto before any associated-state restoration.
+    authorization = writer_authorization(context, plan)
+    auth_path = directory / f"{slot}.authorization.json"
+    if auth_path.exists() and read_object(auth_path) != authorization:
+        raise RetroactiveBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: WRITER_AUTHORIZATION_DRIFT")
     # Validate, never replace/regenerate, the original immutable span plan.
     if build_plan(request, originals, source_map) != plan:
         raise RetroactiveBlocked("audit recovery deterministic span plan mismatch")
@@ -183,28 +204,80 @@ def _summary(plan, outcomes, resumed):
 def execute_retroactive_transaction(*, novel_id, audit_label, through_chapter,
                                    replacements, glossary, staged_glossary=None,
                                    safe_categories, committed_chapters, chapter_map,
-                                   output_dir, retroactive_dir, backup_dir):
+                                   output_dir, retroactive_dir, backup_dir, writer_context=None):
     """Run under a local cooperating-writer lock; contradictions stop before writes.
 
     All chapter/source/backup identities are preflighted, including no-edit
     chapters. APPLIED means all writes reconcile; FINALIZED means the local
     result is durable, not that the outer paid audit has installed its state.
     """
+    from historical_reconciliation import writer_module, writer_inventory, writer_authorization, read_object, plain
+    context = writer_context or writer_module(output_dir, novel_id)
     directory = Path(retroactive_dir) / "transactions"
+    require_paths = ((output_dir, context.OUTPUT_DIR), (retroactive_dir, context.RETROACTIVE_DIR),
+                     (backup_dir, context.BACKUP_DIR))
+    if any(plain(Path(left).absolute()) != plain(Path(right).absolute()) for left, right in require_paths):
+        raise RetroactiveBlocked("FOREIGN_WRITER_ROOT")
+    # Raw caller inventory is checked BEFORE filtering, deduplication, directory
+    # creation, lock rendezvous, authorization receipt, or transaction writes.
+    writer_inventory(context, committed_chapters, through_chapter)
+    if chapter_map != context.chapter_map:
+        raise RetroactiveBlocked("SOURCE_INVENTORY_DRIFT")
+    from production_periodic_audit_finalization import load_intent
+    import re
+    match = re.fullmatch(r"(\d{4,})_(\d{4,})", str(audit_label))
+    intent = load_intent(context, *map(int, match.groups())) if match else None
+    expected = intent["baseline"]["glossary"] if intent else read_object(context.GLOSSARY_FILE)
+    if glossary != expected or (intent and staged_glossary != intent["post"]["glossary"]):
+        raise RetroactiveBlocked("WRITER_GLOSSARY_DRIFT")
+    numbers = list(range(1, through_chapter + 1))
+    request = dict(novel_id=novel_id, audit_label=str(audit_label), through_chapter=through_chapter,
+        rules=normalized_rules(replacements), ownership_policy=ownership_policy(glossary, staged_glossary),
+        safe_categories=sorted(safe_categories), committed_chapters=numbers)
+    slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+    path = plain(directory / f"{slot}.plan.json")
+    if path.exists():
+        planned = read_object(path)
+        validate_plan(planned, request, chapter_map)
+    else:
+        planned = build_plan(request, {n: plain(Path(output_dir) / f"{n:04d}.md").read_bytes() for n in numbers}, chapter_map)
+    try:
+        authorization = writer_authorization(context, planned)
+    except ProductionIntegrityError as exc:
+        if path.exists() and "HISTORICAL_OWNERSHIP_RESERVATION" in str(exc):
+            raise RetroactiveBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: HISTORICAL_OWNERSHIP_RESERVATION") from exc
+        raise
+    authorization_path = plain(directory / f"{slot}.authorization.json")
+    if authorization_path.exists() and read_object(authorization_path) != authorization:
+        raise RetroactiveBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: WRITER_AUTHORIZATION_DRIFT")
     _plain_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     try:
         with production_run_lock(directory):
+            if writer_authorization(context, planned) != authorization:
+                raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT")
             return _execute(novel_id, str(audit_label), through_chapter, replacements,
                             glossary, staged_glossary, safe_categories, committed_chapters,
-                            chapter_map, Path(output_dir), directory, Path(backup_dir))
+                            chapter_map, Path(output_dir), directory, Path(backup_dir),
+                            context, planned, authorization)
     except OSError as exc:
         raise LocalPersistenceError("local retroactive persistence failed; preserve transaction evidence") from exc
 
 
 def _execute(novel_id, audit_label, through, replacements, glossary, staged, categories,
-             committed, chapter_map, output, directory, backup_dir):
-    numbers = sorted(set(number for number in committed if 1 <= number <= through))
+             committed, chapter_map, output, directory, backup_dir, context=None, authorized_plan=None, authorization=None):
+    from historical_reconciliation import writer_authorization, writer_inventory, plain
+    if context is None or authorized_plan is None or authorization is None:
+        raise RetroactiveBlocked("AUTHORITATIVE_WRITER_CONTEXT_UNAVAILABLE")
+    writer_inventory(context, committed, through)
+    if (plain(output.absolute()) != plain(Path(context.OUTPUT_DIR).absolute())
+            or plain(directory.parent.absolute()) != plain(Path(context.RETROACTIVE_DIR).absolute())
+            or plain(backup_dir.absolute()) != plain(Path(context.BACKUP_DIR).absolute())
+            or chapter_map != context.chapter_map):
+        raise RetroactiveBlocked("FOREIGN_WRITER_ROOT")
+    if writer_authorization(context, authorized_plan) != authorization:
+        raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT")
+    numbers = list(range(1, through + 1))
     request = {"novel_id": novel_id, "audit_label": audit_label, "through_chapter": through,
                "rules": normalized_rules(replacements), "ownership_policy": ownership_policy(glossary, staged),
                "safe_categories": sorted(categories), "committed_chapters": numbers}
@@ -231,7 +304,10 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
                 raise RetroactiveBlocked(f"missing committed Chapter {number}: {path}")
             chapters[number] = path.read_bytes()
         plan = build_plan(request, chapters, chapter_map)
-        atomic_write_json(plan_path, plan)  # Durable intent BEFORE any historical write.
+        if plan != authorized_plan:
+            raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT")
+    if plan != authorized_plan:
+        raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT")
     transaction = plan["transaction_id"]
     backup_root = backup_dir / f"retroactive_{transaction}" / "chapters_before"
     _plain_path(backup_root.parent)
@@ -239,7 +315,7 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
     if state_path.exists():
         state = _read_json(state_path)
         if state.get("transaction_id") != transaction or state.get("state") not in {
-            "PLANNED", "APPLIED", "FINALIZED", "BLOCKED"
+            "PLANNED", "APPLIED", "FINALIZED"
         }:
             raise RetroactiveBlocked("retroactive state identity mismatch")
         if state["state"] == "FINALIZED" and (
@@ -260,11 +336,53 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
                     outcome.get("after_sha256") != item["after_sha256"] or
                     outcome.get("status") not in {"newly_applied", "already_applied", "skipped"}):
                 raise RetroactiveBlocked("existing retroactive chapter result mismatch")
+    def verify_outcomes(rows):
+        if not isinstance(rows, list) or len(rows) != len(plan["chapters"]):
+            raise RetroactiveBlocked("existing retroactive result inventory mismatch")
+        for item, row in zip(plan["chapters"], rows):
+            if not isinstance(row, dict) or row.get("status") not in (
+                    {"newly_applied", "already_applied"} if item["edits"] else {"skipped"}):
+                raise RetroactiveBlocked("existing retroactive result status mismatch")
+            expected = dict(chapter=item["chapter"], status=row["status"], before_sha256=item["before_sha256"],
+                after_sha256=item["after_sha256"], backup_sha256=item["before_sha256"] if item["edits"] else None,
+                backup=str((backup_root / f"{item['chapter']:04d}.md").absolute()) if item["edits"] else None,
+                replacement_count=len(item["edits"]), reconciliation="expected_after" if item["edits"] else "unchanged")
+            actual = dict(row)
+            if item["edits"]:
+                backup = Path(str(actual.get("backup", "")))
+                if not backup.is_absolute():
+                    backup = Path(context.OUTPUT_DIR).absolute().parent.parent / backup
+                actual["backup"] = str(backup.absolute())
+            if canonical_hash(actual) != canonical_hash(expected):
+                raise RetroactiveBlocked("existing retroactive result/plan mismatch")
+    state = _read_json(state_path) if state_path.exists() else None
+    if prior_result is not None:
+        if not state or state["state"] not in {"APPLIED", "FINALIZED"}:
+            raise RetroactiveBlocked("result precedes APPLIED state")
+        verify_outcomes(prior_result["chapter_results"])
+    if state:
+        fields = {"PLANNED": {"transaction_id", "state"},
+                  "APPLIED": {"transaction_id", "state", "chapter_results"},
+                  "FINALIZED": {"transaction_id", "state", "result_sha256", "reconciliation_sha256"}}
+        if set(state) != fields[state["state"]]:
+            raise RetroactiveBlocked("retroactive state schema mismatch")
+        if state["state"] == "APPLIED":
+            verify_outcomes(state["chapter_results"])
+        if state["state"] == "FINALIZED":
+            matches = [p for p in directory.glob(f"{slot}.reconcile.*.json")
+                       if digest(p.read_bytes()) == state["reconciliation_sha256"]]
+            if len(matches) != 1:
+                raise RetroactiveBlocked("final retroactive reconciliation hash mismatch")
+            reconciliation = _read_json(matches[0])
+            verify_outcomes(reconciliation.get("chapter_results"))
+            if (matches[0].name != f"{slot}.reconcile.{canonical_hash(reconciliation)}.json" or
+                    canonical_hash(reconciliation) != canonical_hash(_summary(plan,
+                        reconciliation["chapter_results"], bool(reconciliation.get("transactions_resumed"))))):
+                raise RetroactiveBlocked("final retroactive reconciliation mismatch")
     outcomes = []
 
     def block(message, **evidence):
-        atomic_write_json(state_path, {"transaction_id": transaction, "state": "BLOCKED",
-                                      "reason": message, **evidence})
+        # Contradictions must not overwrite even the old diagnostic state.
         raise RetroactiveBlocked(message)
 
     # Validate the entire batch before making additional historical mutations.
@@ -276,6 +394,8 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
         _plain_path(backup)
         current = digest(path.read_bytes()) if path.is_file() else "missing"
         before, after = item["before_sha256"], item["after_sha256"]
+        if state and state["state"] in {"APPLIED", "FINALIZED"} and current != after:
+            block(f"Chapter {number}: applied transaction is not AFTER")
         if current not in {before, after}:
             block(f"Chapter {number}: current SHA {current} is neither BEFORE {before} nor AFTER {after}",
                   chapter=number, current_sha256=current, before_sha256=before, after_sha256=after)
@@ -284,6 +404,22 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
                   expected_backup_sha256=before, actual_backup_sha256=digest(backup.read_bytes()))
         if item["edits"] and current == after and not backup.exists():
             block(f"Chapter {number}: AFTER bytes lack proven BEFORE backup", chapter=number)
+    if state_path.exists() and state.get("state") == "FINALIZED":
+        # Reprove at the new guard, preserve every finalized byte and mtime.
+        outcomes = [dict(chapter=i["chapter"], status="already_applied" if i["edits"] else "skipped",
+            before_sha256=i["before_sha256"], after_sha256=i["after_sha256"],
+            backup_sha256=i["before_sha256"] if i["edits"] else None,
+            backup=str(backup_root / f"{i['chapter']:04d}.md") if i["edits"] else None,
+            replacement_count=len(i["edits"]), reconciliation="expected_after" if i["edits"] else "unchanged")
+            for i in plan["chapters"]]
+        return _summary(plan, outcomes, True)
+    if writer_authorization(context, plan) != authorization:
+        raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT")
+    authorization_path = directory / f"{slot}.authorization.json"
+    if not authorization_path.exists():
+        atomic_write_json(authorization_path, authorization)
+    if not resumed:
+        atomic_write_json(plan_path, plan)  # Same original plan, no schema migration.
     atomic_write_json(state_path, {"transaction_id": transaction, "state": "PLANNED"})
     for item in plan["chapters"]:
         number = item["chapter"]

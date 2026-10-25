@@ -327,12 +327,13 @@ def test_runtime_unknown_operation_and_ceiling_mismatch_never_reach_transport(tr
 
 def test_current_auxiliary_catalog_preserves_frozen_adapter_ceiling_compatibility():
     # The old adapter's source scanner now sees only the explicit historical
-    # 3000 replay ceiling. Prove its unchanged whitelist covers the new catalog
-    # too, without modifying the frozen adapter or its contract literals.
+    # 3000 replay ceiling. This is a historical direct-Pro compatibility check;
+    # the separately tested Flash translation-recovery control is not auxiliary.
+    # Keep the frozen adapter and its contract literals unchanged.
     import benchmark_longitudinal_g7j_reasoning_budget as g7j
     recognized = set()
     for operation in g7j.GOAT_AUXILIARY_OPERATIONS:
         recognized.update(g7j._goat_auxiliary_stage1_runtime_accepted_incoming_tokens(operation))
-    current = {p.max_tokens for p in policy.policy_for_model().operations()
+    current = {p.max_tokens for p in policy.policy_for_model("pro").operations()
                if p.operation_id != "chapter_translation"}
     assert current <= recognized

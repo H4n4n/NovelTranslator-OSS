@@ -678,7 +678,7 @@ def test_metadata_only_prefix_cannot_select_model_without_exact_proof(harness, m
     assert len(h.calls) == 2
 
 
-@pytest.mark.parametrize("requested", [None, "pro"])
+@pytest.mark.parametrize("requested", ["pro", "deepseek-v4-pro"])
 def test_true_fresh_launcher_recovers_metadata_only_prefix_with_zero_sends(harness, monkeypatch, requested):
     import subprocess
     h = harness
@@ -701,7 +701,8 @@ import run_production_engine as launcher
 import noveltranslator_core as core
 inputs = json.loads(sys.stdin.read())
 pending = Path(inputs["pending"])
-prepared = launcher.prepare_production_runtime(inputs["requested"], pending)
+prepared = launcher.prepare_production_runtime(
+    inputs["requested"], pending, provider_selection="direct_deepseek")
 assert prepared["runtime"]["requested_model"] == "deepseek-v4-pro"
 assert prepared["runtime"]["effective_model"] == "deepseek-flash"
 assert prepared["config"].version == "DeepSeek-V4.1-Flash"

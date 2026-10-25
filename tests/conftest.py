@@ -119,6 +119,13 @@ def install_synthetic_goat_hard_bound(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def direct_pro_route(monkeypatch):
+    """Historical direct-Pro fixtures must opt in; never change suite defaults."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")
+
+
+@pytest.fixture
 def synthetic_goat_hard_bound(monkeypatch, tmp_path):
     return install_synthetic_goat_hard_bound(monkeypatch, tmp_path)
 

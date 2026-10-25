@@ -474,6 +474,32 @@ def test_receiver_rejects_unsanitized_metadata_and_preserves_primary_output(mete
     assert 'primary assertion failure' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('encoding', ['cp1252', 'ascii', 'utf-8'])
+@pytest.mark.parametrize('exitstatus', [0, 1])
+def test_receiver_drains_unicode_output_without_losing_terminal_or_failure(meter, monkeypatch, encoding, exitstatus):
+    from io import BytesIO, TextIOWrapper
+    meter.deselected = ['tests/test_synthetic.py::test_omitted']
+    node = 'tests/test_synthetic.py::test_x'
+    meter.pytest_collection_finish(SimpleNamespace(items=[SimpleNamespace(nodeid=node)]))
+    for phase in ('setup', 'call', 'teardown'):
+        outcome = 'failed' if exitstatus and phase == 'call' else 'passed'
+        meter.pytest_runtest_logreport(SimpleNamespace(nodeid=node, duration=0, when=phase, outcome=outcome))
+    meter.pytest_sessionfinish(SimpleNamespace(exitstatus=exitstatus), exitstatus)
+    raw = 'primary assertion: \u7532 \ud55c\uad6d\n'
+    frames = b''.join(runner.FRAME_PREFIX + json.dumps(r).encode() + b'\n' for r in meter.records)
+    output = BytesIO()
+    sink = TextIOWrapper(output, encoding=encoding, errors='strict', write_through=True)
+    receiver = runner.MetadataReceiver(meter.directory)
+    with monkeypatch.context() as scope:
+        scope.setattr(sys, 'stdout', sink)
+        receiver.read_output(BytesIO(raw.encode('utf-8') + frames + b'last line\n'))
+    assert not receiver.failed and receiver.terminal and receiver.collection_valid
+    assert b'primary assertion:' in output.getvalue() and b'last line' in output.getvalue()
+    times = runner.read_json(meter.directory / 'timings.json')
+    assert times['exit_code'] == exitstatus and times['successful'] == (exitstatus == 0)
+    assert 'primary assertion:' not in (meter.directory / 'events.jsonl').read_text()
+
+
 @pytest.mark.parametrize('case', ['truncated', 'oversized', 'budget'])
 def test_receiver_rejects_incomplete_or_excessive_frames(meter, monkeypatch, case):
     from io import BytesIO

@@ -860,6 +860,7 @@ def _load_production_definitions(project_root, monkeypatch):
     return name, module
 
 
+@pytest.mark.usefixtures("direct_pro_route")
 def test_production_catch_runs_one_shot_auto_resolution_then_reuses_sidecar(
     tmp_path, monkeypatch
 ):

@@ -1039,7 +1039,7 @@ def discovery_novel(tmp_path, monkeypatch, request):
     import historical_reconciliation as history
     serial = []
 
-    def make(language="zh", count=26, extra=None, sources=None, english=None, action="correct", prior_record=False, prior_extra=None, committed_subset=None, prior_midpoint=None):
+    def make(language="zh", count=26, extra=None, sources=None, english=None, action="correct", prior_record=False, prior_extra=None, committed_subset=None, prior_midpoint=None, profile_id=None, native_policy=False):
         key = "韓" if language == "zh" else "한민"
         root = tmp_path / f"public_novel_{len(serial)}"
         serial.append(root)
@@ -1048,6 +1048,8 @@ def discovery_novel(tmp_path, monkeypatch, request):
         output = root / "output/chapters"
         output.mkdir(parents=True)
         entries = {key: {"english": "Han", "category": "character", "status": "provisional"}, **(extra or {}), **(prior_extra or {})}
+        if native_policy:
+            entries[key]["first_chapter"] = count
         units = {n: {"chapter": n, "production_index": n, "text": key if n in {1, 2, 25, 26, 388, 401} else "",
                      "source_document_sha256": canonical_hash([language, n])} for n in range(1, count + 1)}
         if prior_extra:
@@ -1066,6 +1068,11 @@ def discovery_novel(tmp_path, monkeypatch, request):
         config = json.loads((root / "novel.json").read_bytes())
         config["id"] = root.name
         config["source_language"] = language
+        if profile_id:
+            from translation_profile import load_translation_profile
+            from novel_project import repository_root
+            config["profile"] = profile_id
+            monkeypatch.setattr(engine, "ACTIVE_PROFILE", load_translation_profile(profile_id, repository_root()))
         (root / "novel.json").write_text(json.dumps(config), encoding="utf-8")
         engine.progress.update(completed=list(units), last_completed=count, next_chapter=count + 1,
                                last_audited_chapter=0)
@@ -1078,6 +1085,8 @@ def discovery_novel(tmp_path, monkeypatch, request):
         prior_end = 25 if count == 26 else 375
         engine.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
         def prior_apply(start, end, result, glossary_data=None):
+            if native_policy:
+                return original_apply(start, end, result, glossary_data=glossary_data)
             return original_apply(start, end, result, glossary_data=glossary_data,
                                   targets=[{"chinese": d["chinese"]} for d in result["decisions"]] or [{"chinese": key}])
         monkeypatch.setattr(engine, "apply_periodic_audit", prior_apply)
@@ -1094,6 +1103,8 @@ def discovery_novel(tmp_path, monkeypatch, request):
             prior_chunking = {"candidate_count": 0, "api_request_count": 0,
                               "candidate_set_hash": canonical_hash(prior_result)}
         def apply(start, end, result, glossary_data=None):
+            if native_policy:
+                return original_apply(start, end, result, glossary_data=glossary_data)
             return original_apply(start, end, result, glossary_data=glossary_data,
                                   targets=[{"chinese": d["chinese"]} for d in result["decisions"]] or [{"chinese": key}])
         apply.discovery_original = original_apply
@@ -1931,8 +1942,8 @@ def test_writer_safety_finalized_replay_reproves_durable_evidence(sandbox, damag
 
 
 
-def test_standalone_known_fix_continuation_remains_blocked(discovery_novel, monkeypatch):
-    """Explicit compatibility limit; do not manufacture a standalone lineage."""
+def test_standalone_known_fix_continuation_has_source_owned_lineage(discovery_novel, monkeypatch):
+    """The actual startup owner captures evidence before installing the glossary."""
     import production_periodic_audit_finalization as final
     case = discovery_novel(extra={"蓋州游擊": {"english": "Ganzhou Mobile Corps Commander", "category": "historical office"}},
         sources={1: "蓋州游擊"}, english={1: "Ganzhou Mobile Corps Commander arrived."})
@@ -1941,7 +1952,305 @@ def test_standalone_known_fix_continuation_remains_blocked(discovery_novel, monk
     monkeypatch.setattr(e, "MING_COMPATIBILITY_MODE", True)
     e.apply_known_glossary_fixes()
     assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Gaizhou Mobile Corps Commander arrived."
+    e.apply_known_glossary_fixes()
+    before = (e.OUTPUT_DIR / "0001.md").stat().st_mtime_ns
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "FINALIZED"
+    assert (e.OUTPUT_DIR / "0001.md").stat().st_mtime_ns == before
+    snapshot = _discovery_snapshot(case.root)
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "ALREADY_FINALIZED"
+    assert _discovery_snapshot(case.root) == snapshot
+
+
+
+def _standalone_case(discovery_novel, monkeypatch, language="zh"):
+    import production_periodic_audit_finalization as final
+    source = "蓋州游擊" if language == "zh" else "흑호탈심"
+    old = "Ganzhou Mobile Corps Commander" if language == "zh" else "Black Tiger Seizes the Heart"
+    new = "Gaizhou Mobile Corps Commander" if language == "zh" else "Black Tiger Seizes The Heart"
+    category = "historical office" if language == "zh" else "martial technique"
+    case = discovery_novel(language, extra={source: {"english": old, "category": category,
+        "status": "provisional", "candidate_id": "synthetic-original-source-identity"}},
+        sources={1: source}, english={1: "\ufeff**" + old + "** — café.\r\n"},
+        profile_id="historical_military" if language == "zh" else "korean_xianxia", native_policy=True)
+    e = case.engine
+    final.intent_path(e, 26, 26).unlink()
+    monkeypatch.setattr(e, "MING_COMPATIBILITY_MODE", language == "zh")
+    # Paid artifacts are unrelated to local history and must remain byte-identical.
+    journal = case.root / "data/provider_request_journal/preserved.json"
+    journal.parent.mkdir(parents=True)
+    journal.write_bytes(b'{"synthetic_paid_evidence":"must survive"}')
+    (case.root / "output/pending/0402.json").write_bytes(b'{"synthetic_pending":"paid"}')
+    case.source, case.old, case.new = source, old, new
+    return case
+
+
+def _lineage_witness(case):
+    return next((case.engine.RETROACTIVE_DIR / "standalone_lineage").glob("*.prepared.json"))
+
+
+@pytest.mark.parametrize("language", ["zh", "ko"])
+def test_standalone_lineage_exact_source_spans_receipts_and_readers(discovery_novel, monkeypatch, language):
+    import production_periodic_audit_finalization as final
+    from production_standalone_lineage import witnesses, verified_events
+    from production_historical_lineage import verify_audit_obligations, verify_disposition_lineage, decoded_text_sha
+    from novel_project import NovelProject, NovelConfig, repository_root
+    from historical_reconciliation import publication_revisions, require_publication_freshness
+    case = _standalone_case(discovery_novel, monkeypatch, language)
+    e = case.engine
+    original = (e.OUTPUT_DIR / "0001.md").read_bytes()
+    protected = {p: p.read_bytes() for p in (case.root / "data/provider_request_journal").glob("*")}
+    protected.update({p: p.read_bytes() for p in (case.root / "output/pending").glob("*")})
+    e.apply_known_glossary_fixes()
+    witness = witnesses(e)[0]
+    assert witness["glossary"]["entries"][case.source]["candidate_id"] == "synthetic-original-source-identity"
+    assert witness["staged_glossary"]["entries"][case.source]["english"] == case.new
+    item = witness["plan"]["chapters"][0]
+    edit = item["edits"][0]
+    assert edit["source_span"] == {"start": 0, "end": len(case.source)}
+    assert original[edit["start"]:edit["end"]] == case.old.encode()
+    after = tx.transform_bytes(original, [edit])
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == after
+    assert item["before_sha256"] == digest(original) and item["after_sha256"] == digest(after)
+    project = NovelProject(repository_root(), case.root, NovelConfig.from_dict(json.loads((case.root / "novel.json").read_bytes())))
+    verify_audit_obligations(project)
+    verify_disposition_lineage(project, dict(chapter=1, translation_sha256=decoded_text_sha(original)))
+    assert len(verified_events(e)) == 2  # original audit + standalone
+    assert any(r["transaction_id"] == witness["plan"]["transaction_id"] for r in publication_revisions(project))
+    with pytest.raises(ProductionIntegrityError, match="PUBLICATION_STALE"):
+        require_publication_freshness(project)
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "FINALIZED"
+    verify_audit_obligations(project)
+    verify_disposition_lineage(project, dict(chapter=1, translation_sha256=decoded_text_sha(original)))
+    from historical_reconciliation import final_consistency_report
+    report = final_consistency_report(e)
+    assert report["historically_corrected_chapters"] >= 1
+    snapshot = _discovery_snapshot(case.root)
+    e.apply_known_glossary_fixes()
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "ALREADY_FINALIZED"
+    assert _discovery_snapshot(case.root) == snapshot
+    assert all(p.read_bytes() == raw for p, raw in protected.items())
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == after
+
+
+@pytest.mark.parametrize("point", ["before_prepared", "after_prepared", "planned", "backup", "chapter",
+    "applied", "result", "reconcile", "finalized", "glossary", "before_seal", "after_seal"])
+def test_standalone_lineage_crash_recovery(discovery_novel, monkeypatch, point):
+    import production_standalone_lineage as lineage
+    import production_periodic_audit_finalization as final
+    case = _standalone_case(discovery_novel, monkeypatch)
+    e = case.engine
+    original = (e.OUTPUT_DIR / "0001.md").read_bytes()
+    with monkeypatch.context() as mp:
+        write, txwrite, bytewrite, save = lineage.atomic_write_json, tx.atomic_write_json, tx.atomic_write_bytes, e.save_json
+        def witness_write(path, value):
+            matches = path.name.endswith(".prepared.json") if "prepared" in point else path.name.endswith(".complete.json") if "seal" in point else False
+            if matches and point.startswith("before_"): raise KeyboardInterrupt()
+            write(path, value)
+            if matches: raise KeyboardInterrupt()
+        def transaction_write(path, value):
+            txwrite(path, value)
+            if ((point in {"planned", "applied", "finalized"} and value.get("state", "").lower() == point)
+                    or point == "result" and path.name.endswith(".result.json")
+                    or point == "reconcile" and ".reconcile." in path.name): raise KeyboardInterrupt()
+        def bytes_write(path, value):
+            bytewrite(path, value)
+            if point == "chapter" and path.parent == e.OUTPUT_DIR or point == "backup" and path.parent.name == "chapters_before":
+                raise KeyboardInterrupt()
+        def state_write(path, value):
+            save(path, value)
+            if point == "glossary" and path == e.GLOSSARY_FILE: raise KeyboardInterrupt()
+        mp.setattr(lineage, "atomic_write_json", witness_write)
+        mp.setattr(tx, "atomic_write_json", transaction_write)
+        mp.setattr(tx, "atomic_write_bytes", bytes_write)
+        mp.setattr(e, "save_json", state_write)
+        with pytest.raises(KeyboardInterrupt): e.apply_known_glossary_fixes()
+    if point not in {"before_prepared", "after_seal"}:
+        snapshot = _discovery_snapshot(case.root)
+        with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
+            final.finalize_periodic_audit(e, 26, 26, *case.args)
+        assert _discovery_snapshot(case.root) == snapshot
+    # A real restart reloads authoritative state before the startup callback.
+    e.glossary.clear()
+    e.glossary.update(json.loads(e.GLOSSARY_FILE.read_bytes()))
+    e.apply_known_glossary_fixes()
+    witness = lineage.witnesses(e)[0]
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == original.replace(case.old.encode(), case.new.encode())
+    assert len(list((e.RETROACTIVE_DIR / "standalone_lineage").glob("*.complete.json"))) == 1
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "FINALIZED"
+    before = _discovery_snapshot(case.root)
+    e.apply_known_glossary_fixes()
+    assert _discovery_snapshot(case.root) == before
+    assert witness["plan"]["request"]["audit_label"] == "startup"
+
+
+@pytest.mark.parametrize("damage", ["missing", "missing_seal", "malformed", "duplicate_key", "foreign", "glossary_identity",
+    "source_span", "before", "source_inventory", "sparse", "reordered", "prior_lineage", "fork", "duplicate", "partial",
+    "seal", "receipt", "backup", "source_drift", "config_drift", "competing_plan", "malformed_orphan", "canonical_forged_duplicate"])
+def test_standalone_lineage_damage_blocks_without_writes(discovery_novel, monkeypatch, damage):
+    import production_periodic_audit_finalization as final
+    case = _standalone_case(discovery_novel, monkeypatch)
+    e = case.engine
+    e.apply_known_glossary_fixes()
+    path = _lineage_witness(case)
+    value = json.loads(path.read_bytes())
+    seal = path.with_name(path.name.replace(".prepared.", ".complete."))
+    if damage == "missing": path.unlink()
+    elif damage == "missing_seal": seal.unlink()
+    elif damage == "malformed": path.write_bytes(b'{broken')
+    elif damage == "duplicate_key":
+        path.write_text(path.read_text(encoding="utf-8").replace('"revision":', '"revision":"standalone-source-lineage-v1","revision":', 1), encoding="utf-8")
+    elif damage == "duplicate": path.with_name("duplicate.prepared.json").write_bytes(path.read_bytes())
+    elif damage == "partial": path.with_name("partial.tmp").write_bytes(b'{')
+    elif damage == "seal": seal.write_bytes(b'{}')
+    elif damage == "receipt":
+        next((e.RETROACTIVE_DIR / "transactions").glob(slot_for_test(value["plan"]) + ".result.json")).write_bytes(b'{}')
+    elif damage == "backup":
+        (e.BACKUP_DIR / ("retroactive_" + value["plan"]["transaction_id"]) / "chapters_before/0001.md").write_bytes(b'changed')
+    elif damage == "source_drift":
+        units = json.loads(e.CHAPTERS_FILE.read_bytes())
+        units[0]["text"] += "其他"
+        e.save_json(e.CHAPTERS_FILE, units)
+        e.chapter_map[1]["text"] = units[0]["text"]
+    elif damage == "config_drift":
+        config = json.loads((case.root / "novel.json").read_bytes())
+        config["title"] += " changed"
+        (case.root / "novel.json").write_text(json.dumps(config), encoding="utf-8")
+    elif damage == "malformed_orphan":
+        (e.RETROACTIVE_DIR / "transactions/orphan.plan.json").write_bytes(b"{}")
+    elif damage == "canonical_forged_duplicate":
+        saved = copy.deepcopy(value["plan"])
+        saved["request"]["audit_label"] = "foreign-canonical-slot"
+        e.save_json(e.RETROACTIVE_DIR / "transactions" / (slot_for_test(saved) + ".plan.json"), saved)
+    elif damage == "competing_plan":
+        saved = next((e.RETROACTIVE_DIR / "transactions").glob(slot_for_test(value["plan"]) + ".plan.json"))
+        saved.with_name("competing.plan.json").write_bytes(saved.read_bytes())
+    else:
+        if damage == "foreign": value["inventory"]["novel_id"] = "foreign"
+        elif damage == "glossary_identity": value["glossary"]["entries"][case.source]["candidate_id"] = "fabricated"
+        elif damage == "source_span": value["plan"]["chapters"][0]["edits"][0]["source_span"]["end"] -= 1
+        elif damage == "before": value["before_chapters"]["0001.md"] = "0" * 64
+        elif damage == "source_inventory": value["inventory"]["source_inventory"][0]["unit_sha256"] = "0" * 64
+        elif damage == "sparse": value["inventory"]["committed"].remove(2)
+        elif damage == "reordered": value["inventory"]["source_inventory"].reverse()
+        elif damage == "prior_lineage": value["prior_lineage"] = []
+        elif damage == "fork": value["after_audit"] = 0
+        value["witness_sha256"] = canonical_hash({k: v for k, v in value.items() if k != "witness_sha256"})
+        e.save_json(path, value)
+        # Rehashing the seal cannot forge its original transaction authorization.
+        complete = json.loads(seal.read_bytes())
+        complete["witness_sha256"] = value["witness_sha256"]
+        e.save_json(seal, complete)
+    snapshot = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
+        final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert _discovery_snapshot(case.root) == snapshot
+
+
+def slot_for_test(plan):
+    return canonical_hash({k: plan["request"][k] for k in ("novel_id", "audit_label", "through_chapter")})
+
+
+@pytest.mark.parametrize("point", ["intent", "invalidation", "chapter", "glossary", "progress"])
+def test_standalone_lineage_later_audit_crash_recovery(discovery_novel, monkeypatch, point):
+    import production_periodic_audit_finalization as final
+    import historical_reconciliation as history
+    case = _standalone_case(discovery_novel, monkeypatch)
+    e = case.engine
+    e.apply_known_glossary_fixes()
+    first = _snapshot_value(e.OUTPUT_DIR / "0001.md")
+    with monkeypatch.context() as mp:
+        write, invalidation_write, bytewrite, save = final.atomic_write_json, history.atomic_write_json, tx.atomic_write_bytes, e.save_json
+        def intent_write(path, value):
+            write(path, value)
+            if point == "intent" and path.name.endswith(".finalization.json"): raise KeyboardInterrupt()
+        def invalidate(path, value):
+            invalidation_write(path, value)
+            if point == "invalidation" and path.parent.name == "publication_freshness": raise KeyboardInterrupt()
+        def chapter_write(path, value):
+            bytewrite(path, value)
+            if point == "chapter" and path.parent == e.OUTPUT_DIR: raise KeyboardInterrupt()
+        def state_write(path, value):
+            save(path, value)
+            if point == "glossary" and path == e.GLOSSARY_FILE or point == "progress" and path == e.PROGRESS_FILE:
+                raise KeyboardInterrupt()
+        mp.setattr(final, "atomic_write_json", intent_write)
+        mp.setattr(history, "atomic_write_json", invalidate)
+        mp.setattr(tx, "atomic_write_bytes", chapter_write)
+        mp.setattr(e, "save_json", state_write)
+        with pytest.raises(KeyboardInterrupt): final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] in {"FINALIZED", "ALREADY_FINALIZED"}
+    assert _snapshot_value(e.OUTPUT_DIR / "0001.md") == first
+    snapshot = _discovery_snapshot(case.root)
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "ALREADY_FINALIZED"
+    assert _discovery_snapshot(case.root) == snapshot
+
+
+def test_standalone_legacy_transaction_never_gets_a_manufactured_witness(discovery_novel, monkeypatch):
+    import production_periodic_audit_finalization as final
+    case = _standalone_case(discovery_novel, monkeypatch)
+    e = case.engine
+    staged, _, _, rules = e._prepare_known_glossary_fixes(e.glossary,
+        profile=e.ACTIVE_PROFILE, ming_compatibility=e.MING_COMPATIBILITY_MODE)
+    e.apply_retroactive_replacements("startup", 26, rules, staged_glossary=staged)
+    snapshot = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError): e.apply_known_glossary_fixes()
+    assert _discovery_snapshot(case.root) == snapshot
+    e.save_json(e.GLOSSARY_FILE, staged)
+    e.glossary.clear()
+    e.glossary.update(staged)
     before = _discovery_snapshot(case.root)
     with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
         final.finalize_periodic_audit(e, 26, 26, *case.args)
     assert _discovery_snapshot(case.root) == before
+    assert not (e.RETROACTIVE_DIR / "standalone_lineage").exists()
+
+
+
+def test_standalone_lineage_original_repository_layout_remains_supported(sandbox, monkeypatch):
+    import production_periodic_audit_finalization as final
+    from novel_project import legacy_project
+    from production_historical_lineage import verify_audit_obligations
+    from historical_reconciliation import publication_revisions
+    e = install_engine(monkeypatch, sandbox)
+    root = e.OUTPUT_DIR.parent.parent
+    (root / "novel.json").unlink()
+    project = legacy_project(root)
+    monkeypatch.setattr(e, "ACTIVE_NOVEL_CONFIG", None)
+    monkeypatch.setattr(e, "MING_COMPATIBILITY_MODE", True)
+    for n in range(11, project.config.final_chapter + 1):
+        e.chapter_map[n] = {"chapter": n, "production_index": n, "text": ""}
+    e.chapter_map[1]["text"] = "蓋州游擊"
+    monkeypatch.setattr(e, "chapters", list(e.chapter_map.values()))
+    e.save_json(e.CHAPTERS_FILE, e.chapters)
+    e.glossary["entries"]["蓋州游擊"] = {"english": "Ganzhou Mobile Corps Commander", "category": "historical office"}
+    e.save_json(e.GLOSSARY_FILE, e.glossary)
+    (e.OUTPUT_DIR / "0001.md").write_bytes(b"Ganzhou Mobile Corps Commander arrived.\r\n")
+    e.apply_known_glossary_fixes()
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Gaizhou Mobile Corps Commander arrived.\r\n"
+    assert final.finalize_periodic_audit(e, 1, 10, {"decisions": [], "issues": []},
+        {k: 0 for k in final.STAT_TOTAL_FIELDS}, {"candidate_count": 0, "api_request_count": 0, "candidate_set_hash": ""})["status"] == "FINALIZED"
+    verify_audit_obligations(project)
+    assert publication_revisions(project)
+
+
+
+def test_standalone_lineage_relative_writer_and_absolute_readers(discovery_novel, monkeypatch):
+    import production_periodic_audit_finalization as final
+    from production_historical_lineage import verify_audit_obligations, verify_disposition_lineage, decoded_text_sha
+    from novel_project import NovelProject, NovelConfig, repository_root
+    case = _standalone_case(discovery_novel, monkeypatch)
+    e = case.engine
+    original = (e.OUTPUT_DIR / "0001.md").read_bytes()
+    project = NovelProject(repository_root(), case.root, NovelConfig.from_dict(json.loads((case.root / "novel.json").read_bytes())))
+    monkeypatch.chdir(case.root)
+    for name in ("CHAPTERS_FILE", "GLOSSARY_FILE", "PROGRESS_FILE", "CONTINUITY_FILE", "ISSUES_FILE",
+                 "AUDIT_HISTORY_FILE", "OUTPUT_DIR", "PENDING_DIR", "AUDIT_DIR", "RETROACTIVE_DIR",
+                 "BACKUP_DIR", "PAID_REQUEST_JOURNAL_DIR"):
+        monkeypatch.setattr(e, name, Path(getattr(e, name)).absolute().relative_to(case.root))
+    e.apply_known_glossary_fixes()
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "FINALIZED"
+    verify_audit_obligations(project)
+    verify_disposition_lineage(project, dict(chapter=1, translation_sha256=decoded_text_sha(original)))
+    snapshot = _discovery_snapshot(case.root)
+    e.apply_known_glossary_fixes()
+    assert _discovery_snapshot(case.root) == snapshot

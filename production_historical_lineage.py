@@ -120,6 +120,8 @@ def _blobs(module, intents):
     blobs = {}
     for path in module.OUTPUT_DIR.glob("*.md"):
         blobs[file_sha(path)] = path.read_bytes()
+    from production_standalone_lineage import witnesses, add_blobs
+    add_blobs(module, witnesses(module), blobs)
     for intent in intents:
         plan = intent["transaction_plan"]
         for item in plan["chapters"]:
@@ -136,6 +138,20 @@ def verify_audit_obligations(project, *, pending_window=None):
     The local-only variant independently proves the sole requested pending
     prefix; an unrelated pending audit still blocks. No blanket allow_pending.
     """
+    standalone = project.root / "output/retroactive_fixes/standalone_lineage"
+    if standalone.exists():
+        from goat_periodic_audit_finalize_plan import local_module
+        from production_standalone_lineage import verified_events
+        module = local_module(project)
+        if project.is_legacy:
+            module.ACTIVE_NOVEL_CONFIG = None
+        require(pending_window is None or module.progress.get("provider") == "command_code_provider",
+                "local lineage reconciliation requires GOAT")
+        verified_events(module, pending_window=pending_window)
+        if pending_window:
+            intent = load_intent(module, *pending_window)
+            _prove_audit(module, intent, _blobs(module, _audits(module)), pending=True)
+        return
     if not list(project.audit_dir.glob("*.finalization.json")):
         require(pending_window is None, "local reconciliation intent missing")
         return
@@ -180,6 +196,30 @@ def verify_disposition_lineage(project, original, *, pending_window=None):
     from goat_periodic_audit_finalize_plan import local_module
     module = local_module(project)
     chapter = original["chapter"]
+    if (project.root / "output/retroactive_fixes/standalone_lineage").exists():
+        from production_standalone_lineage import verified_events
+        if project.is_legacy:
+            module.ACTIVE_NOVEL_CONFIG = None
+        events = verified_events(module, pending_window=pending_window)
+        if pending_window:
+            intent = load_intent(module, *pending_window)
+            before, after = _prove_audit(module, intent, _blobs(module, _audits(module)), pending=True)
+            events.append((intent["transaction_plan"], before, after))
+        previous = None
+        for plan, before, after in events:
+            item = next((i for i in plan["chapters"] if i["chapter"] == chapter and i["edits"]), None)
+            if item is None:
+                continue
+            require(decoded_text_sha(before[chapter]) == original["translation_sha256"] if previous is None
+                    else item["before_sha256"] == previous, "disconnected standalone/disposition chain")
+            previous = item["after_sha256"]
+            if pending_window and plan == intent["transaction_plan"]:
+                require(file_sha(module.OUTPUT_DIR / f"{chapter:04d}.md") in
+                        {item["before_sha256"], item["after_sha256"]}, "pending lineage prose drift")
+                return
+        require(previous is not None and previous == file_sha(module.OUTPUT_DIR / f"{chapter:04d}.md"),
+                "standalone chain does not reach current bytes")
+        return
     intents = _audits(module)
     by_id = {i["transaction_plan"]["transaction_id"]: i for i in intents}
     require(len(by_id) == len(intents), "competing historical audit intents")

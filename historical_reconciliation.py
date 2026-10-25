@@ -151,7 +151,7 @@ def _discovery_intent(module, start, end, expected_sha):
 
 
 
-def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False, chapter_bytes=None):
+def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False, chapter_bytes=None, _events=None):
     """Prove prior immutable publications before reserving their ownership.
 
     Only a veto inventory: never feed it into positive edit authorization.
@@ -171,7 +171,7 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
             require(not any(i["start"] == selected["start"] for i in intents),
                     "COMPETING_UNPUBLISHED_OWNERSHIP_INTENT")
             intents.append(selected)
-        prior = sorted((i for i in intents if i["end"] < selected["start"]),
+        prior = sorted((i for i in intents if i != selected and i["end"] < selected["start"]),
                        key=lambda i: (i["start"], i["end"]))
         require(len(intents) == len(prior) + 1 and selected in intents,
                 "UNRELATED_OR_COMPETING_OWNERSHIP_INTENT")
@@ -189,9 +189,15 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
                     raw = backup.read_bytes()
                     require(digest(raw) == item["before_sha256"], "HISTORICAL_BACKUP_DRIFT")
                     blobs[digest(raw)] = raw
+        from production_standalone_lineage import witnesses, add_blobs, prove_gap
+        standalone = witnesses(module, active_plan=selected["transaction_plan"])
+        add_blobs(module, standalone, blobs)
         policy, evidence, latest, previous_end = {}, [], {}, 0
+        consumed = set()
         novel = selected["transaction_plan"]["request"]["novel_id"]
         for index, intent in enumerate(prior):
+            prove_gap(module, standalone, previous_end, records[:index], blobs,
+                      latest, policy, evidence, consumed, events=_events)
             start, end = intent["start"], intent["end"]
             request = intent["transaction_plan"]["request"]
             require(start == previous_end + 1 and request["novel_id"] == novel
@@ -225,12 +231,13 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
                 paid = checkpoint_proof(detached, start, end)
                 require(all(paid[k] == intent[k] for k in ("audit_result", "audit_stats")),
                         "HISTORICAL_OWNERSHIP_PAID_EVIDENCE_DRIFT")
-            after = {}
+            before, after = {}, {}
             for item in intent["transaction_plan"]["chapters"]:
                 n = item["chapter"]
                 raw = blobs.get(item["before_sha256"])
                 require(raw is not None and (n not in latest or latest[n] == item["before_sha256"]),
                         "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
+                before[n] = raw
                 after[n] = tx.transform_bytes(raw, item["edits"])
                 latest[n] = item["after_sha256"]
             proof = transaction_proof(detached, start, end, intent["baseline"]["glossary"],
@@ -248,11 +255,19 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
                     "HISTORICAL_OWNERSHIP_RECORD_DRIFT")
             _reserve_policy(policy, ownership_policy(intent["baseline"]["glossary"], intent["post"]["glossary"]))
             evidence.append(intent["intent_sha256"])
+            if _events is not None:
+                _events.append((intent["transaction_plan"], before, after))
             previous_end = end
         require(previous_end == selected["start"] - 1, "HISTORICAL_OWNERSHIP_LINEAGE_GAP")
+        prove_gap(module, standalone, previous_end, records, blobs,
+                  latest, policy, evidence, consumed, events=_events)
+        require(len(consumed) == len(standalone), "STANDALONE_CHRONOLOGY_UNPROVEN")
         selected_before = {i["chapter"]: i["before_sha256"] for i in selected["transaction_plan"]["chapters"]}
-        require(all(selected_before.get(n) == sha for n, sha in latest.items()),
-                "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
+        for n, sha in latest.items():
+            current = (chapter_bytes[n] if chapter_bytes is not None else
+                       plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes())
+            require(selected_before.get(n, digest(current)) == sha,
+                    "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
         return policy, evidence
     except (ProductionIntegrityError, OSError, KeyError, TypeError, ValueError) as exc:
         raise ProductionIntegrityError("AUT2: HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN") from exc
@@ -318,13 +333,19 @@ def writer_module(output_dir, novel_id):
 
 def writer_inventory(module, supplied, through):
     """Independent disk inventory under the actual caller-held novel lock."""
-    from chapter_library import index_chapter_library
     from production_run_lock import held_production_run_lock, ProductionRunLockedError
     root = plain(Path(module.OUTPUT_DIR).absolute()).parent.parent
     try:
         held_production_run_lock(root)  # Registry/descriptor proof, not file existence.
     except RuntimeError as exc:
         raise ProductionRunLockedError("Actual caller-held novel production lock required") from exc
+    return read_only_inventory(module, supplied, through)
+
+
+def read_only_inventory(module, supplied, through):
+    """Same authoritative inventory for proof readers; grants no writer lease."""
+    from chapter_library import index_chapter_library
+    root = plain(Path(module.OUTPUT_DIR).absolute()).parent.parent
     expected_paths = dict(OUTPUT_DIR="output/chapters", RETROACTIVE_DIR="output/retroactive_fixes",
         BACKUP_DIR="backup", AUDIT_DIR="output/audits", CHAPTERS_FILE="data/chapters.json",
         PROGRESS_FILE="data/progress.json", GLOSSARY_FILE="data/glossary.json",
@@ -379,6 +400,38 @@ def writer_inventory(module, supplied, through):
     return dict(novel_id=(module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"),
                 config_sha256=canonical_hash(config.to_dict()), committed=numbers, through=through, source_inventory=source_inventory(source_map),
                 pending_exception={name: digest(files[name].read_bytes()) for name in extra})
+
+
+def writer_evidence_files(module, lineage):
+    historical_files = {}
+    # Bind physical immutable evidence as well as semantic intent identities.
+    # Current transaction/publication prefixes are deliberately excluded; their
+    # exact immutable plan and BEFORE inventory are bound separately below.
+    for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
+        prior = audit_intent(module, path)
+        if prior["intent_sha256"] not in lineage:
+            continue
+        prior_request = prior["transaction_plan"]["request"]
+        prior_slot = canonical_hash({k: prior_request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+        files = [path, module.AUDIT_DIR / f"audit_{prior['start']:04d}_{prior['end']:04d}.json"]
+        checkpoint = module.periodic_audit_checkpoint_path(prior["start"], prior["end"])
+        if checkpoint.is_file():
+            files.append(checkpoint)
+        else:
+            # _writer_checkpoint has already proved the exact no-send shape.
+            root = Path(module.OUTPUT_DIR).absolute().parent.parent
+            historical_files[Path(checkpoint).absolute().relative_to(root).as_posix()] = "ABSENT_ZERO_SEND"
+        files += list((module.RETROACTIVE_DIR / "transactions").glob(f"{prior_slot}.*.json"))
+        files += list((module.BACKUP_DIR / f"checkpoint_{prior['end']:04d}").glob("*"))
+        files += list((module.BACKUP_DIR / f"retroactive_{prior['transaction_plan']['transaction_id']}" /
+                       "chapters_before").glob("*.md"))
+        root = Path(module.OUTPUT_DIR).absolute().parent.parent
+        for evidence in files:
+            require(plain(evidence).is_file(), "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
+            historical_files[Path(evidence).absolute().relative_to(root).as_posix()] = digest(evidence.read_bytes())
+    from production_standalone_lineage import evidence_files
+    historical_files.update(evidence_files(module, lineage))
+    return historical_files
 
 
 def writer_authorization(module, plan, *, selected=None, unpublished=False, recovery_before=None):
@@ -489,41 +542,16 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                                request["rules"], reserved, request["safe_categories"])
         # A reservation is a veto, never a replacement plan or new source anchor.
         require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
-    known_transactions = {plan["transaction_id"]}
+    known_plans = [plan]
     for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
-        known_transactions.add(audit_intent(module, path)["transaction_plan"]["transaction_id"])
-    for path in plain(module.RETROACTIVE_DIR / "transactions").glob("*.plan.json"):
-        require(read_object(path).get("transaction_id") in known_transactions,
-                "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN: UNBOUND_HISTORICAL_TRANSACTION")
+        known_plans.append(audit_intent(module, path)["transaction_plan"])
+    from production_standalone_lineage import witnesses, verify_transaction_inventory
+    known_plans.extend(w["plan"] for w in witnesses(module, active_plan=plan))
+    verify_transaction_inventory(module, known_plans)
     before_manifest = {f"{n:04d}.md": digest(recovery_before[n] if recovery_before is not None else
                        plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()) for n in inventory["committed"]}
     before_manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in plan["chapters"]})
-    historical_files = {}
-    # Bind physical immutable evidence as well as semantic intent identities.
-    # Current transaction/publication prefixes are deliberately excluded; their
-    # exact immutable plan and BEFORE inventory are bound separately below.
-    for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
-        prior = audit_intent(module, path)
-        if prior["intent_sha256"] not in lineage:
-            continue
-        prior_request = prior["transaction_plan"]["request"]
-        prior_slot = canonical_hash({k: prior_request[k] for k in ("novel_id", "audit_label", "through_chapter")})
-        files = [path, module.AUDIT_DIR / f"audit_{prior['start']:04d}_{prior['end']:04d}.json"]
-        checkpoint = module.periodic_audit_checkpoint_path(prior["start"], prior["end"])
-        if checkpoint.is_file():
-            files.append(checkpoint)
-        else:
-            # _writer_checkpoint has already proved the exact no-send shape.
-            root = Path(module.OUTPUT_DIR).absolute().parent.parent
-            historical_files[Path(checkpoint).absolute().relative_to(root).as_posix()] = "ABSENT_ZERO_SEND"
-        files += list((module.RETROACTIVE_DIR / "transactions").glob(f"{prior_slot}.*.json"))
-        files += list((module.BACKUP_DIR / f"checkpoint_{prior['end']:04d}").glob("*"))
-        files += list((module.BACKUP_DIR / f"retroactive_{prior['transaction_plan']['transaction_id']}" /
-                       "chapters_before").glob("*.md"))
-        root = Path(module.OUTPUT_DIR).absolute().parent.parent
-        for evidence in files:
-            require(plain(evidence).is_file(), "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
-            historical_files[Path(evidence).absolute().relative_to(root).as_posix()] = digest(evidence.read_bytes())
+    historical_files = writer_evidence_files(module, lineage)
     accepted = ({k: selected[k] for k in ("start", "end", "baseline", "audit_result", "audit_stats",
                  "checkpoint_sha256", "continuity_sha256")} if "checkpoint_sha256" in selected else
                 {"standalone_exact_policy": request["ownership_policy"]})
@@ -535,6 +563,8 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                  inventory_sha256=canonical_hash({**inventory, "before_chapters": before_manifest}),
                  reservations_sha256=canonical_hash(reserved), prior_intents_sha256=canonical_hash(lineage))
     proof["authorization_sha256"] = canonical_hash(proof)
+    from production_standalone_lineage import bind_authorization
+    proof = bind_authorization(module, plan, proof)
     slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
     receipt = plain(module.RETROACTIVE_DIR / "transactions" / f"{slot}.authorization.json")
     require(not receipt.exists() or read_object(receipt) == proof,
@@ -915,10 +945,12 @@ def publication_revisions(project):
         receipt = plain(project.root / "output/publication_freshness" / (expected["transaction_id"] + ".json"))
         require(read_object(receipt) == expected, "FRESHNESS_MANIFEST_DRIFT")
         revisions.append(expected)
+    from production_standalone_lineage import publication_revisions as standalone_revisions
+    standalone = standalone_revisions(project)
     known = {r["transaction_id"] + ".json" for r in revisions}
     directory = plain(project.root / "output/publication_freshness")
     require({p.name for p in directory.glob("*.json")} == known, "ORPHAN_FRESHNESS_MANIFEST")
-    return revisions
+    return revisions + standalone
 
 
 def publication_freshness(project):
@@ -1014,8 +1046,15 @@ def final_consistency_report(module):
                         "MISSING_OR_CORRUPT_BEFORE_BACKUP")
                 blobs[item["before_sha256"]] = backup.read_bytes()
         intents.append(intent)
+    from production_standalone_lineage import witnesses, add_blobs, prove_gap, verified_events
+    standalone = witnesses(module)
+    add_blobs(module, standalone, blobs)
+    reservations, lineage, consumed = {}, [], set()
     latest, history_rules, previous_end, evidence = {}, [], 0, []
     for intent in intents:
+        if standalone:
+            prove_gap(module, standalone, previous_end, intent["baseline"]["history"]["audits"],
+                      blobs, latest, reservations, lineage, consumed)
         require(intent["start"] == previous_end + 1, "MISSING_OR_COMPETING_AUDIT_HISTORY")
         previous_end = intent["end"]
         detached = SimpleNamespace(**vars(module))
@@ -1057,11 +1096,28 @@ def final_consistency_report(module):
         require(module.audit_history["audits"][:len(intent["post"]["history"]["audits"])] == intent["post"]["history"]["audits"],
                 "OUTER_AUDIT_HISTORY_DRIFT")
         history_rules.extend(plan["request"]["rules"])
+        if standalone:
+            _reserve_policy(reservations, plan["request"]["ownership_policy"])
+            lineage.append(intent["intent_sha256"])
         evidence.append({"transaction_id": plan["transaction_id"], "intent_sha256": intent["intent_sha256"]})
     require(intents and previous_end == boundary, "MISSING_FINAL_AUDIT_INTENT")
+    final_glossary = intents[-1]["post"]["glossary"]
+    if standalone:
+        prove_gap(module, standalone, previous_end, module.audit_history["audits"],
+                  blobs, latest, reservations, lineage, consumed)
+        require(len(consumed) == len(standalone), "STANDALONE_CHRONOLOGY_UNPROVEN")
+        events = verified_events(module)
+        by_transaction = {w["plan"]["transaction_id"]: w for w in standalone}
+        last = by_transaction.get(events[-1][0]["transaction_id"])
+        if last:
+            final_glossary = last["staged_glossary"]
+        for value in standalone:
+            history_rules.extend(value["plan"]["request"]["rules"])
+            evidence.append({"transaction_id": value["plan"]["transaction_id"], "witness_sha256": value["witness_sha256"]})
     require(all(digest(current[n]) == sha for n, sha in latest.items()), "CURRENT_PROSE_OUTSIDE_AUDIT_CHAIN")
     for key, name in (("glossary", "glossary"), ("progress", "progress"), ("issues", "issues_data"), ("history", "audit_history")):
-        require(getattr(module, name) == intents[-1]["post"][key], "FINAL_STATE_OUTSIDE_AUDIT_CHAIN")
+        require(getattr(module, name) == (final_glossary if key == "glossary" else intents[-1]["post"][key]),
+                "FINAL_STATE_OUTSIDE_AUDIT_CHAIN")
     entries = module.glossary["entries"]
     rows = []
     from noveltranslator_core import _claim_longest_non_overlapping_occurrences
@@ -1111,7 +1167,8 @@ def final_consistency_report(module):
             "examined_chapters": len(rows), "deferred_chapters": deferred,
             "corrected_chapters": 0,
             "historically_corrected_chapters": len({i["chapter"] for intent in intents
-                                                     for i in intent["transaction_plan"]["chapters"] if i["edits"]}),
+                                                     for i in intent["transaction_plan"]["chapters"] if i["edits"]}
+                                                    | {i["chapter"] for w in standalone for i in w["plan"]["chapters"] if i["edits"]}),
             "already_current_chapters": sum(bool(row["decisions"]) and all(d["outcome"] == "already_current"
                                                 for d in row["decisions"]) for row in rows),
             "unchanged_chapters": sum(not row["decisions"] for row in rows),

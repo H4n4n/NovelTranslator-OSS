@@ -1,5 +1,191 @@
 # AUT-2: historical evidence and publication invalidation (first vertical slice)
 
+## AUT-2 C: durable standalone source lineage (local candidate)
+
+This candidate starts exactly at the independently verified clean A+B worktree:
+
+- commit `cb0d1d9773a7059791dae58e0928f6dd65b21648`;
+- tree `3d6e832ab4d36ef4db4994d4277ea01290ad74f5`;
+- parent `67c60bdb7c67b63b69157dba3acdaa75aa70f78a`.
+
+The separate engineering checkout is `D:/NTOSS_AUT2_C_Lineage_Codex`, on
+`codex/aut2-c-durable-lineage`. The original A+B worktree/commit are unchanged.
+The supplied GOAT revision `e5aca8b35c4de0129dc83a0e551aefba012e4c2c` is not
+available in the local object database. Local `main` points to another revision;
+no ancestry relationship to that supplied SHA is asserted. No GOAT merge,
+rebase, fetch, production activation or provider call belongs to this change.
+
+### Ownership seams and risks
+
+| Owner | Responsibility retained or added |
+| --- | --- |
+| Maintained translator startup | The existing known-fix policy is extracted into a pure function. It supplies the original complete glossary, staged glossary and exact rules before installing state. Recovery rederives that same policy. |
+| `production_standalone_lineage.py` | Captures prepared evidence, independently proves source/byte ownership and original authorization, resumes only the exact original known-fix tail, and seals completed receipts. |
+| `historical_reconciliation.py` | Composes standalone events between original ordered audits, preserves removed referent reservations, validates complete source/English inventory and binds physical evidence into later writer authorization. |
+| `retroactive_span_planning.py`, `retroactive_transactions.py` | Unchanged positive eligibility, exact UTF-8 span transformation, immutable plan, BEFORE backups and transaction prefix recovery. |
+| Shared periodic finalizer | Unchanged accepted-decision/accounting, transaction, associated-state and progress-last publication protocol. Its existing writer guard now consumes source-qualified standalone history. |
+| `production_historical_lineage.py` | Read-only paid-disposition readers use the same verified event chain, including the decoded-text/BEFORE-byte bridge. No journal or pending-response repair is added. |
+| Publication/whole-history readers | Reprove standalone history, include historical corrections in consistency reporting, and conservatively retain stale/unverified downstream status. No EPUB regeneration is added. |
+
+The writer still requires the authentic process/thread/descriptor novel lease.
+Read-only inventory verification is factored from that check for proof readers;
+it cannot acquire or grant a lease. The existing transaction-directory lock is
+unchanged. No nested novel lock or parallel production writer is introduced.
+
+### Durable contract
+
+Only a newly authorized source-owning startup operation may create:
+
+```text
+output/retroactive_fixes/standalone_lineage/<original-slot>.prepared.json
+output/retroactive_fixes/standalone_lineage/<original-slot>.complete.json
+```
+
+The prepared witness is written with the existing fsync/atomic-replace writer
+before the transaction begins. Its strict schema binds the original complete
+glossary (including candidate identities and revision metadata), staged glossary,
+canonical plan/transaction and slot, original complete committed English BEFORE
+inventory, full original source-unit/provenance inventory, novel configuration,
+immutable profile file identities, source and English byte spans/hashes, existing
+writer authorization, prior ordered audit/witness identities, and downstream
+input inventory. Current authoritative source units and real BEFORE backups,
+not a result digest, reconstruct the ownership proof.
+
+For this new path only, the existing authorization revision additionally binds
+`standalone_witness_sha256` and recomputes its own digest. This binds the entire
+prepared witness into the original transaction authorization. It prevents a
+rehash of a modified glossary identity, source inventory or witness/seal from
+standing in for the original authorization. Existing plans and authorizations
+are not rewritten or migrated.
+
+Backup-path comparison recognizes the same canonical novel-owned file across
+relative production paths and absolute reader paths. The stored receipt bytes
+and their physical hashes are never rewritten.
+
+The completion seal is a separate immutable artifact written only after the
+transaction is independently FINALIZED, every result/reconciliation/backup is
+validated, all chapters match exact AFTER bytes, and the staged glossary has
+been installed. It binds exact physical receipts and their chronology. Distinct
+canonical reconciliation diagnostics from legitimate interrupted retries are
+all verified; exactly one must match the FINALIZED state's reconciliation hash.
+A noncanonical copied, renamed or contradictory receipt cannot qualify.
+
+A prepared witness is never accepted as a completed proof by an audit. The
+startup owner may resume only its matching original source/profile/inventory,
+known-fix policy, glossary prefix and immutable transaction authorization under
+the real lease. Crashes around prepared persistence, transaction prefixes,
+glossary publication and completion persistence either resume that exact tail
+or fail closed. An orphan/partial atomic scratch file is not promoted or
+removed automatically; it blocks for investigation. No reader fabricates a
+seal or backfills a legacy standalone transaction.
+
+Later audit authorization independently reconstructs all intervening events in
+order, checks prior physical evidence and complete source ownership, joins the
+BEFORE/AFTER byte chain, reserves every historical referent family, and compares
+that proof with the current immutable plan before any new historical write.
+Missing/partial/foreign/forked/duplicated/tampered/unbound evidence raises
+`HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN`. Ownership reservations remain vetoes,
+never a source of expanded positive edit eligibility.
+
+The Korean acceptance case exposed the existing startup normalization's hardcoded
+`technique` category. The pure policy now retains the entry's actual normalized
+category (for example `martial technique`), allowing the existing Korean profile
+allowlist to evaluate it. Capitalization, source ownership, target cardinality
+and the category allowlists themselves are unchanged.
+
+### Failure-to-fix evidence
+
+| Failure/requirement | Evidence and resulting behavior |
+| --- | --- |
+| Standalone correction loses original ownership before the next audit | `test_standalone_known_fix_continuation_has_source_owned_lineage` exercises the actual startup and later audit; the known-fix chapter mtime is unchanged by the audit. |
+| Exact Chinese/Korean referent and byte ownership | `test_standalone_lineage_exact_source_spans_receipts_and_readers[zh/ko]` checks original glossary candidate ID, source offsets, UTF-8 BEFORE/AFTER span hashes, BOM/CRLF/Markdown preservation, independent readers and final whole-history reporting. |
+| Repeated execution duplicates edits or authorization | Actual startup and FINALIZED audit replay preserve complete file bytes and mtimes; the external harness also proves a second legitimate standalone after an intervening audit and chapter commit. |
+| Interrupted standalone persistence/publication | Twelve crash points cover before/after prepared persistence, PLANNED, backup, chapter, APPLIED, result, reconciliation, FINALIZED, glossary and before/after seal. The later audit blocks while incomplete; exact startup recovery finishes once. |
+| Interrupted subsequent audit | Five crash points cover intent, invalidation, chapter, glossary and progress; restart preserves the already corrected standalone chapter. |
+| Unproven history | Twenty-three witness/receipt/source/config/competing-plan damages preserve the entire protected tree; rehashing the prepared witness and seal still cannot replace its original transaction authorization. External probes add missing-directory, nested duplicate, orphan seal, foreign copy, missing source, extra chapter, no-lease, relative-path and original-layout cases. Malformed orphan plans and canonical foreign plans borrowing an existing transaction ID also fail with the provenance reason code. |
+| D4/D5/J3/J4 and accepted A/B recovery | Existing transaction/lifecycle and B recovery suites retain their original adversarial assertions. Reservations and full original-source/English inventory remain mandatory. |
+| Legacy transaction/snapshot evidence | The old standalone source-owned transaction is deliberately created without the new adapter; startup refuses retrospective witness creation and the later audit remains blocked. Existing unsupported snapshot tests remain unchanged. |
+| Paid evidence/publication freshness | Pending Markdown/metadata and journal sentinels remain byte-identical. Paid-disposition readers prove the new byte bridge; existing output remains stale and publication is refused. |
+
+### Qualification and limits
+
+All pytest invocations use Windows Python 3.14.4, the existing
+`tests/zero_provider_validation.py`, a fresh GUID-named external system-TEMP
+basetemp, and explicit mandatory real-DPAPI deselection. No private novel,
+provider transport, credential, GOAT send/replay, full hosted campaign or
+independent frozen benchmark matrix is used.
+
+| Focused run | Passed | Failed | Skipped | Deselected |
+| --- | ---: | ---: | ---: | ---: |
+| Complete transaction/lifecycle modules (before final edge hardening) | 397 | 0 | 0 | 0 |
+| Affected writer-safety/startup/standalone selection after strict inventory and legacy fixes | 120 | 0 | 0 | 192 |
+| New permanent legacy/malformed/forged-plan regressions | 3 | 0 | 0 | 312 |
+| Final standalone selection after relative-path receipt fix | 46 | 0 | 0 | 270 |
+| Final B recovery, Luna caller-runtime, paid journal and historical identity modules | 120 | 0 | 0 | 0 |
+| Three bounded shared-finalizer cases | 3 | 0 | 0 | 94 |
+| Shared-finalizer after-chapter recovery rerun after strict inventory fix | 1 | 0 | 0 | 96 |
+| Bounded public EPUB fingerprint/ZIP/source-stop checks | 5 | 0 | 0 | 189 |
+| Final external black-box probes | 17 | 0 | 0 | 0 |
+
+These rows overlap; they are invocation counts, not distinct-case totals. The
+complete core run took 864.71 seconds; the affected writer rerun took 436.92
+seconds; the final recovery group took 16.03 seconds; the shared-finalizer group
+and its final affected rerun took 369.72 and 153.78 seconds respectively. The
+final standalone selection took 278.45 seconds; the external final run took
+18.50 seconds. Early development failures in the Korean
+category and legitimate interrupted reconciliation cases were corrected before
+these qualification runs. Three added compatibility/security regressions pass.
+Syntax validation covers all five changed Python files. Whitespace and staged publication checks pass for 491 public files. The
+exact committed-tree guard is also run at delivery.
+
+No private novel data was accessed. The C checkout has no repository-root
+production data or pending paths. Every mutable state used above is disposable.
+
+For a fresh independent focused run from the C checkout:
+
+```powershell
+$aut2Temp = Join-Path ([System.IO.Path]::GetTempPath()) ('aut2-c-review-' + [guid]::NewGuid().ToString('N'))
+python tests/zero_provider_validation.py --basetemp $aut2Temp `
+  --deselect tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip `
+  -- -q tests/test_retroactive_transactions.py -k 'writer_safety or standalone or startup_known_fix'
+```
+
+
+The separate external black-box harness is retained under system TEMP at
+`aut2-c-probes-1eaac9956bdf47ea8e8b47a3bd279134/test_external_aut2_c.py`;
+SHA-256 `e301d680eecd5a677e681fc3802adfbbcc2d950c1138b3b187363b48249ec7a7`.
+It constructs its own canonical disposable novels and uses native policy/public
+entry points rather than the repository's C fixture or internal witness builders.
+Its 17 cases pass, including two interleaved standalone transactions, original-layout compatibility and relative-writer/absolute-reader composition. Its initial snapshot helper attempted to read a held Windows
+lock file and was corrected to retain lock-file mtime without reading its locked
+bytes; the resulting 10 harness errors are not implementation regressions.
+
+Six optional source-bound publication selection cases fail at inherited fixture
+setup, before their assertions: the Chinese/Korean forms of
+`aut2_self_consistent_old_editorial_is_not_current`,
+`aut2_conflicting_novel_lock_blocks_before_generation`, and
+`aut2_newer_revision_invalidates_every_stage_without_rewriting_them`.
+The fixture invokes the shared finalizer without a real novel lease. The exact
+same **6 errors / 188 deselected** were independently reproduced under the guard
+from an untouched public archive of the exact baseline. Those tests and their
+production guards are unchanged; the errors are reported, not suppressed.
+
+The original repository-level project layout is supported for new source-owned
+witnesses using its existing legacy configuration/profile identity; this does
+not migrate any legacy snapshot or old transaction. Publication regeneration's
+existing source snapshot still expects audit-only provenance, so a standalone
+history is not promoted into a fresh generation by this change.
+
+Source/profile/configuration drift is deliberately conservative: this witness
+revision requires its saved complete source-library identity and does not
+migrate changed libraries or profiles. A different plan in the same original
+startup slot remains an immutable conflict. Original legacy snapshots and old
+standalone transactions without original source evidence remain blocked.
+Hashes prove consistency under the existing cooperative-writer model, not
+signatures against replacement of an entire evidence tree. Hosted L3, Hermes
+exact-commit qualification, integration with current main and L4 remain separate.
+This is no claim that AUT-2 Issue #18 or final EPUB publication is complete.
+
 ## Recovery regression correction (local descendant of the writer candidate)
 
 The independent review of `67c60bdb7c67b63b69157dba3acdaa75aa70f78a`

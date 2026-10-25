@@ -34,7 +34,7 @@ def _plain_path(path):
         raise RetroactiveBlocked(f"symlink retroactive path: {path}")
 
 
-def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label, through):
+def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label, through, *, baseline_authorization=None):
     """Read-only proof before experiment recovery restores associated state.
 
     New span transactions keep their exact BEFORE/AFTER prose and evidence;
@@ -58,21 +58,37 @@ def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label
             previous = baseline_directory / evidence.name
             if not previous.is_file() or previous.read_bytes() != evidence.read_bytes():
                 raise RetroactiveBlocked("audit recovery has transaction evidence without the matching plan")
-        # Legacy whole-tree rollback cannot invent historical authority. It may
-        # restore associated state only when the chapter corpus is already exact
-        # and a zero-edit proof independently validates the full prior lineage.
-        current = {p.relative_to(root / "output/chapters").as_posix(): p.read_bytes()
+        # Only an exact original pre-audit snapshot with its independently
+        # rederived zero-edit authorization can restore legacy publication bytes.
+        # Old snapshots without that binding retain the unchanged-corpus limit.
+        from historical_reconciliation import plain
+        current = {p.relative_to(root / "output/chapters").as_posix(): plain(p).read_bytes()
                    for p in (root / "output/chapters").rglob("*.md")}
-        before = {p.relative_to(baseline / "chapters").as_posix(): p.read_bytes()
-                  for p in (baseline / "chapters").rglob("*.md")}
-        if current != before:
+        before = {p.relative_to(baseline / "chapters").as_posix(): plain(p).read_bytes()
+                  for p in plain(baseline / "chapters").rglob("*.md")}
+        recovery_before = None
+        if baseline_authorization is not None:
+            from types import SimpleNamespace
+            context = SimpleNamespace(**vars(context))
+            for attr, name in (("glossary", "glossary.json"), ("progress", "progress.json"),
+                               ("issues_data", "issues.json"), ("audit_history", "audit_history.json")):
+                setattr(context, attr, read_object(baseline / "data" / name))
+            expected = {f"{n:04d}.md" for n in inventory["committed"]}
+            if set(before) != expected or set(current) != expected:
+                raise RetroactiveBlocked("COMMITTED_INVENTORY_DRIFT")
+            recovery_before = {n: before[f"{n:04d}.md"] for n in inventory["committed"]}
+        elif current != before:
             raise RetroactiveBlocked("AUTHORITATIVE_WRITER_CONTEXT_UNAVAILABLE: legacy prose rollback")
         probe = dict(novel_id=novel_id, audit_label=audit_label, through_chapter=through, rules=[],
             ownership_policy=ownership_policy(context.glossary),
             safe_categories=sorted(context.ACTIVE_PROFILE.retroactive_safe_categories),
             committed_chapters=list(range(1, through + 1)))
-        writer_authorization(context, build_plan(probe, {n: (root / "output/chapters" / f"{n:04d}.md").read_bytes()
-            for n in probe["committed_chapters"]}, context.chapter_map))
+        original = recovery_before or {n: current[f"{n:04d}.md"] for n in probe["committed_chapters"]}
+        authorization = writer_authorization(context, build_plan(probe,
+            {n: original[n] for n in probe["committed_chapters"]}, context.chapter_map),
+            recovery_before=recovery_before)
+        if baseline_authorization is not None and authorization != baseline_authorization:
+            raise RetroactiveBlocked("WRITER_AUTHORIZATION_DRIFT: recovery baseline")
         return False
     plan = _read_json(path)
     request = plan.get("request", {})

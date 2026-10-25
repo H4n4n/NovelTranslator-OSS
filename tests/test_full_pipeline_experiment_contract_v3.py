@@ -11,6 +11,7 @@ import full_pipeline_experiment_harness as harness
 import full_pipeline_periodic_audit_recovery as audit_recovery
 import glossary_audit
 from full_pipeline_batch_wave import SUBMIT_AUTHORIZATION
+from production_run_lock import production_run_lock
 
 
 HELPER_PATH = Path(__file__).with_name("test_full_pipeline_experiment_harness.py")
@@ -153,7 +154,7 @@ def test_v3_carried_response_without_paid_journal_fails_closed_before_rewind(tmp
     client = h.AuxiliaryClient("great_king_zhuxia", 25)
     loaded = None
 
-    with harness._working_directory(project):
+    with production_run_lock(project), harness._working_directory(project):
         try:
             loaded = harness.load_experiment_engine_module(
                 repo / harness.PRODUCTION_SCRIPT_NAME
@@ -168,10 +169,16 @@ def test_v3_carried_response_without_paid_journal_fails_closed_before_rewind(tmp
             # natural 1-25 audit window, leaving all provider/journal evidence empty.
             progress_path = project / "data" / "progress.json"
             progress = _read(progress_path)
+            progress["completed"] = list(range(1, 26))
             progress["last_completed"] = 25
             progress["next_chapter"] = 26
             progress["last_audited_chapter"] = 0
             _write(progress_path, progress)
+            module.progress.clear()
+            module.progress.update(progress)
+            for number in progress["completed"]:
+                (project / "output/chapters" / f"{number:04d}.md").write_text(
+                    f"# Chapter {number}\n\nComplete synthetic English.\n", encoding="utf-8")
             audit_recovery._snapshot_baseline(project, 1, 25)
 
             checkpoint_path = (

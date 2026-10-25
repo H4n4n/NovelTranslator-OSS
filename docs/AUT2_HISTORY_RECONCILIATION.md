@@ -1,5 +1,93 @@
 # AUT-2: historical evidence and publication invalidation (first vertical slice)
 
+## Recovery regression correction (local descendant of the writer candidate)
+
+The independent review of `67c60bdb7c67b63b69157dba3acdaa75aa70f78a`
+(tree `59119ffbeeeffdec439b52a5d248c7deb659215d`) reported the mandatory
+writer guard LOCAL_ACCEPT, 43/43 independent harness checks, 271 transaction tests
+and 85 lifecycle tests passing, but all four original experiment recovery tests
+failing. That commit and its evidence remain unchanged. This correction is a
+new local descendant awaiting independent exact-commit qualification.
+
+The root cause was not fixture-only. The disposable Luna helper provided one
+source unit while the recovery fixture asserted 25 committed chapters, supplied
+no complete English inventory, and held no novel lock. In the actual experiment
+caller, `_run_real_engine_for_result` also installed the v3 recovery adapter
+before acquiring its novel lock; installation can restore state immediately.
+The existing lock now encloses engine loading, initialization, adapter
+installation and the lifecycle. No second novel lock is acquired. Ordinary
+production entry points already hold their novel lock before initialization.
+Recovery APIs verify the authentic caller-held lease before snapshot reuse,
+restoration, reconciliation, staging cleanup or post-marker backup repair.
+
+After repairing the fixture and caller, the unchanged rollback assertion exposed
+a further regression: the parent blanket-blocked restoration of the adapter's
+own pre-audit prose snapshot. New recovery snapshots now retain the zero-edit
+writer authorization that was independently derived before snapshot creation.
+Restoration rederives that exact proof from the immutable original baseline,
+current authoritative configuration/source inventory and verified historical
+intents. Partial current glossary/history/accounting publication cannot become
+a new baseline. Snapshot hashes, source drift or proof drift block before any
+restoration. The snapshot covers the entire committed inventory even when the
+due audit covers an earlier prefix. Post-marker backup repair independently
+rechecks that original complete inventory as well.
+
+This recovery-only reproof accepts no replacement rules or edits. It cannot
+authorize a historical correction. A matching owned-span transaction still uses
+the original BEFORE/AFTER, immutable-plan and backup recovery path; its prose and
+evidence are preserved. Conflicting/unbound plans and missing historical lineage
+still block. Old snapshots are not rewritten or given a manufactured proof;
+without the new binding, changed-prose rollback remains blocked. Paid journals
+and acquisition checkpoints remain outside the rollback set. No new transaction
+plan schema, operation identity, positive span policy or standalone lineage
+adapter is introduced.
+
+The shared public Luna fixture helper now accepts an optional chapter count;
+the recovery fixture creates a canonical 25-chapter configuration, complete
+source units and committed English, and holds the actual novel lock. The four
+original tests retain their assertions for recorded-response hydration without
+reissue, uncertain-journal rejection, exact pre-audit byte restoration with paid
+evidence preservation, and post-marker backup completion. Additional negative
+tests cover absent locks (including saved snapshots and post-marker repair),
+missing/sparse/contradictory source libraries, source drift after the snapshot,
+changed/missing snapshot proof, baseline tampering and rejection of edit-bearing
+snapshot proofs. An actual harness-call test exercises the v3 installation seam
+under the real lease. The related v3 focused fixture also uses complete
+committed English/progress and a genuine lock; its absent-paid-journal rejection
+assertions are unchanged. No production data or GOAT replay is used.
+
+Python 3.14.4 zero-provider qualification used a fresh external system-TEMP
+GUID basetemp for every invocation and explicitly deselected the real-DPAPI
+round-trip node. No private fixture was bypassed or accessed.
+
+- Complete recovery module: **27 passed, 0 failed, exit 0** (14.76 s), including
+  all four original cases. The unchanged four-case selection also passed alone
+  before adding the negative regressions: **4 passed, exit 0** (4.38 s).
+- Shared Luna-runtime fixture module: **12 passed, exit 0** (2.63 s).
+- Related v3 carried-response/absent-paid-journal selection: **1 passed,
+  4 deselected, exit 0** (3.02 s).
+- Actual experiment caller restart-after-commit selection: **1 passed,
+  4 deselected, exit 0** (3.07 s).
+- Affected complete transaction/lifecycle modules: **356 passed, exit 0**
+  (706.80 s), comprising 271 transaction tests and 85 lifecycle tests. This
+  includes D4/D5/J3/J4, immutable/conflicting-plan and BEFORE/AFTER recovery,
+  Chinese/Korean/isolation cases, and the standalone known-fix lineage blocker.
+- Focused synthetic finalizer selection: **3 passed, 94 deselected, exit 0**
+  (458.65 s): `fresh_audit_mixed_old_and_preferred_baseline_finalizes_once`,
+  `zero_candidate_goat_audit_no_fabricated_paid_accounting`, and
+  `shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_chapter]`.
+
+Syntax and whitespace checks passed. The staged publication guard passed for
+490 public files; the exact committed-tree guard is also required at delivery. These bounded synthetic results do not requalify the frozen external
+writer matrix or the full experiment/paid-replay suite.
+
+**The standalone known-fix continuation remains LOCAL_BLOCKED** with
+`HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN`. This correction does not supply the
+separately designed durable standalone lineage adapter. No unrestricted writer
+safety, production activation, provider activity or publication-currentness
+claim follows from these tests. Stop after the local correction commit for
+Command Code's independent retest; do not push or create a PR.
+
 ## Historical writer safety candidate (separate local descendant of PR #15)
 
 This slice starts exactly at `8b60e9c2add101c32792e4698725f97a2cc5d307`

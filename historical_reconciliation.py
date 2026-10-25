@@ -151,7 +151,7 @@ def _discovery_intent(module, start, end, expected_sha):
 
 
 
-def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False):
+def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False, chapter_bytes=None):
     """Prove prior immutable publications before reserving their ownership.
 
     Only a veto inventory: never feed it into positive edit authorization.
@@ -178,6 +178,7 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
         require([i["record"] for i in prior] == records,
                 "PRIOR_RECORD_WITHOUT_VALIDATING_INTENT")
         blobs = {digest(raw): raw for raw in (
+            chapter_bytes[n] if chapter_bytes is not None else
             plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
             for n in module.progress["completed"])}
         for intent in intents:
@@ -380,7 +381,7 @@ def writer_inventory(module, supplied, through):
                 pending_exception={name: digest(files[name].read_bytes()) for name in extra})
 
 
-def writer_authorization(module, plan, *, selected=None, unpublished=False):
+def writer_authorization(module, plan, *, selected=None, unpublished=False, recovery_before=None):
     """Fresh veto proof for this exact immutable plan; never edit authority alone.
 
     This is not the discovery report. Both callers rederive disk inventory and
@@ -394,11 +395,18 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False):
     require(request["safe_categories"] == sorted(module.ACTIVE_PROFILE.retroactive_safe_categories),
             "WRITER_POLICY_DRIFT")
     tx.validate_plan(plan, request, module.chapter_map)
+    if recovery_before is not None:
+        # Read-only reproof of a complete immutable pre-audit snapshot. This
+        # path cannot prove an edit and is never used by transaction execution.
+        require(not request["rules"] and not any(i["edits"] for i in plan["chapters"])
+                and request["committed_chapters"] == list(range(1, request["through_chapter"] + 1))
+                and set(recovery_before) == set(inventory["committed"]),
+                "RECOVERY_BASELINE_NOT_ZERO_EDIT")
     originals = {}
     for item in plan["chapters"]:
         n = item["chapter"]
         path = plain(module.OUTPUT_DIR / f"{n:04d}.md")
-        raw = path.read_bytes()
+        raw = recovery_before[n] if recovery_before is not None else path.read_bytes()
         require(digest(raw) in {item["before_sha256"], item["after_sha256"]},
                 f"Chapter {n}: current SHA neither BEFORE nor AFTER")
         backup = plain(module.BACKUP_DIR / f"retroactive_{plan['transaction_id']}" / "chapters_before" / path.name)
@@ -430,8 +438,9 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False):
                 require(selected["transaction_plan"] == plan, "WRITER_ACCEPTED_CHANGE_UNPROVEN")
                 unpublished = True
         if selected is None:
-            history = read_object(module.AUDIT_HISTORY_FILE)
-            last_audit = read_object(module.PROGRESS_FILE).get("last_audited_chapter", 0)
+            history = module.audit_history if recovery_before is not None else read_object(module.AUDIT_HISTORY_FILE)
+            last_audit = (module.progress if recovery_before is not None else
+                          read_object(module.PROGRESS_FILE)).get("last_audited_chapter", 0)
             require(type(last_audit) is int and 0 <= last_audit <= request["through_chapter"],
                     "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
             selected = dict(start=last_audit + 1, end=request["through_chapter"],
@@ -471,7 +480,8 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False):
         require("historical_proof" in selected and "historical_reconciliation" in selected.get("record", {}),
                 "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
         _writer_checkpoint(module, selected)
-    reservations, lineage = _historical_reservations(module, selected, unpublished=unpublished, writer_zero_send=True)
+    reservations, lineage = _historical_reservations(module, selected, unpublished=unpublished,
+        writer_zero_send=True, chapter_bytes=recovery_before)
     reserved = copy.deepcopy(request["ownership_policy"])
     _reserve_policy(reserved, reservations)
     for item in plan["chapters"]:
@@ -485,8 +495,8 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False):
     for path in plain(module.RETROACTIVE_DIR / "transactions").glob("*.plan.json"):
         require(read_object(path).get("transaction_id") in known_transactions,
                 "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN: UNBOUND_HISTORICAL_TRANSACTION")
-    before_manifest = {f"{n:04d}.md": digest(plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes())
-                       for n in inventory["committed"]}
+    before_manifest = {f"{n:04d}.md": digest(recovery_before[n] if recovery_before is not None else
+                       plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()) for n in inventory["committed"]}
     before_manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in plan["chapters"]})
     historical_files = {}
     # Bind physical immutable evidence as well as semantic intent identities.

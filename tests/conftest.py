@@ -172,6 +172,10 @@ def frozen_pr146_runtime(request, monkeypatch):
     if request.node.path.name != "test_goat_saturation_recovery.py":
         return
     request.getfixturevalue("synthetic_goat_hard_bound")
+    # Load the lazy executor before replacing imported policy references.
+    # Otherwise an import inside the historical scope captures the fixture
+    # identity permanently and contaminates later current-policy tests.
+    import production_goat_execution
     import production_provider_runtime as provider
     import production_goat_runtime as runtime
     import production_goat_cap_recovery as cap

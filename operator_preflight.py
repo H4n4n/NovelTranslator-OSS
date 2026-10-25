@@ -34,6 +34,7 @@ STATUS_CLEANUP_READY = "CLEANUP_READY"
 STATUS_PRODUCTION_READY = "PRODUCTION_READY"
 STATUS_COMPLETE = "COMPLETE"
 STATUS_CONTROLLED_TRIAL_READY = "CONTROLLED_TRIAL_READY"
+STATUS_BOUNDED_GOAT_READY = "BOUNDED_GOAT_READY"
 STATUS_BOUNDED_ALLOWANCE_REQUIRED = "BOUNDED_ALLOWANCE_REQUIRED"
 STATUS_GOAT_SATURATION_RECOVERY_READY = "GOAT_SATURATION_RECOVERY_READY"
 
@@ -92,7 +93,7 @@ def _blocked(report, *errors):
 
 
 def _production_args(report):
-    return (["--provider", PROVIDER_COMMAND_CODE] if report.get("effective_provider") == PROVIDER_COMMAND_CODE else []) + [
+    return ["--provider", report.get("effective_provider") or "direct_deepseek"] + [
         "--novel",
         report["novel_id"],
         "--model",
@@ -108,7 +109,7 @@ def _cleanup_args(report):
 
 
 def _recovery_plan_args(report):
-    return (["--provider", PROVIDER_COMMAND_CODE] if report.get("effective_provider") == PROVIDER_COMMAND_CODE else []) + [
+    return ["--provider", report.get("effective_provider") or "direct_deepseek"] + [
         "--novel",
         report["novel_id"],
         "--model",
@@ -138,13 +139,15 @@ def build_operator_preflight(
     *,
     repo_root=None,
     model_selection=None,
-    max_api_calls=DEFAULT_MAX_API_CALLS,
+    max_api_calls=None,
     max_cost_usd=None,
     provider_selection=None,
     max_credit_equivalent_usd=None,
 ):
     """Return one fail-closed read-only operator classification."""
 
+    explicit_send_ceiling = max_api_calls is not None
+    max_api_calls = DEFAULT_MAX_API_CALLS if max_api_calls is None else max_api_calls
     provider = selected_provider(provider_selection)
     if provider == PROVIDER_COMMAND_CODE:
         if max_cost_usd is not None:
@@ -562,22 +565,22 @@ def build_operator_preflight(
                                   "--max-credit-equivalent-usd", str(max_credit_equivalent_usd)])
             return report
         report["structurally_ready"] = True
-        bounded_status = (STATUS_CONTROLLED_TRIAL_READY if max_credit_equivalent_usd is not None
+        bounded_status = (STATUS_BOUNDED_GOAT_READY if max_credit_equivalent_usd is not None and explicit_send_ceiling
                           else STATUS_BOUNDED_ALLOWANCE_REQUIRED)
         if report["manual_pause_active"]:
             report["status"] = STATUS_PAUSED
             report["resume_route"] = bounded_status
             report["recommended_action"] = "remove_manual_pause"
-        elif max_credit_equivalent_usd is None:
+        elif max_credit_equivalent_usd is None or not explicit_send_ceiling:
             report["status"] = bounded_status
             report["recommended_action"] = "supply_bounded_credit_allowance"
-            report["warnings"].append("Explicit credit-equivalent USD allowance required before a runnable bounded plan command.")
+            report["warnings"].append("Explicit --max-api-calls and credit-equivalent USD allowance required before a runnable unattended plan command.")
         else:
             report["status"] = bounded_status
-            report["recommended_action"] = "review_controlled_trial_plan"
-            trial = _controlled_trial_plan(report)
-            report["recommended_entrypoint"] = trial["entrypoint"]
-            report["recommended_args"] = trial["args"]
+            report["recommended_action"] = "review_bounded_goat_plan"
+            report["recommended_entrypoint"] = "translate.py"
+            report["recommended_args"] = _recovery_plan_args(report) + ["--plan-goat-run"]
+            report["optional_controlled_trial_plan"] = _controlled_trial_plan(report)
         return report
 
     if report["manual_pause_active"]:
@@ -711,13 +714,13 @@ def build_parser():
     parser.add_argument(
         "--model",
         default=None,
-        help="pro (default), flash, or full DeepSeek model ID",
+        help="v41-flash (GOAT default), pro (explicit direct), or legacy flash recovery ID",
     )
     parser.add_argument(
         "--max-api-calls",
         type=int,
-        default=DEFAULT_MAX_API_CALLS,
-        help="future bounded-recovery provider-call ceiling",
+        default=None,
+        help="explicit unattended send ceiling; recovery retains its historical default",
     )
     parser.add_argument(
         "--max-cost-usd",
@@ -773,6 +776,7 @@ def main(argv=None):
 
     return 0 if report["status"] in {
         STATUS_CONTROLLED_TRIAL_READY,
+        STATUS_BOUNDED_GOAT_READY,
         STATUS_PRODUCTION_READY,
         STATUS_RECOVERY_READY,
         STATUS_GOAT_SATURATION_RECOVERY_READY,

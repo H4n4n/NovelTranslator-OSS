@@ -1,6 +1,6 @@
 # NovelTranslator
 
-A local multi-novel CJK-to-English webnovel translation and publication pipeline. DeepSeek V4 Pro is the production default; DeepSeek V4 Flash remains an explicit opt-in/reference model.
+A local multi-novel CJK-to-English webnovel translation and publication pipeline. Command Code GOAT V4.1 Flash is the default; direct DeepSeek V4 Pro requires explicit provider/model selection. Legacy V4 Flash remains recovery-only.
 
 The project is designed for long unattended runs while preserving glossary consistency, paid translation recovery, automatic QA, and checkpoint EPUB creation.
 
@@ -17,12 +17,13 @@ novel explicitly. Read-only preflight does not authorize paid execution.
 
 ```powershell
 $Novel = 'example_project_b'  # Select the intended novel.
-.\.venv\Scripts\python.exe operator_preflight.py --novel $Novel --model pro
+.\.venv\Scripts\python.exe operator_preflight.py --novel $Novel
 ```
 
-Only direct DeepSeek `PRODUCTION_READY` routes to normal translation.
-Initial GOAT rollout routes to `CONTROLLED_TRIAL_READY` when an explicit
-credit allowance is supplied, or `BOUNDED_ALLOWANCE_REQUIRED` otherwise. `CLEANUP_READY` routes
+Direct DeepSeek `PRODUCTION_READY` uses the explicit direct route.
+GOAT returns `BOUNDED_GOAT_READY` with both operator-selected limits, or
+`BOUNDED_ALLOWANCE_REQUIRED` otherwise. See [bounded unattended GOAT](docs/GOAT_UNATTENDED.md)
+for the one-use plan/execute commands. `CLEANUP_READY` routes
 to proof-complete local pending cleanup with zero provider calls.
 `RECOVERY_READY` routes to a separate plan and explicit approval; `BLOCKED`
 requires investigation.
@@ -278,7 +279,7 @@ Use the read-only operator router before deciding whether a novel should enter
 normal production or bounded pending recovery:
 
 ```powershell
-python operator_preflight.py --novel example_project_d --model pro
+python operator_preflight.py --novel example_project_d --provider direct_deepseek --model pro
 ```
 
 It composes the existing production-path preflight and, when a valid pending
@@ -605,7 +606,7 @@ $Novel = 'example_project_b'
 Get-Content "novels\$Novel\data\progress.json"
 Get-ChildItem "novels\$Novel\output\pending"
 python validate_project.py --novel $Novel
-python operator_preflight.py --novel $Novel --model pro
+python operator_preflight.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
 Keep paid pending files. Follow the preflight route and the
@@ -644,11 +645,12 @@ durability.
 For `PRODUCTION_READY`, explicitly select the novel and model:
 
 ```powershell
-python translate.py --novel $Novel --model pro
+python translate.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
-This is a paid production command. Pro remains the default; `--model flash` is
-an explicit opt-in. Use the model recorded in a pending recovery plan for its
+This is the explicit direct DeepSeek paid production command. GOAT V4.1 Flash
+is the default; use the [bounded unattended plan/execute route](docs/GOAT_UNATTENDED.md).
+Legacy `flash` is recovery-only. Use the model recorded in a pending recovery plan for its
 approved route. Historical standalone translator variants are not recommended
 operator entry points.
 
@@ -1355,7 +1357,7 @@ python status_project.py --novel <novel_id>
 For a fail-closed decision about what the operator should do next, use:
 
 ```powershell
-python operator_preflight.py --novel <novel_id> --model pro
+python operator_preflight.py --novel <novel_id> --provider direct_deepseek --model pro
 ```
 
 Production runs write best-effort structured JSONL events under `logs/`.
@@ -1370,7 +1372,7 @@ workflow invariants and should remain guarded against accidental changes.
 
 ## Production provider selection
 
-Direct DeepSeek remains the default. The explicitly selected GOAT backend uses
+GOAT is the default. The Command Code backend uses
 Command Code Provider with logical `--model v41-flash`, separate provider-bound
 approval and credit-equivalent allowances. Start with the read-only command:
 
@@ -1383,11 +1385,11 @@ credential activation, exact policy, journal/recovery guarantees and rollout
 limits. Initial GOAT rollout requires independent review and a separately
 reviewed live smoke-test plan before any paid chapter execution.
 
-GOAT `translate.py`/normal unattended execution is disabled during initial
-rollout. Supply operator-selected `--max-api-calls` and
-`--max-credit-equivalent-usd` to operator preflight for a complete bounded
-controlled-trial planning command. Paid execution still requires the matching
-fingerprint/token and explicit authorization through the bounded executor.
+GOAT `translate.py` supports bounded unattended execution through the existing
+executor and sequential lifecycle. Supply operator-selected `--max-api-calls`
+and `--max-credit-equivalent-usd` with `--plan-goat-run`, then review the plan
+and execute with matching fingerprint/token and `--authorize-goat-run`.
+[Commands and restart boundaries](docs/GOAT_UNATTENDED.md).
 
 ## Selected GOAT production policy
 

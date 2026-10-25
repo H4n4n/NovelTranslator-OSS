@@ -691,3 +691,10 @@ def test_executor_restores_previous_production_module_registration(
         sys.modules[recovery.PRODUCTION_MODULE_NAME]
         is sentinel
     )
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """Recovery compatibility proofs explicitly select the historical direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

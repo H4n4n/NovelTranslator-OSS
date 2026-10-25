@@ -542,3 +542,14 @@ def test_real_production_module_captures_prepared_runtime_without_initializing(
             core._semantic_shadow_runtime_state = semantic_state
         elif hasattr(core, "_semantic_shadow_runtime_state"):
             delattr(core, "_semantic_shadow_runtime_state")
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch, tmp_path):
+    """Launcher layer proofs use explicit direct selection and synthetic history."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "progress.json").write_text("{}", encoding="utf-8")

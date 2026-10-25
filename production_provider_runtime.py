@@ -27,18 +27,18 @@ from production_provider_errors import ProductionProviderError
 
 
 def selected_provider(selection=None):
-    value = selection if selection is not None else os.environ.get(PROVIDER_ENV, PROVIDER_DIRECT_DEEPSEEK)
+    value = selection if selection is not None else os.environ.get(PROVIDER_ENV, PROVIDER_COMMAND_CODE)
     if value not in PROVIDER_BACKENDS:
         raise ProductionProviderError("unknown production provider; no fallback permitted")
     return value
 
 
 def reject_unattended_goat(selection=None):
-    """Initial rollout allows GOAT only through bounded authorization routes."""
+    """The bare launcher has no GOAT send authority; use bounded execution."""
     if selected_provider(selection) == PROVIDER_COMMAND_CODE:
         raise ProductionProviderError(
-            "GOAT unattended production is disabled during initial rollout; "
-            "use controlled_trial_execute or pending_recovery_execute with "
+            "BOUNDED_ALLOWANCE_REQUIRED: GOAT requires an authorized bounded run; "
+            "use translate.py --plan-goat-run, or the dedicated pending recovery planner, with "
             "fingerprint, approval token and explicit send/credit-equivalent ceilings")
 
 
@@ -47,7 +47,7 @@ def provider_identity(selection, model):
     config = resolve_translation_model(model)
     if provider == PROVIDER_COMMAND_CODE:
         if config.model != "deepseek-flash":
-            raise ProductionProviderError("GOAT requires explicit logical v41-flash model selection")
+            raise ProductionProviderError("GOAT supports only v41-flash; for Pro select --provider direct_deepseek --model pro")
         return {**transport_identity(), "revision": "production-provider-runtime-v3",
                 "auxiliary_completion_policy": "provider_unbounded",
                 "logical_model": config.model, "model_version": config.version,

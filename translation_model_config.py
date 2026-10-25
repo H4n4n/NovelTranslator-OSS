@@ -4,21 +4,23 @@ This module contains only immutable model/request/pricing metadata and pure
 validation helpers. It must never read credentials, call an API, or mutate
 project state.
 
-The production default remains DeepSeek V4 Pro until the operator explicitly
-selects another model. Provider-routing cutoffs are represented here so the
+The production default is V4.1 Flash; the provider runtime defaults to GOAT.
+Provider-routing cutoffs are represented here so the
 runtime can fail closed before a paid request would be sent through an alias
 that no longer guarantees the configured model identity.
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
-DEFAULT_TRANSLATION_MODEL = "deepseek-v4-pro"
+DEFAULT_TRANSLATION_MODEL = "deepseek-flash"
 TRANSLATION_MODEL_ENV = "NOVELTRANSLATOR_TRANSLATION_MODEL"
 
-# DeepSeek announced that requests to the V4 Pro API alias will route to
-# V4.1 Flash beginning at this instant and until V4.1 Pro is released.
+# Historical planned retirement, superseded by continued Pro service in the
+# official updates/pricing docs (reviewed 2026-10-24). Retained as historical
+# metadata and a synthetic generic-cutoff test boundary, not active Pro policy.
 DEEPSEEK_V4_PRO_ROUTE_CUTOFF_UTC = "2026-09-14T04:00:00+00:00"
 
 
@@ -59,7 +61,8 @@ MODEL_CONFIGS = {
                 "output": 3.96,
             },
         },
-        request_cutoff_utc=DEEPSEEK_V4_PRO_ROUTE_CUTOFF_UTC,
+        # Official updates/pricing, reviewed 2026-10-24: Pro service continues.
+        # Exact response.model validation remains mandatory.
     ),
     # Preserve the historical V4 Flash identity for already-paid pending
     # recovery. DeepSeek now routes this legacy alias to V4.1 Flash, so it must
@@ -126,10 +129,9 @@ MODEL_ALIASES = {
 def resolve_translation_model(selection=None):
     """Return one validated immutable model configuration.
 
-    ``None`` intentionally resolves to Pro so importing this module cannot
-    silently change production behavior.
+    ``None`` resolves the explicit model environment override or V4.1 Flash.
     """
-    raw = DEFAULT_TRANSLATION_MODEL if selection is None else selection
+    raw = (os.environ.get(TRANSLATION_MODEL_ENV) or DEFAULT_TRANSLATION_MODEL) if selection is None else selection
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("translation model selection must be a non-empty string")
     normalized = raw.strip().lower()

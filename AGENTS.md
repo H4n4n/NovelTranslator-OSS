@@ -157,10 +157,11 @@ This is a core requirement.
 
 ## API / Scheduling
 
-DeepSeek V4 Pro is the production default through the OpenAI-compatible client.
-DeepSeek V4 Flash remains supported as an explicit opt-in/reference model;
-existing paid pending translations remain bound to their recorded generating
-model.
+Command Code GOAT V4.1 Flash is the default provider/model pair. Unattended
+GOAT execution requires an explicitly bounded, state-bound one-use authorization.
+Direct DeepSeek V4 Pro remains available through explicit provider/model selection.
+Legacy V4 Flash is recovery-only; existing paid pending translations remain
+bound to their recorded generating model and provider.
 
 The unattended production script supports:
 

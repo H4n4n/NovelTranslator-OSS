@@ -83,8 +83,8 @@ def engine(tmp_path, monkeypatch):
 
 
 def test_explicit_provider_dimension_and_unknown_fail_closed():
-    assert selected_provider() == "direct_deepseek"
-    assert provider_identity(None, "v41-flash")["provider"] == "direct_deepseek"
+    assert selected_provider() == "command_code_provider"
+    assert provider_identity(None, "v41-flash")["provider"] == "command_code_provider"
     assert IDENTITY["base_url"] == "https://api.commandcode.ai/provider/v1"
     assert IDENTITY["wire_model"] == "deepseek/deepseek-v4.1-flash"
     with pytest.raises(ValueError): selected_provider("invalid")
@@ -340,14 +340,14 @@ def test_provenance_and_checkpoint_bind_provider(engine):
     assert checkpoint["provider_identity"] == IDENTITY
     assert checkpoint["wire_completion_policy"]["auxiliary_completion_policy"] == "provider_unbounded"
     assert "wire_max_completion_tokens" not in checkpoint
-    with pytest.raises(ValueError): pending_provider_compatibility(meta, provider_identity(None,"v41-flash"))
+    with pytest.raises(ValueError): pending_provider_compatibility(meta, provider_identity("direct_deepseek","v41-flash"))
     with pytest.raises(ValueError): pending_provider_compatibility({"translation_model":"deepseek-flash"}, IDENTITY)
 
 
 def test_provider_aware_planning_and_readonly_preflight(tmp_path, monkeypatch):
     project = _empty_project(tmp_path)
     monkeypatch.setattr(os, "getenv", lambda key,*a: pytest.fail("direct key access") if key == "DEEPSEEK_API_KEY" else os.environ.get(key,*a))
-    direct = build_controlled_trial_plan("fixture",repo_root=tmp_path,model_selection="v41-flash")
+    direct = build_controlled_trial_plan("fixture",repo_root=tmp_path,model_selection="v41-flash", provider_selection="direct_deepseek")
     goat = build_controlled_trial_plan("fixture",repo_root=tmp_path,model_selection="v41-flash",
         provider_selection=GOAT,max_credit_equivalent_usd=1)
     assert direct["state_fingerprint"] != goat["state_fingerprint"]
@@ -659,7 +659,7 @@ def test_public_unattended_goat_refuses_before_credentials_or_network(monkeypatc
     monkeypatch.setattr(launcher, "reconcile_completed_pending_before_runtime", denied)
     monkeypatch.setattr(translate.subprocess, "run", denied)
     monkeypatch.setattr(translate, "load_novel_project", denied)
-    with pytest.raises(ValueError, match="unattended production is disabled"):
+    with pytest.raises(ValueError, match="BOUNDED_ALLOWANCE_REQUIRED"):
         if route == "translate_cli":
             translate.main(["--provider", GOAT, "--model", "v41-flash", "--novel", "fixture"])
         elif route == "launcher":

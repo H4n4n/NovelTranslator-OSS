@@ -15,11 +15,12 @@ from scripts import public_test_telemetry as telemetry
 from scripts import publication_guard as guard
 
 
+GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
-    '7f8125143233c0081f85b901d8ff9f7c061eb3e35b1e9c9b62dfa553938d01bd',
-    '27cbbd54ce6731b68f0589861ee3ce0243d80cb8e0c59040cacd68ae25be8dac',
-    'e72f6cde6c708676e6090ad2314875a161055761c2dca6f52e1068f809573c1a',
+    '9b9fe66e65a694830dabf3a596521bfb430e89151aaf3ba2fc92669d1f6610ad',
+    'd648ae51ad4cb551696f91a10362ccb631f72f39232949ea3e183016bc4b737f',
+    '3915275275054bae3866d1334f8a7aaf97de26c02a64ad47bf9f211a36f44b46',
 )
 
 
@@ -35,9 +36,10 @@ def test_exact_public_partition_and_reviewed_deselections():
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
     buckets = runner.balanced_shards(public, 3)
     flat = sum(buckets, [])
-    assert len(flat) == len(set(flat)) == len(public) == 191
+    assert len(flat) == len(set(flat)) == len(public) == 192
     assert set(flat) == set(public)
     assert SYNTHETIC_WITNESS_MODULE in flat
+    assert flat.count(GOAT_UNATTENDED_MODULE) == 1
     assert runner.balanced_shards(list(reversed(public)), 3) == buckets
     assert runner.balanced_shards(public, 1) == [public]
     assert sum(v['status'] == 'private' for v in files.values()) == 2
@@ -45,12 +47,16 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == '83ebfddccc07f990a7f10d81215abac9627e8c820a9a76eb616d2670771c5368'
+    assert risk.digest(schedule['module_seconds']) == '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa'
+    # Retain every reviewed baseline weight; only the new suite is measured locally.
+    assert risk.digest({p: seconds for p, seconds in schedule['module_seconds'].items()
+                        if p != GOAT_UNATTENDED_MODULE}) == (
+        '83ebfddccc07f990a7f10d81215abac9627e8c820a9a76eb616d2670771c5368')
     for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
-    assert [len(b) for b in buckets] == [61, 64, 66]
+    assert [len(b) for b in buckets] == [61, 64, 67]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [1541.8520148, 1541.8507243, 1541.8441506])
+        [1555.7515266, 1555.7472575, 1555.7486438])
     assert 'tests/test_goat_periodic_audit_finalization.py' in buckets[0]
     assert 'tests/test_completed_uncertain_history.py' in buckets[1]
     assert len(deselect) == 15
@@ -158,7 +164,7 @@ def test_partition_never_probes_source_sizes_or_other_drives(monkeypatch):
     def forbidden_stat(*args, **kwargs):
         raise AssertionError('allocation must not probe filesystem sizes')
     monkeypatch.setattr(Path, 'stat', forbidden_stat)
-    assert len(sum(runner.balanced_shards(public, 3), [])) == 191
+    assert len(sum(runner.balanced_shards(public, 3), [])) == 192
 
 
 @pytest.mark.parametrize('args', [['--shard', '-1'], ['--shard', '3'], ['--shards', '0'],
@@ -468,6 +474,32 @@ def test_receiver_rejects_unsanitized_metadata_and_preserves_primary_output(mete
     assert 'primary assertion failure' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('encoding', ['cp1252', 'ascii', 'utf-8'])
+@pytest.mark.parametrize('exitstatus', [0, 1])
+def test_receiver_drains_unicode_output_without_losing_terminal_or_failure(meter, monkeypatch, encoding, exitstatus):
+    from io import BytesIO, TextIOWrapper
+    meter.deselected = ['tests/test_synthetic.py::test_omitted']
+    node = 'tests/test_synthetic.py::test_x'
+    meter.pytest_collection_finish(SimpleNamespace(items=[SimpleNamespace(nodeid=node)]))
+    for phase in ('setup', 'call', 'teardown'):
+        outcome = 'failed' if exitstatus and phase == 'call' else 'passed'
+        meter.pytest_runtest_logreport(SimpleNamespace(nodeid=node, duration=0, when=phase, outcome=outcome))
+    meter.pytest_sessionfinish(SimpleNamespace(exitstatus=exitstatus), exitstatus)
+    raw = 'primary assertion: \u7532 \ud55c\uad6d\n'
+    frames = b''.join(runner.FRAME_PREFIX + json.dumps(r).encode() + b'\n' for r in meter.records)
+    output = BytesIO()
+    sink = TextIOWrapper(output, encoding=encoding, errors='strict', write_through=True)
+    receiver = runner.MetadataReceiver(meter.directory)
+    with monkeypatch.context() as scope:
+        scope.setattr(sys, 'stdout', sink)
+        receiver.read_output(BytesIO(raw.encode('utf-8') + frames + b'last line\n'))
+    assert not receiver.failed and receiver.terminal and receiver.collection_valid
+    assert b'primary assertion:' in output.getvalue() and b'last line' in output.getvalue()
+    times = runner.read_json(meter.directory / 'timings.json')
+    assert times['exit_code'] == exitstatus and times['successful'] == (exitstatus == 0)
+    assert 'primary assertion:' not in (meter.directory / 'events.jsonl').read_text()
+
+
 @pytest.mark.parametrize('case', ['truncated', 'oversized', 'budget'])
 def test_receiver_rejects_incomplete_or_excessive_frames(meter, monkeypatch, case):
     from io import BytesIO
@@ -670,7 +702,7 @@ def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatc
         risk.select(decision, 1 if tier == 'L3' else 3, 0)
     assert set(risk.SMOKE) <= set(decision['selected'])
     if tier == 'L3':
-        assert len(decision['selected']) == 191 and len(decision['deselect']) == 15
+        assert len(decision['selected']) == 192 and len(decision['deselect']) == 15
     elif tier == 'L2':
         assert len(decision['selected']) == 5
 

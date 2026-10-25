@@ -546,3 +546,10 @@ def test_preflight_blocks_uncertain_paid_request_journal(tmp_path):
     assert len(report["uncertain_paid_requests"]) == 1
     assert report["uncertain_paid_requests"][0]["chapter"] == 2
     assert "uncertain paid provider request" in " ".join(report["errors"])
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """These compatibility proofs exercise the explicitly selected direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

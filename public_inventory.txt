@@ -491,3 +491,6 @@ historical_reconciliation.py
 docs/AUT2_HISTORY_RECONCILIATION.md
 docs/AUT2_PUBLICATION_REGENERATION.md
 publication_regeneration.py
+docs/GOAT_UNATTENDED.md
+docs/GOAT_UNATTENDED_VALIDATION.md
+tests/test_goat_unattended.py

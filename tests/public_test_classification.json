@@ -507,6 +507,10 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
+  "tests/test_goat_unattended.py": {
+   "status": "public",
+   "reason": "synthetic Chinese/Korean sequential unattended lifecycle, bounded authorization and pending/replay recovery; fake DPAPI and transport under the zero-provider guard"
+  },
   "tests/test_goat_unbounded_auxiliary_policy.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"

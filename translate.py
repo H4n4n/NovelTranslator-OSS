@@ -1,11 +1,14 @@
 """Select and run one isolated novel project with the validated production engine."""
 
-from production_provider_runtime import PROVIDER_ENV, provider_identity, reject_unattended_goat
+from production_provider_runtime import PROVIDER_ENV, provider_identity
 import argparse
 import json
 import os
 import subprocess
 import sys
+
+from pathlib import Path
+from production_provider_contract import PROVIDER_COMMAND_CODE
 
 from chapter_library import index_chapter_library
 from novel_project import load_novel_project, repository_root
@@ -31,29 +34,86 @@ def build_parser():
         "--model",
         default=None,
         help=(
-            "translation model: pro (default), legacy flash (recovery identity), "
+            "translation model: v41-flash (GOAT default), pro (explicit direct provider), legacy flash (recovery identity), "
             "or v41-flash; full DeepSeek model IDs and v4-pro/v4-flash/v4.1-flash "
             "aliases are also accepted"
         ),
     )
+    parser.add_argument("--repo-root", type=Path, default=None)
+    parser.add_argument("--max-api-calls", type=int)
+    parser.add_argument("--max-credit-equivalent-usd", type=float)
+    parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
+    parser.add_argument("--authorize-goat-run", action="store_true")
+    parser.add_argument("--state-fingerprint")
+    parser.add_argument("--approval-token")
     return parser
 
 
 def production_environment(model_selection=None, base_environment=None, *, provider_selection=None):
     """Return child-process environment with one validated model pinned."""
-    config = resolve_translation_model(model_selection)
     environment = dict(os.environ if base_environment is None else base_environment)
-    backend = provider_identity(provider_selection, config.model)
+    config = resolve_translation_model(model_selection if model_selection is not None
+        else environment.get(TRANSLATION_MODEL_ENV))
+    backend = provider_identity(provider_selection if provider_selection is not None
+        else environment.get(PROVIDER_ENV), config.model)
     environment[PROVIDER_ENV] = backend["provider"]
     environment[TRANSLATION_MODEL_ENV] = config.model
     return environment
 
 
+def bounded_goat_run(args):
+    """Reuse the existing exact plan/execute protocol and novel writer lock."""
+    from controlled_trial_plan import build_controlled_trial_plan
+    from production_run_lock import production_run_lock
+    from production_goat_execution import execute_authorized_goat
+
+    if args.max_api_calls is None or args.max_credit_equivalent_usd is None:
+        raise ValueError("BOUNDED_ALLOWANCE_REQUIRED: supply --max-api-calls and "
+                         "--max-credit-equivalent-usd, then --plan-goat-run")
+    def plan():
+        return build_controlled_trial_plan(args.novel, repo_root=args.repo_root,
+            model_selection=args.model, provider_selection=args.provider,
+            max_api_calls=args.max_api_calls, max_credit_equivalent_usd=args.max_credit_equivalent_usd,
+            unattended=True)
+
+    if args.plan_goat_run:
+        if args.authorize_goat_run:
+            raise ValueError("plan and execution are separate invocations")
+        result = plan()
+    elif not args.authorize_goat_run:
+        raise ValueError("AUTHORIZATION_REQUIRED: review --plan-goat-run, then supply "
+                         "--state-fingerprint, --approval-token and --authorize-goat-run")
+    else:
+        if not args.state_fingerprint or not args.approval_token:
+            raise ValueError("review --plan-goat-run and supply its --state-fingerprint and --approval-token")
+        project = load_novel_project(args.novel, repo_root=args.repo_root)
+        with production_run_lock(project.root):
+            current = plan()
+            if (current["state_fingerprint"] != args.state_fingerprint
+                    or current["approval_token"] != args.approval_token):
+                raise ValueError("GOAT authorization drift or consumed allowance; regenerate --plan-goat-run")
+            result = execute_authorized_goat(current, repo_root=project.repository_root, recovery=False)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["status"] in {"READY", "COMMITTED", "ALLOWANCE_EXHAUSTED"} else 2
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    reject_unattended_goat(args.provider)
+    backend = provider_identity(args.provider, args.model)
+    if backend["provider"] == PROVIDER_COMMAND_CODE:
+        return bounded_goat_run(args)
+    if args.plan_goat_run or args.authorize_goat_run or args.max_api_calls is not None or args.max_credit_equivalent_usd is not None:
+        raise ValueError("GOAT allowance flags require --provider command_code_provider --model v41-flash")
+    if args.model is None and not os.environ.get(TRANSLATION_MODEL_ENV):
+        raise ValueError("direct DeepSeek requires explicit --model pro (or v41-flash)")
     model_config = resolve_translation_model(args.model)
-    project = load_novel_project(args.novel)
+    project = load_novel_project(args.novel, repo_root=args.repo_root)
+    # Block incompatible paid history/pending before spawning a writer.
+    from production_accounting import validate_progress_accounting
+    from production_provider_runtime import inspect_pending_provider
+    validate_progress_accounting(json.loads(project.progress_file.read_text(encoding="utf-8")),
+        expected_provider=backend["provider"])
+    inspect_pending_provider(project.pending_dir, backend)
     # Complete profile preflight before the side-effectful production process
     # can initialize credentials, logging, directories, or an API client.
     profile = load_translation_profile(

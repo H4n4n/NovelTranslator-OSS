@@ -775,3 +775,10 @@ def test_uncertain_original_review_blocks_read_only_plan_and_operator(tmp_path, 
     assert report["status"] == "BLOCKED"
     assert report["api_calls"] == report["project_writes"] == 0
     assert protected_state_snapshot(project) == before
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """Recovery compatibility proofs explicitly select the historical direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

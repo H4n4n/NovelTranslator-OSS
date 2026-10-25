@@ -779,31 +779,30 @@ def test_completed_count_beyond_final_chapter_fails_closed(
 @pytest.mark.parametrize("allowance", [None, 0.25])
 def test_clean_goat_operator_routes_only_to_complete_bounded_plan(tmp_path, capsys, allowance):
     from test_controlled_trial_plan import _empty_project
-    from controlled_trial_plan import build_parser as trial_parser
+    from translate import build_parser as trial_parser
     project = _empty_project(tmp_path)
     report = operator.build_operator_preflight("fixture", repo_root=tmp_path, model_selection="v41-flash",
         provider_selection="command_code_provider", max_api_calls=3, max_credit_equivalent_usd=allowance)
     assert report["structurally_ready"] is True
     assert report["provider_invoice_claimed"] is False
     assert report["budget_unit"] == "usd_credit_equivalent_per_1m_tokens"
-    assert report["optional_controlled_trial_plan"] is None
     if allowance is None:
         assert report["status"] == "BOUNDED_ALLOWANCE_REQUIRED"
         assert report["recommended_entrypoint"] == ""
         assert report["recommended_args"] == []
     else:
-        assert report["status"] == "CONTROLLED_TRIAL_READY"
-        assert report["recommended_entrypoint"] == "controlled_trial_plan.py"
+        assert report["status"] == "BOUNDED_GOAT_READY"
+        assert report["recommended_entrypoint"] == "translate.py"
         assert report["recommended_args"] == ["--provider", "command_code_provider", "--novel", "fixture",
-            "--model", "v41-flash", "--max-api-calls", "3", "--max-credit-equivalent-usd", "0.25"]
+            "--model", "v41-flash", "--max-api-calls", "3", "--max-credit-equivalent-usd", "0.25", "--plan-goat-run"]
         parsed = trial_parser().parse_args(report["recommended_args"])
         assert parsed.max_api_calls == 3 and parsed.max_credit_equivalent_usd == allowance
-        assert parsed.max_cost_usd is None
+        assert parsed.plan_goat_run is True
     operator._print_human(report)
     text = capsys.readouterr().out
     assert "credit-equivalent USD" in text
     assert "provider_invoice_claimed=false" in text
-    assert "translate.py" not in text
+    assert ("translate.py" in text) == (allowance is not None)
 
 
 @pytest.mark.parametrize("allowance", [0, -1, True, float("nan"), float("inf")])
@@ -812,17 +811,17 @@ def test_goat_operator_rejects_invalid_credit_allowance(tmp_path, allowance):
     _empty_project(tmp_path)
     with pytest.raises(ValueError):
         operator.build_operator_preflight("fixture", repo_root=tmp_path, model_selection="v41-flash",
-            provider_selection="command_code_provider", max_credit_equivalent_usd=allowance)
+            provider_selection="command_code_provider", max_api_calls=3, max_credit_equivalent_usd=allowance)
 
 
 
-@pytest.mark.parametrize("allowance,status", [(None, "BOUNDED_ALLOWANCE_REQUIRED"), (0.25, "CONTROLLED_TRIAL_READY")])
+@pytest.mark.parametrize("allowance,status", [(None, "BOUNDED_ALLOWANCE_REQUIRED"), (0.25, "BOUNDED_GOAT_READY")])
 def test_paused_clean_goat_never_resumes_to_unattended_route(tmp_path, allowance, status):
     from test_controlled_trial_plan import _empty_project
     project = _empty_project(tmp_path)
     project.pause_file.write_text("pause", encoding="utf-8")
     report = operator.build_operator_preflight("fixture", repo_root=tmp_path, model_selection="v41-flash",
-        provider_selection="command_code_provider", max_credit_equivalent_usd=allowance)
+        provider_selection="command_code_provider", max_api_calls=3, max_credit_equivalent_usd=allowance)
     assert report["status"] == "PAUSED"
     assert report["resume_route"] == status
     assert report["recommended_entrypoint"] == "" and report["recommended_args"] == []
@@ -841,3 +840,10 @@ def test_goat_operator_cli_status_matches_bounded_readiness(tmp_path, capsys, al
     report = json.loads(capsys.readouterr().out)
     assert report["api_calls"] == report["project_writes"] == 0
     assert report["paid_execution_authorized"] is False
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """These compatibility proofs exercise the explicitly selected direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

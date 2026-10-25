@@ -21,15 +21,15 @@ AT_PRO_CUTOFF = datetime(2026, 9, 14, 4, 0, 0, tzinfo=timezone.utc)
 AFTER_PRO_CUTOFF = datetime(2026, 9, 14, 5, 0, 0, tzinfo=timezone.utc)
 
 
-def test_pro_remains_the_default_translation_model():
+def test_v41_flash_is_the_default_translation_model():
     config = resolve_translation_model()
-    assert DEFAULT_TRANSLATION_MODEL == "deepseek-v4-pro"
-    assert config.model == "deepseek-v4-pro"
-    assert config.key == "pro"
-    assert config.version == "DeepSeek-V4-Pro-0813"
+    assert DEFAULT_TRANSLATION_MODEL == "deepseek-flash"
+    assert config.model == "deepseek-flash"
+    assert config.key == "v41-flash"
+    assert config.version == "DeepSeek-V4.1-Flash"
     assert config.thinking == "disabled"
     assert config.max_tokens == 12000
-    assert config.request_cutoff_utc == DEEPSEEK_V4_PRO_ROUTE_CUTOFF_UTC
+    assert config.request_cutoff_utc == ""
 
 
 def test_legacy_flash_identity_remains_resolvable_for_recovery():
@@ -38,7 +38,7 @@ def test_legacy_flash_identity_remains_resolvable_for_recovery():
     assert config.key == "flash"
     assert config.version == "DeepSeek-V4-Flash-0731"
     assert config.new_requests_allowed is False
-    assert resolve_translation_model().model == "deepseek-v4-pro"
+    assert resolve_translation_model().model == "deepseek-flash"
 
 
 @pytest.mark.parametrize(
@@ -54,7 +54,7 @@ def test_v41_flash_is_explicitly_selectable_without_changing_default(selection):
     assert config.max_tokens == 12000
     assert config.new_requests_allowed is True
     assert config.request_cutoff_utc == ""
-    assert resolve_translation_model().model == "deepseek-v4-pro"
+    assert resolve_translation_model().model == "deepseek-flash"
 
 
 @pytest.mark.parametrize(
@@ -171,10 +171,9 @@ def test_pro_request_is_allowed_before_announced_route_cutoff():
     assert config.model == "deepseek-v4-pro"
 
 
-def test_pro_request_is_blocked_at_and_after_announced_route_cutoff():
+def test_pro_service_continues_at_and_after_obsolete_planned_cutoff():
     for moment in (AT_PRO_CUTOFF, AFTER_PRO_CUTOFF):
-        with pytest.raises(TranslationModelRoutingError, match="alias routing"):
-            assert_translation_request_allowed("pro", moment=moment)
+        assert assert_translation_request_allowed("pro", moment=moment).model == "deepseek-v4-pro"
 
 
 def test_legacy_flash_alias_is_never_allowed_for_new_paid_requests():

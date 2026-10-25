@@ -57,6 +57,10 @@ class GoatRuntimeError(NonProviderProductionError):
     failure_kind = "control"
 
 
+class GoatAllowanceExhausted(GoatRuntimeError):
+    deterministic_local_budget_refusal = True
+
+
 def normalize_production_request(logical, kwargs):
     request = copy.deepcopy(kwargs)
     if request.get("model") != "deepseek-flash":
@@ -146,7 +150,7 @@ class GoatBudget:
                  + exposure["completion_upper"] * rates["output_rate_per_million"]) / 1_000_000
         if self.blocked or self.api_calls >= self.max_api_calls or bound > self.max_cost_usd - self.actual_cost_usd + 1e-12:
             self.pre_send_refusals.append({"kind": "deterministic_local_budget_refusal"})
-            raise GoatRuntimeError("GOAT invocation send/credit-equivalent ceiling refuses request")
+            raise GoatAllowanceExhausted("GOAT invocation send/credit-equivalent ceiling refuses request")
         self.authorized_exposure = {**exposure, "credit_equivalent_upper": bound}
         yield
 

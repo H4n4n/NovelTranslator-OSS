@@ -196,11 +196,9 @@ def load_experiment_engine_module(
 def initialize_engine_without_provider(production_module):
     """Initialize the real engine locally without reading/constructing a provider.
 
-    The legacy initializer currently couples project-state loading with DeepSeek
-    credential/client construction.  For this isolated experiment we suppress
-    exactly that provider bootstrap during the call, restore the module symbols
-    immediately afterwards, and clear the sentinel credential/client before any
-    engine operation can run.
+    Use the engine's provider-neutral state-loading boundary. The suppression
+    probes remain in place to detect an unexpected credential/client bootstrap;
+    neither the GOAT nor direct provider is activated by this experiment helper.
     """
     initializer = getattr(
         production_module,
@@ -232,19 +230,19 @@ def initialize_engine_without_provider(production_module):
     production_module.os = _OSProxy(original_os)
     production_module.OpenAI = suppressed_openai
     try:
-        initializer()
+        initializer(activate_provider=False)
     finally:
         production_module.load_dotenv = original_load_dotenv
         production_module.os = original_os
         production_module.OpenAI = original_openai
 
-    if production_module.client is not sentinel:
+    if production_module.client is not None:
         raise FullPipelineLunaRuntimeError(
-            "provider-suppressed initializer did not retain the sentinel client"
+            "provider-neutral initializer retained a usable client"
         )
-    if len(provider_constructor_calls) != 1:
+    if provider_constructor_calls:
         raise FullPipelineLunaRuntimeError(
-            "legacy initializer provider-construction boundary changed"
+            "provider-neutral initializer attempted provider construction"
         )
     production_module.api_key = None
     production_module.client = None

@@ -263,7 +263,11 @@ class MetadataReceiver:
                 else:
                     # Preserve primary pytest failures even when metadata has failed.
                     # Raw output is forwarded to the console, never to artifacts.
-                    print(line.decode('utf-8', errors='replace'), end='', flush=True)
+                    text = line.decode('utf-8', errors='replace')
+                    # Redirected Windows stdout may use a narrow code page. Keep
+                    # draining the pipe even when a failure report contains CJK.
+                    encoding = sys.stdout.encoding or 'utf-8'
+                    print(text.encode(encoding, errors='backslashreplace').decode(encoding), end='', flush=True)
                 continuation = not line.endswith(b'\n')
         except Exception:
             self.failed = True

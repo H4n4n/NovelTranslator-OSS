@@ -82,6 +82,7 @@ def test_filesystem_open_error_is_not_misclassified_as_contention(tmp_path):
 
 def test_normal_launcher_rejects_second_run_before_runtime_preparation(tmp_path, monkeypatch):
     import run_production_engine as launcher
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(launcher, "prepare_production_runtime",
                         lambda *a, **k: pytest.fail("runtime was reached"))
@@ -92,6 +93,7 @@ def test_normal_launcher_rejects_second_run_before_runtime_preparation(tmp_path,
 
 def test_direct_legacy_main_rejects_second_run_before_initialization(tmp_path, monkeypatch):
     import run_production_engine as launcher
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
     monkeypatch.chdir(tmp_path)
     module = launcher.load_production_module()
     monkeypatch.setattr(module, "initialize_production_runtime_state",
@@ -397,6 +399,10 @@ def test_supported_mutating_writer_clis_reject_contention_before_writer_logic(
     expected_exit,
 ):
     module = importlib.import_module(module_name)
+    if hasattr(module, "PRIVATE_INPUTS_AVAILABLE"):
+        # Satisfy the public input-presence gate synthetically. No private input
+        # is loaded and the denied writer callback must remain unreachable.
+        monkeypatch.setattr(module, "PRIVATE_INPUTS_AVAILABLE", True)
     if project_loader is None:
         monkeypatch.setattr(module, "DEFAULT_FINAL_DIR", tmp_path / "final")
     else:

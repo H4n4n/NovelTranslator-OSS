@@ -396,3 +396,10 @@ def test_real_engine_manifest_includes_operation_policy_and_dependencies(monkeyp
     planner._engine_runtime_identity("historical_military")
     assert {"production_operation_policy.py", "production_state_extraction.py",
             "translation_model_config.py", "controlled_trial_execute.py"} <= observed
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """These compatibility proofs exercise the explicitly selected direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

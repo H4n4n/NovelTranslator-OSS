@@ -13,11 +13,13 @@ $Novel = 'example_project_b'  # Change this deliberately.
 & $Python list_novels.py
 & $Python validate_project.py --novel $Novel
 & $Python status_project.py --novel $Novel
-& $Python operator_preflight.py --novel $Novel --model pro
+& $Python operator_preflight.py --novel $Novel
 ```
 
 These commands make no provider calls. Preflight is a read-only decision, not
-spending authorization. `PRODUCTION_READY` routes to normal production;
+spending authorization. Default GOAT routes to `BOUNDED_ALLOWANCE_REQUIRED`
+unless both limits are explicitly supplied, then `BOUNDED_GOAT_READY` recommends
+the [bounded unattended plan](GOAT_UNATTENDED.md). `PRODUCTION_READY` routes to normal production;
 `CLEANUP_READY` routes first to the local cleanup command below;
 `RECOVERY_READY` routes to the pending plan; `COMPLETE` needs no further
 translation. `PAUSED` retains its underlying route. Investigate `BLOCKED`
@@ -28,7 +30,7 @@ preflight:
 
 ```powershell
 & $Python completed_pending_cleanup.py --novel $Novel
-& $Python operator_preflight.py --novel $Novel --model pro
+& $Python operator_preflight.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
 This route exists for the narrow state after durable `progress.json` where
@@ -72,10 +74,11 @@ exactly-once billing or parent-directory sudden-power-loss durability.
 Only after `PRODUCTION_READY`, start the intended paid run:
 
 ```powershell
-& $Python translate.py --novel $Novel --model pro
+& $Python translate.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
-Pro is the default. `--model flash` is an explicit opt-in. Production is
+GOAT V4.1 Flash is the default; follow [bounded GOAT authorization](GOAT_UNATTENDED.md).
+This command explicitly selects direct DeepSeek Pro. Legacy `flash` is recovery-only. Production is
 sequential through the configured final chapter and runs due glossary audits.
 Pending provenance pins already-paid text to its generating model.
 
@@ -91,7 +94,7 @@ finish first. To resume, remove only this novel's pause file and rerun preflight
 
 ```powershell
 Remove-Item -LiteralPath "novels\$Novel\pause.flag"
-& $Python operator_preflight.py --novel $Novel --model pro
+& $Python operator_preflight.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
 Follow its new route; a paused/stopped run may now have paid pending work.
@@ -130,13 +133,13 @@ Inspect the exact paid pair and logs without altering them:
 Get-ChildItem "novels\$Novel\output\pending"
 Get-Content "novels\$Novel\data\progress.json"
 Get-ChildItem "novels\$Novel\logs" | Sort-Object LastWriteTime -Descending
-& $Python operator_preflight.py --novel $Novel --model pro
+& $Python operator_preflight.py --novel $Novel --provider direct_deepseek --model pro
 ```
 
 1. **Plan, zero provider calls.** Use explicit future auxiliary limits:
 
 ```powershell
-& $Python pending_recovery_plan.py --novel $Novel --model pro `
+& $Python pending_recovery_plan.py --novel $Novel --provider direct_deepseek --model pro `
     --max-api-calls 6 --max-cost-usd 0.10
 ```
 
@@ -153,7 +156,7 @@ Get-ChildItem "novels\$Novel\logs" | Sort-Object LastWriteTime -Descending
 ```powershell
 $Fingerprint = 'PASTE_STATE_FINGERPRINT_FROM_THE_REVIEWED_PLAN'
 $Approval = 'PASTE_APPROVAL_TOKEN_FROM_THE_SAME_PLAN'
-& $Python pending_recovery_execute.py --novel $Novel --model pro `
+& $Python pending_recovery_execute.py --novel $Novel --provider direct_deepseek --model pro `
     --max-api-calls 6 --max-cost-usd 0.10 `
     --state-fingerprint $Fingerprint --approval-token $Approval
 ```
@@ -164,7 +167,7 @@ Without the authorization flag, this revalidates and reports
 3. **Execute, paid auxiliary operations permitted.** Only after approval:
 
 ```powershell
-& $Python pending_recovery_execute.py --novel $Novel --model pro `
+& $Python pending_recovery_execute.py --novel $Novel --provider direct_deepseek --model pro `
     --max-api-calls 6 --max-cost-usd 0.10 `
     --state-fingerprint $Fingerprint --approval-token $Approval `
     --authorize-paid-recovery
@@ -210,7 +213,7 @@ For a production-ready project with no pending translation, a bounded one-chapte
 trial remains supported. Plan with the desired budget:
 
 ```powershell
-& $Python controlled_trial_plan.py --novel $Novel --model pro `
+& $Python controlled_trial_plan.py --novel $Novel --provider direct_deepseek --model pro `
     --max-api-calls 6 --max-cost-usd 0.10
 ```
 
@@ -218,7 +221,7 @@ Review that plan and set `$Fingerprint` and `$Approval` from it. Verify without
 spending, then add `--authorize-paid-trial` only for the approved paid execution:
 
 ```powershell
-& $Python controlled_trial_repo_env.py --novel $Novel --model pro `
+& $Python controlled_trial_repo_env.py --novel $Novel --provider direct_deepseek --model pro `
     --max-api-calls 6 --max-cost-usd 0.10 `
     --state-fingerprint $Fingerprint --approval-token $Approval
 ```

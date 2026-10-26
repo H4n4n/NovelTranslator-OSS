@@ -1022,7 +1022,7 @@ def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):
 def publication_input_snapshot(root):
     """Hashes only: inventory known local downstream stages before invalidation."""
     root = plain(root)
-    folders = ("output/epub", "final/chapters", "final/normalized_chapters",
+    folders = ("output/qa", "output/epub", "final/chapters", "final/normalized_chapters",
                "final/titled_chapters", "final/publication_chapters", "final/editorial_chapters",
                "final/reports", "final/epub")
     result = {}
@@ -1030,6 +1030,25 @@ def publication_input_snapshot(root):
         directory = plain(root / name)
         result[name] = {p.name: digest(plain(p).read_bytes()) for p in sorted(directory.glob("*"))
                         if p.is_file() and p.suffix in {".md", ".json", ".epub"}}
+    # New intents capture actual state/QA and generation targets before edits.
+    # Existing immutable snapshots retain their original replay contract.
+    result["data"] = {name: digest(plain(root / "data" / name).read_bytes())
+                      for name in ("continuity.json", "issues.json")
+                      if plain(root / "data" / name).is_file()}
+    for generation in sorted(plain(root / "output/publication_generations").glob("*")):
+        require(generation.is_dir() and len(generation.name) == 64
+                and all(c in "0123456789abcdef" for c in generation.name), "INVALID_GENERATION_TARGET")
+        for folder in ("chapters", "normalized_chapters", "titled_chapters", "publication_chapters",
+                       "editorial_chapters", "reports", "epub"):
+            directory = plain(generation / "final" / folder)
+            result[directory.relative_to(root).as_posix()] = {
+                p.name: digest(plain(p).read_bytes()) for p in sorted(directory.glob("*")) if p.is_file()}
+        for name in ("manifest.json", "glossary.json"):
+            path = plain(generation / "final" / name)
+            if path.is_file():
+                result[path.relative_to(root).as_posix()] = digest(path.read_bytes())
+    glossary = plain(root / "final/glossary.json")
+    result["final/glossary.json"] = digest(glossary.read_bytes()) if glossary.is_file() else None
     manifest = plain(root / "final/manifest.json")
     result["final/manifest.json"] = digest(manifest.read_bytes()) if manifest.is_file() else None
     return result
@@ -1163,12 +1182,21 @@ def publication_freshness(project):
     dependencies = []
     for revision in revisions:
         for folder, files in revision["publication_inputs_before"].items():
-            if folder == "final/manifest.json":
-                files = {"manifest.json": files} if files else {}
-                folder = "final"
-            require(folder in {"final", "output/epub", "final/chapters", "final/normalized_chapters",
+            parts = Path(folder).parts
+            generated = (len(parts) >= 4 and parts[:2] == ("output", "publication_generations")
+                         and len(parts[2]) == 64 and all(c in "0123456789abcdef" for c in parts[2])
+                         and parts[3] == "final")
+            if folder in {"final/manifest.json", "final/glossary.json"} or (
+                    generated and len(parts) == 5 and parts[4] in {"manifest.json", "glossary.json"}):
+                files = {parts[-1]: files} if files else {}
+                folder = Path(folder).parent.as_posix()
+                parts = Path(folder).parts
+            allowed_generation = generated and (len(parts) == 4 or len(parts) == 5 and parts[4] in {
+                "chapters", "normalized_chapters", "titled_chapters", "publication_chapters",
+                "editorial_chapters", "reports", "epub"})
+            require((allowed_generation or folder in {"final", "data", "output/qa", "output/epub", "final/chapters", "final/normalized_chapters",
                                "final/titled_chapters", "final/publication_chapters", "final/editorial_chapters",
-                               "final/reports", "final/epub"} and isinstance(files, dict), "INVALID_DOWNSTREAM_INVENTORY")
+                               "final/reports", "final/epub"}) and isinstance(files, dict), "INVALID_DOWNSTREAM_INVENTORY")
             for name, before_sha in files.items():
                 require(isinstance(name, str) and Path(name).name == name and "/" not in name and "\\" not in name,
                         "INVALID_DOWNSTREAM_NAME")
@@ -1201,6 +1229,9 @@ def require_publication_freshness(project):
         verify_generation_corpus(project, final_dir)
     else:
         require(not revisions, "PUBLICATION_STALE_REVALIDATE_DOWNSTREAM_PLANS")
+        require(False, "PUBLICATION_MISSING_SOURCE_PROOF_REVALIDATE_DOWNSTREAM")
+    from publication_readiness import require_publication_ready
+    require_publication_ready(project)
 
 
 @proof_traversal

@@ -507,3 +507,6 @@ tests/test_goat_periodic_audit_finalization_part_1.py
 tests/test_goat_periodic_audit_finalization_part_2.py
 tests/test_goat_periodic_audit_finalization_part_3.py
 tests/test_goat_periodic_audit_finalization_part_4.py
+publication_readiness.py
+tests/test_publication_readiness.py
+docs/AUT2_PUBLICATION_FRESHNESS_D1.md

@@ -585,12 +585,23 @@ def test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail(
     project, module, result, stats, chunking = incident
     execute(project)
     current = local_module(project)
-    # Fixture starts at 376; earlier legacy windows have no intents. Full-history
-    # proof must block rather than silently treating that tail as the entire book.
+    # Writer-safe setup supplies a genuine 1-375 prefix. First prove it, then
+    # remove its intent to construct the legacy missing-evidence negative case.
+    before = snapshot(project)
+    complete = history.final_consistency_report(current)
+    assert complete["status"] == "CHECKED_WITH_DEFERRALS" and complete["examined_chapters"] == 400
+    assert snapshot(project) == before
+    prior_path = final.intent_path(current, 1, 375)
+    prior_bytes = prior_path.read_bytes()
+    prior_path.unlink()
     before = snapshot(project)
     with pytest.raises(Exception, match="MISSING_OR_COMPETING_AUDIT_HISTORY"):
         history.final_consistency_report(current)
+    with pytest.raises(Exception, match="ORPHAN_FRESHNESS_MANIFEST"):
+        history.publication_freshness(project)
     assert snapshot(project) == before
+    # Restore only this fixture's exact bytes before the independent stale check.
+    prior_path.write_bytes(prior_bytes)
     freshness = history.publication_freshness(project)
     assert freshness["status"] == "STALE"
     assert 388 in freshness["impacted_chapters"] or freshness["impacted_chapters"] == []

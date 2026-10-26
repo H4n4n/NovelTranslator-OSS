@@ -1962,6 +1962,27 @@ def test_standalone_known_fix_continuation_has_source_owned_lineage(discovery_no
 
 
 
+
+@pytest.fixture(params=["default_goat", "direct_pro"])
+def historical_provider_route(monkeypatch, request):
+    from production_provider_runtime import PROVIDER_ENV, provider_identity
+    from translation_model_config import TRANSLATION_MODEL_ENV
+    if request.param == "default_goat":
+        monkeypatch.delenv(PROVIDER_ENV, raising=False)
+        monkeypatch.delenv(TRANSLATION_MODEL_ENV, raising=False)
+        expected = ("command_code_provider", "deepseek-flash")
+    else:
+        monkeypatch.setenv(PROVIDER_ENV, "direct_deepseek")
+        monkeypatch.setenv(TRANSLATION_MODEL_ENV, "pro")
+        expected = ("direct_deepseek", "deepseek-v4-pro")
+    identity = provider_identity(None, None)
+    assert (identity["provider"], identity["logical_model"]) == expected
+    import translate_production_unattended_scheduled_retroactive_dynamic_pricing as engine
+    monkeypatch.setattr(engine, "MODEL", identity["logical_model"])
+    monkeypatch.setattr(engine, "send_api_request_once", lambda **kw: pytest.fail("historical provider send"))
+    return identity
+
+
 def _standalone_case(discovery_novel, monkeypatch, language="zh"):
     import production_periodic_audit_finalization as final
     source = "蓋州游擊" if language == "zh" else "흑호탈심"
@@ -1989,7 +2010,7 @@ def _lineage_witness(case):
 
 
 @pytest.mark.parametrize("language", ["zh", "ko"])
-def test_standalone_lineage_exact_source_spans_receipts_and_readers(discovery_novel, monkeypatch, language):
+def test_standalone_lineage_exact_source_spans_receipts_and_readers(historical_provider_route, discovery_novel, monkeypatch, language):
     import production_periodic_audit_finalization as final
     from production_standalone_lineage import witnesses, verified_events
     from production_historical_lineage import verify_audit_obligations, verify_disposition_lineage, decoded_text_sha
@@ -2034,7 +2055,7 @@ def test_standalone_lineage_exact_source_spans_receipts_and_readers(discovery_no
 
 @pytest.mark.parametrize("point", ["before_prepared", "after_prepared", "planned", "backup", "chapter",
     "applied", "result", "reconcile", "finalized", "glossary", "before_seal", "after_seal"])
-def test_standalone_lineage_crash_recovery(discovery_novel, monkeypatch, point):
+def test_standalone_lineage_crash_recovery(historical_provider_route, discovery_novel, monkeypatch, point):
     import production_standalone_lineage as lineage
     import production_periodic_audit_finalization as final
     case = _standalone_case(discovery_novel, monkeypatch)

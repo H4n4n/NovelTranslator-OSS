@@ -1106,6 +1106,7 @@ def snapshot(root):
 @pytest.fixture(params=["zh", "ko"])
 def novel(aut1_engine, monkeypatch, request):
     import production_periodic_audit_finalization as final
+    from production_run_lock import production_run_lock
     e, root = aut1_engine.engine, aut1_engine.root
     key = "韓" if request.param == "zh" else "한민"
     config = replace(e.ACTIVE_NOVEL_CONFIG, final_chapter=3, source_language=request.param, source_type="txt")
@@ -1144,9 +1145,12 @@ def novel(aut1_engine, monkeypatch, request):
     e.save_json(e.periodic_audit_checkpoint_path(1, 3), {"synthetic_accepted_decisions": True})
     stats = {field: 0 for field in final.STAT_TOTAL_FIELDS}
     stats["api_request_count"] = 0
-    final.finalize_periodic_audit(e, 1, 3, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []},
-        stats, {"candidate_count": 1, "candidate_set_hash": canonical_hash("accepted"), "api_request_count": 0})
-    report = history.save_final_consistency(e)
+    # The synthetic historical writer cooperates with production's real lease.
+    # Release it before returning so publication owns its separate lock scope.
+    with production_run_lock(project.root):
+        final.finalize_periodic_audit(e, 1, 3, {"decisions": [{"chinese": key, "action": "correct", "english": "Hann"}], "issues": []},
+            stats, {"candidate_count": 1, "candidate_set_hash": canonical_hash("accepted"), "api_request_count": 0})
+        report = history.save_final_consistency(e)
     assert report["status"] == "CHECKED"
     report_sha = canonical_hash(report)
     install_approvals(project, report_sha)

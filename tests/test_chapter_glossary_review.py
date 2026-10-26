@@ -1952,6 +1952,7 @@ def _load_synthetic_production_module(project_root, monkeypatch):
     return module_name, module
 
 
+@pytest.mark.usefixtures("direct_pro_route")
 def test_recovered_process_path_builds_list_shaped_review_context_without_regeneration(
     tmp_path, monkeypatch, capsys
 ):

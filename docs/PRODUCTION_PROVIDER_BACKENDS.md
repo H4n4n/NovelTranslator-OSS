@@ -103,8 +103,8 @@ report GOAT usage as if it were direct DeepSeek API dollars.
 
 The provider is a separate selection from the logical model. `--provider`
 (or `NOVELTRANSLATOR_PROVIDER_BACKEND`) accepts `direct_deepseek` and
-`command_code_provider`; direct remains the default. GOAT requires explicit
-`--model v41-flash`. The engine keeps logical `deepseek-flash`; only the
+`command_code_provider`; GOAT / `v41-flash` is the default pair. Direct Pro
+requires explicit `--provider direct_deepseek --model pro`. The engine keeps logical `deepseek-flash`; only the
 transport adapter emits `deepseek/deepseek-v4.1-flash` to
 `http<LOCAL_PATH>`.
 
@@ -130,12 +130,13 @@ explicit paid authorization flag, provider, model and both ceilings. Executors
 rebuild the plan under the existing novel lock before checking the token. Runtime
 manifests include the new runtime, execution, credentials and transport Python
 files automatically. Provider, policy, source, state, runtime byte or budget-unit
-drift invalidates approval before DPAPI. During initial GOAT rollout, `translate.py` and the normal
-`run_production_engine` route refuse GOAT before DPAPI or network. Only the
-reviewed bounded trial/recovery executors activate GOAT with fingerprint,
-approval token and explicit physical-send/credit-equivalent ceilings. Direct
-DeepSeek unattended production remains available. The underlying GOAT adapter
-remains reusable for a future separately reviewed unattended rollout.
+drift invalidates approval before DPAPI. The bounded unattended route now uses
+`translate.py --plan-goat-run` followed by matching fingerprint/token and
+`--authorize-goat-run`, with explicit operator-selected send/credit ceilings.
+The shared GOAT executor invokes the existing lifecycle without a chapter target.
+The bare launcher still refuses GOAT; only the authorized route installs its
+transport and budget. See [commands and restart boundaries](GOAT_UNATTENDED.md).
+Direct DeepSeek unattended production remains explicitly selectable.
 
 ## Credential activation and response recovery
 
@@ -199,11 +200,11 @@ and a separately reviewed live GOAT smoke-test plan. No fresh novel roots or
 Ace/Rogue execution are authorized by implementation validation.
 
 
-### Initial GOAT operator routing
+### GOAT operator routing
 
-A clean GOAT project with an explicit credit allowance returns
-`CONTROLLED_TRIAL_READY` and recommends the read-only `controlled_trial_plan.py`
-with provider, model and both ceilings. Without an allowance it returns
+A clean GOAT project with both explicit operator-selected limits returns
+`BOUNDED_GOAT_READY` and recommends read-only `translate.py --plan-goat-run`.
+The one-chapter controlled-trial planner remains an optional separate route. Without an allowance it returns
 `BOUNDED_ALLOWANCE_REQUIRED`: structural readiness is reported, but no runnable
 plan command or paid allowance is invented. For example, after choosing the
 allowance explicitly:

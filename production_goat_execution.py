@@ -34,6 +34,9 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
     if plan["provider_identity"] != expected or plan["budget_unit"] != expected["pricing_unit"]:
         raise RuntimeError("GOAT authorization provider/accounting drift before credentials")
     project = load_novel_project(plan["novel_id"], repo_root=repo_root)
+    if plan.get("mode") == "bounded_goat_unattended":
+        from production_run_lock import held_production_run_lock
+        held_production_run_lock(project.root)
     pending_identity = plan["migration_proof"]["old_policy"] if state_policy_migration else expected
     inspect_pending_provider(project.pending_dir, pending_identity)
     budget = GoatBudget(plan["max_api_calls"], plan["max_credit_equivalent_usd"])
@@ -109,6 +112,19 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
                 if (current_plan["state_fingerprint"] != plan["state_fingerprint"]
                     or current_plan["approval_token"] != plan["approval_token"]):
                     raise RuntimeError("GOAT saturation plan drift before credentials")
+            if plan.get("mode") == "bounded_goat_unattended":
+                from production_run_lock import held_production_run_lock
+                held_production_run_lock(project.root)
+                # Consume once, durably, before credential activation. Even a
+                # zero-send stop needs a newly planned/operator-approved run.
+                import json
+                import os
+                receipts = project.data_dir / "goat_run_authorizations"
+                receipts.mkdir(exist_ok=True)
+                with (receipts / (plan["approval_token"] + ".json")).open("x", encoding="utf-8") as handle:
+                    json.dump(plan, handle, ensure_ascii=False, sort_keys=True)
+                    handle.flush()
+                    os.fsync(handle.fileno())
             # All plan/state/provider/budget/target checks precede this scope.
             with activated_goat_transport(module, expected, budget=budget):
                 if uncertain_disposition:
@@ -140,7 +156,8 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
                     if result is not True:
                         error = "GOAT pending recovery stopped safely without commit"
                 else:
-                    module.run_unattended_production(target_chapter=plan["target_chapter"])
+                    module.run_unattended_production(**({} if plan.get("mode") == "bounded_goat_unattended"
+                        else {"target_chapter": plan["target_chapter"]}))
     except (Exception, KeyboardInterrupt, SystemExit):
         # Provider/SDK failures may contain credential-bearing bodies. Safe fixed
         # diagnostics accompany durable journal evidence; never stringify them.

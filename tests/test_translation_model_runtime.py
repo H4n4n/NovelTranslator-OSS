@@ -24,11 +24,11 @@ def write_pending(tmp_path, chapter, meta=None):
     return pending
 
 
-def test_runtime_defaults_to_pro_without_pending(tmp_path):
+def test_runtime_defaults_to_v41_flash_without_pending(tmp_path):
     result = resolve_runtime_model(None, tmp_path / "missing")
     assert result["status"] == "requested"
-    assert result["requested_model"] == "deepseek-v4-pro"
-    assert result["effective_model"] == "deepseek-v4-pro"
+    assert result["requested_model"] == "deepseek-flash"
+    assert result["effective_model"] == "deepseek-flash"
 
 
 def test_runtime_allows_explicit_flash_without_pending(tmp_path):

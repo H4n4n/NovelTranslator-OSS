@@ -467,7 +467,8 @@ def _post_run_report(project, plan, config, budget, before, run_error=None):
     pending = _numeric_files(project.pending_dir, ".md") | _numeric_files(
         project.pending_dir, ".json"
     )
-    target = plan["target_chapter"]
+    unattended = plan.get("mode") == "bounded_goat_unattended"
+    target = plan["final_chapter"] if unattended else plan["target_chapter"]
     raw_completed = progress.get("completed", [])
     completed = raw_completed if isinstance(raw_completed, list) else []
     numeric_completed = {
@@ -487,6 +488,9 @@ def _post_run_report(project, plan, config, budget, before, run_error=None):
             run_error or "controlled trial escaped its one-chapter boundary: "
             + ", ".join(map(str, escaped))
         )
+    elif (unattended and budget.pre_send_refusals and not budget.blocked
+          and all(item["kind"] == "deterministic_local_budget_refusal" for item in budget.pre_send_refusals)):
+        status = "ALLOWANCE_EXHAUSTED"
     elif run_error:
         status = "FAILED_AFTER_AUTHORIZATION"
     elif committed_ok:
@@ -499,7 +503,9 @@ def _post_run_report(project, plan, config, budget, before, run_error=None):
         for record in budget.records
     )
     return {
-        "mode": EXECUTION_MODE,
+        "mode": "bounded_goat_unattended" if unattended else EXECUTION_MODE,
+        "last_completed": progress.get("last_completed"),
+        "next_chapter": progress.get("next_chapter"),
         "status": status,
         "paid_execution_authorized": True,
         "novel_id": plan["novel_id"],
@@ -518,6 +524,7 @@ def _post_run_report(project, plan, config, budget, before, run_error=None):
         "pre_send_refusals": [dict(item) for item in budget.pre_send_refusals],
         "target_committed": committed_ok,
         "target_pending_preserved": target in pending,
+        "pending_chapters": sorted(pending),
         "escaped_chapters": escaped,
         "changed_paths": _changed_paths(before, after),
         "state_fingerprint": plan["state_fingerprint"],

@@ -70,6 +70,7 @@ def test_translation_adapter_selects_project_as_process_working_directory(
 ):
     project = write_project(tmp_path, config("novel_a"))
     project.data_dir.mkdir()
+    project.progress_file.write_text("{}", encoding="utf-8")
     project.chapters_file.write_text(
         json.dumps([{"chapter": number} for number in range(1, 11)]),
         encoding="utf-8",
@@ -95,13 +96,8 @@ def test_translation_adapter_selects_project_as_process_working_directory(
     monkeypatch.setattr(
         translate, "load_novel_terminology_policy", lambda *args: object()
     )
-    monkeypatch.setattr(
-        translate,
-        "load_novel_project",
-        lambda novel_id: project if novel_id == "novel_a" else None,
-    )
-
-    assert translate.main(["--novel", "novel_a"]) == 17
+    assert translate.main(["--novel", "novel_a", "--repo-root", str(tmp_path),
+                           "--provider", "direct_deepseek", "--model", "pro"]) == 17
     command, cwd, environment, check = calls[0]
     assert command[1] == str(runner)
     assert cwd == project.root

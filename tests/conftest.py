@@ -119,6 +119,13 @@ def install_synthetic_goat_hard_bound(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def direct_pro_route(monkeypatch):
+    """Historical direct-Pro fixtures must opt in; never change suite defaults."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")
+
+
+@pytest.fixture
 def synthetic_goat_hard_bound(monkeypatch, tmp_path):
     return install_synthetic_goat_hard_bound(monkeypatch, tmp_path)
 
@@ -172,6 +179,10 @@ def frozen_pr146_runtime(request, monkeypatch):
     if request.node.path.name != "test_goat_saturation_recovery.py":
         return
     request.getfixturevalue("synthetic_goat_hard_bound")
+    # Load the lazy executor before replacing imported policy references.
+    # Otherwise an import inside the historical scope captures the fixture
+    # identity permanently and contaminates later current-policy tests.
+    import production_goat_execution
     import production_provider_runtime as provider
     import production_goat_runtime as runtime
     import production_goat_cap_recovery as cap

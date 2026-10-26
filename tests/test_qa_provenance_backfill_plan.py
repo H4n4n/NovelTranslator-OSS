@@ -11,6 +11,9 @@ from semantic_integrity_audit import protected_state_snapshot
 from translation_model_config import pending_translation_model_record
 
 
+pytestmark = pytest.mark.usefixtures("direct_pro_route")
+
+
 def _write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -166,6 +166,7 @@ def test_legacy_recorded_response_without_provider_model_fails_closed_on_replay(
     assert calls == []
 
 
+@pytest.mark.usefixtures("synthetic_retirement_cutoff")
 def test_pro_alias_is_blocked_before_send_at_announced_cutoff():
     module, calls, _ = _module("deepseek-flash")
     install_provider_model_identity_runtime(
@@ -313,6 +314,7 @@ def _durable_runtime(tmp_path, *, selection="v41-flash", ceiling=12000,
 
 @pytest.mark.parametrize("controlled", [False, True])
 @pytest.mark.parametrize("selection,reason", [("pro", "alias routing"), ("flash", "legacy model")])
+@pytest.mark.usefixtures("synthetic_retirement_cutoff")
 def test_current_date_route_refusal_leaves_real_journal_planned(tmp_path, controlled, selection, reason):
     fixture = _durable_runtime(tmp_path, controlled=controlled, selection=selection)
     # Deliberately use the real default clock: today's Pro route is expired.
@@ -387,6 +389,7 @@ def test_wrong_provider_model_stays_recorded_before_rejection_and_on_replay(tmp_
 
 @pytest.mark.parametrize("controlled", [False, True])
 @pytest.mark.parametrize("status", ["started", "uncertain"])
+@pytest.mark.usefixtures("synthetic_retirement_cutoff")
 def test_historical_ambiguous_journal_blocks_before_route_and_budget_unchanged(tmp_path, controlled, status):
     import json
     from production_paid_request_journal import PaidRequestUncertainError, _updated_record
@@ -403,6 +406,7 @@ def test_historical_ambiguous_journal_blocks_before_route_and_budget_unchanged(t
 
 
 @pytest.mark.parametrize("selection", ["pro", "flash"])
+@pytest.mark.usefixtures("synthetic_retirement_cutoff")
 def test_paid_historical_response_replays_after_route_retirement_without_authorization(tmp_path, selection):
     import json
     from production_paid_request_journal import _sha256_json, _updated_record
@@ -422,6 +426,7 @@ def test_paid_historical_response_replays_after_route_retirement_without_authori
     assert fixture.path.read_bytes() == before
 
 
+@pytest.mark.usefixtures("synthetic_retirement_cutoff")
 def test_cutoff_crossing_after_started_keeps_conservative_uncertainty(tmp_path):
     moments = iter([BEFORE_CUTOFF, AFTER_CUTOFF])
     fixture = _durable_runtime(tmp_path, selection="pro", controlled=True, clock=lambda: next(moments))
@@ -472,3 +477,19 @@ print('import safe')
     result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "import safe" and not list(tmp_path.iterdir())
+
+
+@pytest.fixture
+def synthetic_retirement_cutoff(monkeypatch):
+    """Exercise generic retirement guards independently of continued Pro service."""
+    from dataclasses import replace
+    from translation_model_config import MODEL_CONFIGS, DEEPSEEK_V4_PRO_ROUTE_CUTOFF_UTC
+    monkeypatch.setitem(MODEL_CONFIGS, "deepseek-v4-pro", replace(MODEL_CONFIGS["deepseek-v4-pro"],
+        request_cutoff_utc=DEEPSEEK_V4_PRO_ROUTE_CUTOFF_UTC))
+
+
+def test_current_pro_service_exact_identity_after_former_cutoff():
+    module, calls, durable = _module("deepseek-v4-pro")
+    install_provider_model_identity_runtime(module, now_utc=lambda: AFTER_CUTOFF)
+    assert _journal_call(module, "deepseek-v4-pro")["api_called"]
+    assert len(calls) == 1 and durable[0]["provider_response_model"] == "deepseek-v4-pro"

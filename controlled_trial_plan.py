@@ -223,14 +223,19 @@ def build_controlled_trial_plan(
     provider_selection=None,
     max_credit_equivalent_usd=None,
     allow_peak=False,
+    unattended=False,
 ):
-    """Return a deterministic read-only plan for exactly one future chapter.
+    """Bind a one-chapter trial, or an explicitly bounded GOAT unattended run.
 
-    The project must have no pending translation. This deliberately excludes
-    legacy-unpinned recovery cases from the first paid hardening trial.
+    Both modes require no pending translation. Existing pending incidents
+    retain their dedicated recovery planners.
     """
+    if type(unattended) is not bool:
+        raise ControlledTrialPlanError("unattended must be boolean")
     provider_binding, allowance = authorization_provider(provider_selection, model_selection,
         max_cost_usd, max_credit_equivalent_usd)
+    if unattended and provider_binding["provider"] != PROVIDER_COMMAND_CODE:
+        raise ControlledTrialPlanError("bounded unattended authorization is GOAT-only")
     max_cost_usd = DEFAULT_MAX_COST_USD if allowance is None else allowance
     max_api_calls, max_cost_usd = _validate_budget(
         max_api_calls,
@@ -294,9 +299,9 @@ def build_controlled_trial_plan(
         or next_chapter < 1
     ):
         raise ControlledTrialPlanError("progress.next_chapter must be a positive integer")
-    if next_chapter > project.config.final_chapter:
+    if next_chapter > project.config.final_chapter and not (unattended and next_chapter == project.config.final_chapter + 1):
         raise ControlledTrialPlanError("novel has no remaining chapter for a trial")
-    if next_chapter not in chapter_map:
+    if next_chapter not in chapter_map and next_chapter <= project.config.final_chapter:
         raise ControlledTrialPlanError(
             f"Chapter {next_chapter} is absent from the validated source library"
         )
@@ -335,9 +340,9 @@ def build_controlled_trial_plan(
             else:
                 raise ControlledTrialPlanError("recorded GOAT target requires goat_saturation_recovery_plan.py; not a fresh trial")
 
-    source_entry = chapter_map[next_chapter]
+    source_entry = chapter_map.get(next_chapter, {"text": ""})
     source_text = source_entry.get("text", "")
-    if not isinstance(source_text, str) or not source_text.strip():
+    if next_chapter <= project.config.final_chapter and (not isinstance(source_text, str) or not source_text.strip()):
         raise ControlledTrialPlanError(
             f"Chapter {next_chapter} has no non-empty source text"
         )
@@ -371,6 +376,19 @@ def build_controlled_trial_plan(
         "completed": completed,
         "committed_outputs": sorted(committed),
     }
+    if unattended:
+        from semantic_integrity_audit import _snapshot_tree
+        # Include journals, all audit/QA/committed evidence and one-use receipts.
+        # No pending recovery or historical migration is authorized by this plan.
+        if (set(chapter_map) != set(range(1, project.config.final_chapter + 1))
+            or any(not isinstance(entry.get("text"), str) or not entry["text"].strip()
+                   for entry in chapter_map.values())):
+            raise ControlledTrialPlanError("unattended GOAT requires complete source inventory")
+        if project.pause_file.exists():
+            raise ControlledTrialPlanError("manual pause active; remove it before planning")
+        state_binding.update(mode="bounded_goat_unattended", final_chapter=project.config.final_chapter,
+            project_root=str(project.root.resolve()), data_tree=_snapshot_tree(project.data_dir),
+            output_tree=_snapshot_tree(project.root / "output"))
     state_fingerprint = _canonical_hash(state_binding)
     approval_payload = {
         "provider_identity": provider_binding,
@@ -389,10 +407,13 @@ def build_controlled_trial_plan(
         "max_api_calls": max_api_calls,
         "max_cost_usd": round(max_cost_usd, 8),
     }
+    if unattended:
+        approval_payload["mode"] = "bounded_goat_unattended"
     approval_token = _canonical_hash(approval_payload)
 
     return {
-        "mode": PLAN_MODE,
+        "mode": "bounded_goat_unattended" if unattended else PLAN_MODE,
+        "final_chapter": project.config.final_chapter,
         "provider_identity": provider_binding,
         "provider": provider_binding["provider"],
         "budget_unit": provider_binding["pricing_unit"],

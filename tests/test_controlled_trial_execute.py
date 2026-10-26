@@ -1370,3 +1370,10 @@ def test_proxy_pre_authorization_cannot_send_before_journal_started(tmp_path):
         normalize_response=lambda response, context: {"content": "complete"})
     assert budget.api_calls == client.chat.completions.calls == 1
     assert json.loads(path.read_text())["status"] == "response_recorded"
+
+
+@pytest.fixture(autouse=True)
+def explicit_direct_route(monkeypatch):
+    """These compatibility proofs exercise the explicitly selected direct route."""
+    monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", "direct_deepseek")
+    monkeypatch.setenv("NOVELTRANSLATOR_TRANSLATION_MODEL", "pro")

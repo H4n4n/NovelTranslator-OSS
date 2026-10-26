@@ -225,15 +225,21 @@ def test_saved_batch_accounting_is_replayed_exactly_without_deepseek_repricing()
         validate_saved_luna_stats(deepseek)
 
 
+@pytest.mark.parametrize("provider", [None, "direct_deepseek"])
 def test_real_engine_initializes_without_env_or_usable_provider_client(
     tmp_path,
     monkeypatch,
+    provider,
 ):
+    if provider is None:
+        monkeypatch.delenv("NOVELTRANSLATOR_PROVIDER_BACKEND", raising=False)
+    else:
+        monkeypatch.setenv("NOVELTRANSLATOR_PROVIDER_BACKEND", provider)
     project_root, module, initialized = _load_initialized_engine(tmp_path, monkeypatch)
 
     assert initialized == {
         "status": "initialized_without_provider",
-        "provider_constructor_calls": 1,
+        "provider_constructor_calls": 0,
         "runtime_initialized": True,
         "client": None,
         "api_key_loaded": False,

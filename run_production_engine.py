@@ -242,6 +242,10 @@ def _run_production():
     # Provider identity must be safe before even local completed-pending cleanup.
     backend = provider_identity(None, requested)
     inspect_pending_provider(Path("output/pending"), backend)
+    from production_accounting import validate_progress_accounting
+    import json
+    validate_progress_accounting(json.loads(Path("data/progress.json").read_text(encoding="utf-8")),
+        expected_provider=backend["provider"])
     reconcile_completed_pending_before_runtime()
     prepared = prepare_production_runtime(
         requested,

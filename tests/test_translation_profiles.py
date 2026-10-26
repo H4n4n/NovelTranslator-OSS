@@ -511,11 +511,13 @@ def test_novel_specific_addendum_affects_only_that_novel(tmp_path):
 
 def test_missing_profile_fails_before_production_subprocess(tmp_path, monkeypatch):
     project = write_novel(tmp_path, novel_config("broken", "missing_profile"))
+    project.data_dir.mkdir()
+    project.progress_file.write_text("{}", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(translate, "load_novel_project", lambda novel_id: project)
     monkeypatch.setattr(translate.subprocess, "run", lambda *args, **kwargs: calls.append(1))
     with pytest.raises(FileNotFoundError, match="translation profile does not exist"):
-        translate.main(["--novel", "broken"])
+        translate.main(["--novel", "broken", "--repo-root", str(tmp_path),
+                        "--provider", "direct_deepseek", "--model", "pro"])
     assert calls == []
 
 

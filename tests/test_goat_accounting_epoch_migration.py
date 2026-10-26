@@ -527,9 +527,9 @@ def test_preflight_safe_route_after_migration(project, tmp_path):
     bounded = build_operator_preflight("fixture", repo_root=project.repository_root,
         model_selection="v41-flash", provider_selection=GOAT,
         max_api_calls=4, max_credit_equivalent_usd=0.1)
-    assert bounded["status"] == "CONTROLLED_TRIAL_READY"
+    assert bounded["status"] == "BOUNDED_GOAT_READY"
     assert bounded["paid_execution_authorized"] is False
-    assert bounded["recommended_entrypoint"] == "controlled_trial_plan.py"
+    assert bounded["recommended_entrypoint"] == "translate.py"
 
 
 def test_validate_project_accepts_and_rejects_epoch(project, tmp_path, capsys):

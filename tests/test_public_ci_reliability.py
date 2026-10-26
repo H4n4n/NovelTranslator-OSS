@@ -1078,3 +1078,290 @@ def test_every_source_mapping_must_be_complete(monkeypatch, path):
     monkeypatch.setattr(runner, 'read_json', lambda p: policy)
     with pytest.raises(ValueError, match='impact coverage'):
         risk.load_policy(files)
+
+
+# Publication performance must preserve the frozen accepted guard's decisions.
+@pytest.fixture(scope="module")
+def original_publication_guard():
+    from types import ModuleType
+    baseline = "57187ab7fc67979c72abf3ee71063bf2a23adcdb"
+    repo = Path(__file__).resolve().parents[1]
+    source = subprocess.check_output(["git", "-C", str(repo), "show",
+                                      baseline + ":scripts/publication_guard.py"])
+    assert subprocess.check_output(["git", "-C", str(repo), "show",
+        baseline + ":scripts/guard_allowlist.py"]) == (repo / "scripts/guard_allowlist.py").read_bytes().replace(b"\r\n", b"\n")
+    module = ModuleType("_original_publication_guard")
+    module.__file__ = str(repo / "scripts/publication_guard.py")
+    exec(compile(source, module.__file__, "exec"), module.__dict__)
+    return module
+
+
+def _publication_git(repo, *args, data=None):
+    return subprocess.check_output(["git", "-C", str(repo), *args], input=data,
+                                   stderr=subprocess.PIPE)
+
+
+def _publication_commit(repo, files, *, inventory=None, message="synthetic safe commit"):
+    # Only disposable repositories in the guarded external TEMP are mutated.
+    for name in _publication_git(repo, "ls-files").decode().splitlines():
+        path = repo / name
+        assert path.resolve().is_relative_to(repo.resolve())
+        if path.exists():
+            path.unlink()
+    values = dict(files)
+    values["public_inventory.txt"] = (inventory if inventory is not None else
+        ("\n".join(sorted([*files, "public_inventory.txt"])) + "\n").encode())
+    for name, data in values.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    _publication_git(repo, "add", "-A")
+    _publication_git(repo, "commit", "-qm", message, "--allow-empty")
+    return _publication_git(repo, "rev-parse", "HEAD").decode().strip()
+
+
+@pytest.fixture
+def publication_history(tmp_path):
+    repo = tmp_path / "public_history"
+    repo.mkdir()
+    _publication_git(repo, "init", "-q", "--initial-branch=main")
+    _publication_git(repo, "config", "user.name", "Synthetic Guard Fixture")
+    _publication_git(repo, "config", "user.email", "guard@example.invalid")
+    _publication_git(repo, "config", "core.autocrlf", "false")
+    _publication_git(repo, "config", "core.hooksPath", ".no-hooks")
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    return repo
+
+
+def _publication_decision(module, repo, *, updates=None):
+    module.REPO = str(repo)
+    try:
+        checked = (module.validate_push_check() if updates is None else
+                   module.validate_pre_push(updates))
+        return "accept", checked
+    except module.GuardError:
+        return "reject", None
+
+
+@pytest.mark.parametrize("case", [
+    "repeated", "inventory_evolution", "inventory_mismatch", "duplicate_inventory",
+    "empty_inventory", "invalid_inventory", "forbidden_path", "changed_content",
+    "invalid_utf8", "binary", "unsafe_mode", "unsafe_message", "divergent_branch",
+    "nested_tag", "malformed_tag", "missing_blob", "missing_parent", "shallow",
+    "path_scoped_exception",
+])
+def test_publication_cached_history_matches_original(
+    publication_history, original_publication_guard, monkeypatch, case,
+):
+    repo = publication_history
+    original = original_publication_guard
+    # Construct a synthetic match at runtime; never commit a credential literal.
+    synthetic = "sk" + "-" + chr(81) * 24
+    safe = {"stable.txt": b"safe repeated contents\n"}
+    base = _publication_git(repo, "rev-parse", "HEAD").decode().strip()
+    if case == "repeated":
+        for _ in range(6):
+            _publication_commit(repo, safe)
+    elif case == "inventory_evolution":
+        _publication_commit(repo, {**safe, "added.txt": b"new safe text\n"})
+        _publication_commit(repo, {"renamed.txt": safe["stable.txt"]})
+    elif case in {"inventory_mismatch", "duplicate_inventory", "empty_inventory", "invalid_inventory"}:
+        inventory = {"inventory_mismatch": b"public_inventory.txt\n",
+            "duplicate_inventory": b"public_inventory.txt\nstable.txt\nstable.txt\n",
+            "empty_inventory": b"", "invalid_inventory": b"\xff"}[case]
+        _publication_commit(repo, safe, inventory=inventory)
+        _publication_commit(repo, safe)  # A clean tip must not hide bad history.
+    elif case == "forbidden_path":
+        _publication_commit(repo, {**safe, "nested/output/hidden.txt": b"safe text"})
+        _publication_commit(repo, safe)
+    elif case in {"changed_content", "invalid_utf8", "binary"}:
+        value = {"changed_content": synthetic.encode(), "invalid_utf8": b"\xff",
+                 "binary": b"safe\0binary"}[case]
+        _publication_commit(repo, {"stable.txt": value})
+        _publication_commit(repo, safe)
+    elif case == "unsafe_mode":
+        blob = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+        _publication_git(repo, "update-index", "--cacheinfo", "120000," + blob + ",stable.txt")
+        _publication_git(repo, "commit", "-qm", "unsupported mode")
+        _publication_commit(repo, safe)
+    elif case == "unsafe_message":
+        _publication_commit(repo, safe, message=synthetic)
+        _publication_commit(repo, safe)
+    elif case == "divergent_branch":
+        _publication_git(repo, "switch", "-qc", "other", base)
+        _publication_commit(repo, {"stable.txt": synthetic.encode()})
+        _publication_git(repo, "switch", "-q", "main")
+        _publication_commit(repo, safe)
+    elif case == "nested_tag":
+        _publication_git(repo, "tag", "-a", "inner", "-m", synthetic)
+        _publication_git(repo, "tag", "-a", "outer", "inner", "-m", "safe outer tag")
+    elif case == "malformed_tag":
+        target = _publication_git(repo, "rev-parse", "HEAD").strip()
+        raw = b"object " + target + b"\ntag malformed\n\nmissing type\n"
+        oid = _publication_git(repo, "hash-object", "-w", "-t", "tag", "--literally", "--stdin", data=raw).decode().strip()
+        # update-ref itself rejects a malformed tag; install only disposable
+        # corrupt ref evidence so both guards must encounter and reject it.
+        (repo / ".git/refs/tags").mkdir(parents=True, exist_ok=True)
+        (repo / ".git/refs/tags/malformed").write_bytes(oid.encode() + b"\n")
+    elif case == "missing_blob":
+        oid = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+        import stat
+        loose = repo / ".git/objects" / oid[:2] / oid[2:]
+        loose.chmod(stat.S_IWRITE)  # Git loose objects are read-only on Windows.
+        loose.unlink()
+    elif case == "missing_parent":
+        tree = _publication_git(repo, "rev-parse", "HEAD^{tree}").strip()
+        raw = (b"tree " + tree + b"\nparent " + b"0" * 40 +
+               b"\nauthor Fixture <fixture@example.invalid> 1 +0000\n"
+               b"committer Fixture <fixture@example.invalid> 1 +0000\n\nmissing parent\n")
+        oid = _publication_git(repo, "hash-object", "-w", "-t", "commit", "--literally", "--stdin", data=raw).decode().strip()
+        _publication_git(repo, "update-ref", "refs/heads/main", oid)
+    elif case == "shallow":
+        (repo / ".git/shallow").write_bytes(base.encode() + b"\n")
+    else:
+        for module in (original, guard):
+            monkeypatch.setattr(module, "EXACT_SYNTHETIC",
+                {"allowed.txt": {hashlib.sha256(synthetic.encode()).hexdigest()}})
+        _publication_commit(repo, {"allowed.txt": synthetic.encode(), "z-other.txt": synthetic.encode()})
+    expected = "accept" if case in {"repeated", "inventory_evolution"} else "reject"
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    before = {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+    old = _publication_decision(original, repo)
+    new = _publication_decision(guard, repo)
+    assert old == new and new[0] == expected
+    assert {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
+    if case == "nested_tag":
+        outer = _publication_git(repo, "rev-parse", "refs/tags/outer").decode().strip()
+        updates = [("refs/custom/outgoing", outer, "refs/custom/outgoing", "0" * 40)]
+        assert _publication_decision(original, repo, updates=updates) == _publication_decision(guard, repo, updates=updates) == ("reject", None)
+
+
+def test_publication_cache_reuses_scans_but_rechecks_each_inventory(
+    publication_history, original_publication_guard, monkeypatch,
+):
+    repo = publication_history
+    for _ in range(5):
+        _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    measurements = []
+    for module in (original_publication_guard, guard):
+        reads, inventories, messages = [], [], []
+        real_git = module.git
+        def observed(args, **kwargs):
+            if args[:2] == ["cat-file", "blob"]:
+                reads.append(args[2])
+            if args[:1] == ["show"]:
+                inventories.append(args[1])
+            if args[:1] == ["log"]:
+                messages.append(args[-1])
+            return real_git(args, **kwargs)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "git", observed)
+            patch.setattr(module, "REPO", str(repo))
+            checked = module.validate_push_check()
+        measurements.append((checked, len(reads), len(inventories), len(messages)))
+    assert measurements == [(12, 12, 6, 6), (12, 2, 6, 6)]
+    # Force eviction: it must only cost more reads, never alter the decision.
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    monkeypatch.setattr(guard, "MAX_SCANNED_BLOBS", 1)
+    assert guard.validate_push_check() == 12
+
+
+def test_publication_cache_is_local_to_each_validation(publication_history, monkeypatch):
+    repo = publication_history
+    synthetic = "sk" + "-" + chr(81) * 24
+    _publication_commit(repo, {"allowed.txt": synthetic.encode()})
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    monkeypatch.setattr(guard, "EXACT_SYNTHETIC", {"allowed.txt": {hashlib.sha256(synthetic.encode()).hexdigest()}})
+    assert guard.validate_push_check() > 0
+    monkeypatch.setattr(guard, "EXACT_SYNTHETIC", {})
+    with pytest.raises(guard.GuardError):
+        guard.validate_push_check()
+
+
+def test_publication_cache_never_stores_failure_or_inconsistent_evidence(monkeypatch):
+    data = b"safe text"
+    oid = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+    cache = {}
+    monkeypatch.setattr(guard, "git", lambda args: data)
+    with pytest.raises(guard.GuardError, match="inconsistent tree blob size"):
+        guard.scan_blob("stable.txt", oid, len(data) + 1, cache)
+    assert cache == {}
+    with pytest.raises(guard.GuardError, match="blob identity mismatch"):
+        guard.scan_blob("stable.txt", "0" * 40, len(data), cache)
+    assert cache == {}
+    guard.scan_blob("stable.txt", oid, len(data), cache)
+    with pytest.raises(guard.GuardError, match="inconsistent cached blob size"):
+        guard.scan_blob("stable.txt", oid, len(data) + 1, cache)
+    invalid = b"\xff"
+    invalid_oid = hashlib.sha1(b"blob 1\0" + invalid).hexdigest()
+    monkeypatch.setattr(guard, "git", lambda args: invalid)
+    with pytest.raises(guard.GuardError, match="invalid UTF-8"):
+        guard.scan_blob("invalid.txt", invalid_oid, 1, cache)
+    assert cache == {(oid, "stable.txt"): len(data)}
+    def timed_out(args):
+        raise subprocess.TimeoutExpired("synthetic git", 180)
+    monkeypatch.setattr(guard, "git", timed_out)
+    with pytest.raises(subprocess.TimeoutExpired):
+        guard.scan_blob("unseen.txt", oid, len(data), cache)
+    assert len(cache) == 1
+
+
+def test_publication_timeout_never_becomes_success(monkeypatch, capsys):
+    def timed_out():
+        raise subprocess.TimeoutExpired("synthetic git", 180)
+    monkeypatch.setattr(guard, "validate_push_check", timed_out)
+    assert guard.main(["--push-check", "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is False and report["checked"] == 0
+    assert report["error"] == "git command timed out"
+
+
+@pytest.mark.parametrize("implementation", ["original", "cached"])
+def test_publication_missing_object_after_successful_scan_still_blocks(
+    publication_history, original_publication_guard, monkeypatch, implementation,
+):
+    import stat
+    repo = publication_history
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    module = original_publication_guard if implementation == "original" else guard
+    oid = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+    real_git = module.git
+    trees = []
+    def disappear(args, **kwargs):
+        if args[:1] == ["ls-tree"]:
+            trees.append(args[-1])
+            if len(trees) == 2:
+                loose = repo / ".git/objects" / oid[:2] / oid[2:]
+                loose.chmod(stat.S_IWRITE)
+                loose.unlink()
+        return real_git(args, **kwargs)
+    monkeypatch.setattr(module, "REPO", str(repo))
+    monkeypatch.setattr(module, "git", disappear)
+    with pytest.raises(module.GuardError):
+        module.validate_push_check()
+    assert len(trees) == 2
+
+
+@pytest.mark.parametrize("algorithm", ["sha1", "sha256"])
+def test_publication_cache_proves_supported_git_object_formats(monkeypatch, algorithm):
+    data = b"safe text"
+    oid = hashlib.new(algorithm, b"blob 9\0" + data).hexdigest()
+    cache = {}
+    monkeypatch.setattr(guard, "git", lambda args: data)
+    guard.scan_blob("stable.txt", oid, len(data), cache)
+    assert cache == {(oid, "stable.txt"): len(data)}
+
+
+def test_publication_benign_nested_tags_and_custom_refs_match_original(
+    publication_history, original_publication_guard, monkeypatch,
+):
+    repo = publication_history
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    _publication_git(repo, "tag", "-a", "inner", "-m", "safe inner tag")
+    _publication_git(repo, "tag", "-a", "outer", "inner", "-m", "safe outer tag")
+    outer = _publication_git(repo, "rev-parse", "refs/tags/outer").decode().strip()
+    updates = [("refs/custom/outgoing", outer, "refs/custom/outgoing", "0" * 40)]
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    for operation in (None, updates):
+        assert _publication_decision(original_publication_guard, repo, updates=operation) == (
+            _publication_decision(guard, repo, updates=operation)) == ("accept", 4)

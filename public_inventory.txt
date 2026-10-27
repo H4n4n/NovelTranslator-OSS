@@ -381,7 +381,6 @@ tests/test_goat_cap_recovery.py
 tests/test_goat_chapter_review_response_reconciliation.py
 tests/test_goat_glossary_review_recovery.py
 tests/test_goat_historical_identity.py
-tests/test_goat_periodic_audit_finalization.py
 tests/test_goat_post_smoke_hardening.py
 tests/test_goat_reviewed_capability.py
 tests/test_goat_saturation_recovery.py
@@ -501,3 +500,10 @@ docs/GOAT_UNATTENDED.md
 docs/GOAT_UNATTENDED_VALIDATION.md
 tests/test_goat_unattended.py
 docs/AUT2_MAIN_INTEGRATION.md
+docs/AUT2_FINALIZATION_CASE_MAPPING.json
+docs/AUT2_PUBLIC_CI_REPARTITION.md
+tests/goat_audit_finalization_support.py
+tests/test_goat_periodic_audit_finalization_part_1.py
+tests/test_goat_periodic_audit_finalization_part_2.py
+tests/test_goat_periodic_audit_finalization_part_3.py
+tests/test_goat_periodic_audit_finalization_part_4.py

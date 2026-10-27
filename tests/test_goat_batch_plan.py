@@ -13,7 +13,7 @@ from novel_project import load_novel_project
 from production_provider_runtime import goat_provenance, provider_identity
 from test_controlled_trial_plan import _empty_project, _write_json
 from test_production_goat_runtime import zero_network, engine
-from test_goat_periodic_audit_finalization import incident as audit_incident
+from goat_audit_finalization_support import incident as audit_incident
 from test_uncertain_request_disposition import incident as disposition_incident
 
 pytestmark = pytest.mark.usefixtures("zero_network", "synthetic_goat_hard_bound")
@@ -269,7 +269,7 @@ def test_historical_disposition_uses_verified_inventory(disposition_incident, mo
 @pytest.mark.parametrize("legacy", [False, True])
 def test_great_king_historical_audit_compatibility(audit_incident, legacy):
     import production_periodic_audit_finalization as final
-    from test_goat_periodic_audit_finalization import execute, local_module
+    from goat_audit_finalization_support import execute, local_module
     project = audit_incident[0]
     with pytest.raises((ValueError, RuntimeError)): plan(project)
     assert execute(project)["status"] == "FINALIZED"

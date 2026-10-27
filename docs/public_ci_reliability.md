@@ -5,7 +5,9 @@ historical modules remain excluded, not passed. The zero-provider wrapper,
 explicit DPAPI deselection, external temporary roots, publication history gate,
 credential exclusion and read-only workflow permissions are retained.
 
-## Measured scheduling and limits
+## Original hosted scheduling evidence
+
+The current complete allocation is documented in [PR 15 public CI repartition](AUT2_PUBLIC_CI_REPARTITION.md): 197 public modules, source-bound local refreshes, and conservative per-shard budgets. The tables and projections below retain the original hosted scheduling evidence; they are not current shard estimates. The runner algorithm, three shards and 4500-second execution deadline remain unchanged.
 
 The version-2 `tests/public_shard_schedule.json` uses complete per-module
 collection + setup/call/teardown seconds from successful hosted run

@@ -22,6 +22,7 @@ from production_provider_contract import PROVIDER_COMMAND_CODE
 from production_failure_classification import ProductionIntegrityError
 import retroactive_transactions as tx
 from retroactive_span_planning import normalized_rules, ownership_policy
+from historical_reconciliation import proof_traversal
 
 REVISION = "periodic-audit-local-finalization-v1"
 
@@ -35,15 +36,20 @@ def require(condition, message):
         raise AuditFinalizationBlocked(message)
 
 
-def file_sha(path):
+def _plain_evidence(path):
     path = Path(path)
     require(not any(p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()) for p in (path, *path.parents)), f"linked audit evidence: {path}")
+    return path
+
+
+def file_sha(path):
+    path = _plain_evidence(path)
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
 
 
 def read_json(path):
-    file_sha(path)
-    return json.loads(Path(path).read_bytes())
+    # The old discarded digest reread the same file solely for path validation.
+    return json.loads(_plain_evidence(path).read_bytes())
 
 
 def json_bytes(value):
@@ -102,12 +108,15 @@ def state_paths(module):
                 issues=module.ISSUES_FILE, history=module.AUDIT_HISTORY_FILE)
 
 
-def chapter_manifest(module):
-    return {p.name: file_sha(p) for p in sorted(module.OUTPUT_DIR.glob("*.md"))}
+def chapter_manifest(module, *, _inputs=None):
+    sha = _inputs.sha if _inputs is not None else file_sha
+    return {p.name: sha(p) for p in sorted(module.OUTPUT_DIR.glob("*.md"))}
 
 
-def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None, _include_before_bytes=False):
+@proof_traversal
+def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None, _include_before_bytes=False, _inputs=None):
     """Pure PR155 proof, including original plan regeneration from BEFORE bytes."""
+    file_sha, read_json = _inputs.sha, _inputs.read_json
     novel = module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"
     label = f"{start:04d}_{end:04d}"
     request = dict(novel_id=novel, audit_label=label, through_chapter=end,
@@ -122,14 +131,12 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
     result_path = directory / f"{slot}.result.json"
     evidence = {}
     originals = {}
-    intent = load_intent(module, start, end)
+    intent = load_intent(module, start, end, _inputs=_inputs)
     current_cache = {}
     def current_bytes(number):
         if number not in current_cache:
-            if chapter_bytes is None:
-                file_sha(module.OUTPUT_DIR / f"{number:04d}.md")
             current_cache[number] = (chapter_bytes[number] if chapter_bytes is not None else
-                                    (module.OUTPUT_DIR / f"{number:04d}.md").read_bytes())
+                                    _inputs.read(module.OUTPUT_DIR / f"{number:04d}.md"))
         return current_cache[number]
     expected_plan = intent["transaction_plan"] if intent else None
     existing = path.exists()
@@ -149,10 +156,10 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
                 evidence[str(backup)] = file_sha(backup)
             if item["edits"] and sha == item["after_sha256"]:
                 require(backup.is_file(), "AFTER chapter lacks transaction backup")
-                originals[number] = backup.read_bytes()
+                originals[number] = _inputs.read(backup)
             else:
                 originals[number] = current
-        require(tx.build_plan(request, originals, module.chapter_map) == plan, "retroactive deterministic plan mismatch")
+        require(_inputs.build_plan(request, originals, module.chapter_map) == plan, "retroactive deterministic plan mismatch")
     else:
         require(not state_path.exists() and not result_path.exists()
                 and not list(directory.glob(f"{slot}.reconcile.*.json")), "retroactive evidence lacks original plan")
@@ -161,7 +168,7 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
             # Only an untouched intent-before-plan interruption is recoverable.
             require(chapter_bytes is None, "historical lineage lacks immutable plan")
             require("historical_proof" in intent, "legacy intent cannot regenerate missing transaction plan")
-            require(chapter_manifest(module) == intent["chapters"], "missing plan after historical mutation")
+            require(chapter_manifest(module, _inputs=_inputs) == intent["chapters"], "missing plan after historical mutation")
             require(all(read_json(p) == intent["baseline"][k] for k, p in state_paths(module).items())
                     and not (module.AUDIT_DIR / f"audit_{start:04d}_{end:04d}.json").exists(),
                     "missing plan after audit publication")
@@ -176,7 +183,7 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
             require(not any(p.name.removeprefix("retroactive_") not in known
                             and any(p.rglob("*.md")) for p in module.BACKUP_DIR.glob("retroactive_*")),
                     "orphan historical backup without immutable plan")
-        plan = tx.build_plan(request, originals, module.chapter_map)
+        plan = _inputs.build_plan(request, originals, module.chapter_map)
     if intent:
         require(plan == expected_plan, "retroactive plan differs from immutable audit intent")
         if "historical_proof" in intent:
@@ -262,8 +269,10 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
     return proof
 
 
-def prepare_finalization(module, start, end, audit_result, audit_stats, chunking, *, timestamp=0, chapter_bytes=None):
+@proof_traversal
+def prepare_finalization(module, start, end, audit_result, audit_stats, chunking, *, timestamp=0, chapter_bytes=None, _inputs=None):
     """Detached validation; this function never creates a transaction or writes."""
+    file_sha = _inputs.sha
     baseline = dict(glossary=copy.deepcopy(module.glossary), progress=copy.deepcopy(module.progress),
                     issues=copy.deepcopy(module.issues_data), history=copy.deepcopy(module.audit_history))
     require(start == baseline["progress"].get("last_audited_chapter", 0) + 1 and end <= baseline["progress"]["last_completed"], "audit window/progress mismatch")
@@ -294,11 +303,11 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     candidate["last_audited_chapter"] = end
     staged = copy.deepcopy(baseline["glossary"])
     changes = module.apply_periodic_audit(start, end, audit_result, glossary_data=staged)
-    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes, _include_before_bytes=True)
+    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes, _include_before_bytes=True, _inputs=_inputs)
     # Existing immutable intents retain their exact replay semantics. New audits
     # bind a source-safe full-range discovery report to the outer transaction.
     from historical_reconciliation import impact_report
-    prior_intent = load_intent(module, start, end)
+    prior_intent = load_intent(module, start, end, _inputs=_inputs)
     history_evidence = prior_intent is None or "historical_reconciliation" in prior_intent["record"]
     record = dict(start_chapter=start, end_chapter=end, timestamp_unix=timestamp,
                   stats=copy.deepcopy(audit_stats), chunking=copy.deepcopy(chunking), changes=changes,
@@ -311,7 +320,7 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     post_issues["issues"].extend(dict(chapter=end, type="periodic_glossary_audit", details=issue)
                                for issue in audit_result.get("issues", []))
     post = dict(glossary=staged, progress=candidate, issues=post_issues, history=post_history)
-    manifest = chapter_manifest(module)
+    manifest = chapter_manifest(module, _inputs=_inputs)
     manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in proof["plan"]["chapters"]})
     historical_proof = dict(schema_version=1, novel_id=proof["plan"]["request"]["novel_id"],
         before_chapters=manifest, plan_sha256=canonical_sha256(proof["plan"]),
@@ -328,12 +337,12 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     return prepared
 
 
-def load_intent(module, start, end):
+def load_intent(module, start, end, *, _inputs=None):
     path = intent_path(module, start, end)
     if not path.exists():
         return None
     from historical_reconciliation import read_object
-    value = read_object(path)
+    value = read_object(path, _inputs=_inputs)
     require(value.get("intent_sha256") == canonical_sha256({k: v for k, v in value.items() if k != "intent_sha256"})
             and value.get("revision") == REVISION and (value.get("start"), value.get("end")) == (start, end), "audit finalization intent mismatch")
     if "historical_proof" in value:
@@ -344,13 +353,15 @@ def load_intent(module, start, end):
     return value
 
 
-def verify_publication(module, intent):
+def verify_publication(module, intent, *, _inputs=None):
     """Accept only ordered exact old/new prefixes and planned prose states."""
+    sha = _inputs.sha if _inputs is not None else file_sha
+    read = _inputs.read_json if _inputs is not None else read_json
     paths = state_paths(module)
     record_path = module.AUDIT_DIR / f"audit_{intent['start']:04d}_{intent['end']:04d}.json"
-    require(file_sha(module.CONTINUITY_FILE) == intent["continuity_sha256"], "continuity drift")
-    require(file_sha(module.periodic_audit_checkpoint_path(intent['start'], intent['end'])) == intent["checkpoint_sha256"], "completed checkpoint drift")
-    current_chapters = chapter_manifest(module)
+    require(sha(module.CONTINUITY_FILE) == intent["continuity_sha256"], "continuity drift")
+    require(sha(module.periodic_audit_checkpoint_path(intent['start'], intent['end'])) == intent["checkpoint_sha256"], "completed checkpoint drift")
+    current_chapters = chapter_manifest(module, _inputs=_inputs)
     require(current_chapters.keys() == intent["chapters"].keys(), "historical chapter inventory drift")
     planned = {f"{i['chapter']:04d}.md": i for i in intent["transaction_plan"]["chapters"]}
     for name, sha in current_chapters.items():
@@ -362,11 +373,11 @@ def verify_publication(module, intent):
     require(tx_after == sorted(tx_after, reverse=True), "out-of-order historical edit prefix")
     flags = []
     for key in ("glossary", "issues", "history"):
-        current = read_json(paths[key])
+        current = read(paths[key])
         require(current in (intent["baseline"][key], intent["post"][key]), f"audit {key} publication drift")
         flags.append(current == intent["post"][key] or intent["post"][key] == intent["baseline"][key])
     if record_path.exists():
-        require(read_json(record_path) == intent["record"], "audit record drift")
+        require(read(record_path) == intent["record"], "audit record drift")
         flags.append(True)
     else:
         flags.append(False)
@@ -375,7 +386,7 @@ def verify_publication(module, intent):
     changed = [flags[i] for i, k in enumerate(("glossary", "issues", "history")) if intent["post"][k] != intent["baseline"][k]] + [flags[3]]
     require(changed == sorted(changed, reverse=True), "out-of-order audit publication prefix")
     require(not any(changed) or all(tx_after), "audit publication precedes historical edits")
-    current_progress = read_json(paths["progress"])
+    current_progress = read(paths["progress"])
     require(current_progress in (intent["baseline"]["progress"], intent["post"]["progress"]), "audit progress drift")
     finalized = current_progress == intent["post"]["progress"]
     require(not finalized or all(flags), "progress marker precedes final audit artifacts")

@@ -19,6 +19,7 @@ from production_provider_runtime import provider_identity
 from production_goat_runtime import normalize_production_request
 from production_goat_cap_recovery import accepted_envelope
 from benchmark_longitudinal_provider import build_provider_request_identity
+from historical_reconciliation import proof_traversal
 from production_periodic_audit_finalization import (
     require, file_sha, read_json, authoritative_audit_stats, prepare_finalization,
     publication_timestamp, load_intent, verify_publication, state_paths,
@@ -255,6 +256,16 @@ def checkpoint_proof(module, start, end):
                 journals=journals, audit_result=combined, audit_stats=stats, chunking=chunking)
 
 
+@proof_traversal
+def _finalization_inputs(module, start, end, proof, timestamp, *, _inputs=None):
+    """One no-write traversal; execution/authorization never receive its inputs."""
+    candidate = prepare_finalization(module, start, end, proof["audit_result"],
+        proof["audit_stats"], proof["chunking"], timestamp=timestamp, _inputs=_inputs)
+    transaction = transaction_proof(module, start, end, candidate["baseline"]["glossary"],
+        candidate["post"]["glossary"], candidate["record"]["changes"], _inputs=_inputs)
+    return candidate, transaction
+
+
 def build_goat_periodic_audit_finalize_plan(novel_id, *, repo_root=None, start_chapter, end_chapter):
     project = load_novel_project(novel_id, repo_root=repo_root or repository_root())
     require(type(start_chapter) is int and type(end_chapter) is int and 1 <= start_chapter <= end_chapter, "invalid audit window")
@@ -276,8 +287,7 @@ def build_goat_periodic_audit_finalize_plan(novel_id, *, repo_root=None, start_c
         require(proof["audit_result"] == intent["audit_result"] and proof["audit_stats"] == intent["audit_stats"], "paid checkpoint/finalization intent drift")
         proof["chunking"] = intent["chunking"]
     timestamp = intent["record"]["timestamp_unix"] if intent else publication_timestamp(module, start_chapter, end_chapter)
-    candidate = prepare_finalization(module, start_chapter, end_chapter, proof["audit_result"], proof["audit_stats"], proof["chunking"], timestamp=timestamp)
-    tx_proof = transaction_proof(module, start_chapter, end_chapter, candidate["baseline"]["glossary"], candidate["post"]["glossary"], candidate["record"]["changes"])
+    candidate, tx_proof = _finalization_inputs(module, start_chapter, end_chapter, proof, timestamp)
     if intent:
         candidate["post"]["history"]["audits"][-1]["retroactive"] = intent["record"]["retroactive"]
         require(candidate["post"] == intent["post"] and candidate["transaction_plan"] == intent["transaction_plan"], "expected audit publication drift")

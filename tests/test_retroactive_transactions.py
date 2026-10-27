@@ -2275,3 +2275,232 @@ def test_standalone_lineage_relative_writer_and_absolute_readers(discovery_novel
     snapshot = _discovery_snapshot(case.root)
     e.apply_known_glossary_fixes()
     assert _discovery_snapshot(case.root) == snapshot
+
+
+# Traversal-local proof inputs: actual byte tampering and independent boundaries.
+import os
+import historical_reconciliation as history
+from historical_reconciliation import proof_traversal
+
+
+def _proof_input_tamper(path):
+    info = path.stat()
+    before = path.read_bytes()
+    index = before.index(b" ")
+    after = before[:index] + b"\t" + before[index + 1:]
+    path.write_bytes(after)
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    assert path.stat().st_size == info.st_size
+    assert path.stat().st_mtime_ns == info.st_mtime_ns
+    assert path.read_bytes() != before
+    return after, info.st_mtime_ns
+
+
+def _proof_input_prepared(discovery_novel):
+    case = discovery_novel()
+    _writer_invoke(case, "direct")
+    plan = case.intent["transaction_plan"]
+    assert history.writer_authorization(case.engine, plan) == history.writer_authorization(case.engine, plan)
+    return case, plan
+
+
+@pytest.mark.parametrize("evidence", ["chapter", "source", "glossary", "history", "continuity",
+                                      "before", "plan", "result", "intent"])
+def test_same_size_restored_mtime_mutation_inside_writer_proof_refuses(discovery_novel, monkeypatch, evidence):
+    case, plan = _proof_input_prepared(discovery_novel)
+    e = case.engine
+    request = plan["request"]
+    slot = tx.canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
+    paths = dict(chapter=e.OUTPUT_DIR / "0001.md", source=e.CHAPTERS_FILE,
+        glossary=e.GLOSSARY_FILE, history=e.AUDIT_HISTORY_FILE, continuity=e.CONTINUITY_FILE,
+        before=e.BACKUP_DIR / f"retroactive_{plan['transaction_id']}" / "chapters_before/0001.md",
+        plan=e.RETROACTIVE_DIR / "transactions" / f"{slot}.plan.json",
+        result=e.RETROACTIVE_DIR / "transactions" / f"{slot}.result.json",
+        intent=e.AUDIT_DIR / "audit_0026_0026.finalization.json")
+    target = paths[evidence]
+    before = _discovery_snapshot(case.root)
+    original = history.writer_evidence_files
+    injected = []
+    def mutate(*args, **kwargs):
+        result = original(*args, **kwargs)
+        injected.append(_proof_input_tamper(target))
+        return result
+    monkeypatch.setattr(history, "writer_evidence_files", mutate)
+    with pytest.raises(ProductionIntegrityError, match="PROOF_INPUT_BYTES_CHANGED"):
+        history.writer_authorization(e, plan)
+    assert len(injected) == 1
+    expected = dict(before)
+    expected[target.relative_to(case.root).as_posix()] = injected[0]
+    assert _discovery_snapshot(case.root) == expected
+
+
+def test_competing_intent_created_during_proof_cannot_escape(discovery_novel, monkeypatch):
+    case, plan = _proof_input_prepared(discovery_novel)
+    original = history.writer_evidence_files
+    target = case.engine.AUDIT_DIR / "competing.finalization.json"
+    before = _discovery_snapshot(case.root)
+    def mutate(*args, **kwargs):
+        result = original(*args, **kwargs)
+        target.write_bytes((case.engine.AUDIT_DIR / "audit_0026_0026.finalization.json").read_bytes())
+        return result
+    monkeypatch.setattr(history, "writer_evidence_files", mutate)
+    with pytest.raises(ProductionIntegrityError, match="PROOF_INPUT_NAMESPACE_CHANGED"):
+        history.writer_authorization(case.engine, plan)
+    after = _discovery_snapshot(case.root)
+    assert set(after) - set(before) == {target.relative_to(case.root).as_posix()}
+    assert {k: v for k, v in after.items() if k in before} == before
+
+
+@pytest.mark.parametrize("evidence", ["chapter", "source"])
+def test_separate_authorization_boundary_reads_changed_bytes(discovery_novel, evidence):
+    case, plan = _proof_input_prepared(discovery_novel)
+    if evidence == "chapter":
+        _proof_input_tamper(case.engine.OUTPUT_DIR / "0001.md")
+    else:
+        path = case.engine.CHAPTERS_FILE
+        info = path.stat()
+        raw = path.read_bytes()
+        source = case.key.encode("utf-8")
+        changed = ("漢" if case.key != "漢" else "韓").encode("utf-8")
+        assert len(source) == len(changed) and source in raw
+        path.write_bytes(raw.replace(source, changed, 1))
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+        assert path.stat().st_size == info.st_size
+        assert path.stat().st_mtime_ns == info.st_mtime_ns
+    before = _discovery_snapshot(case.root)
+    with pytest.raises(ProductionIntegrityError):
+        history.writer_authorization(case.engine, plan)
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_captured_inputs_close_and_cannot_cross_novel_or_writer_boundary(discovery_novel, tmp_path):
+    case = discovery_novel()
+    e, plan = case.engine, case.intent["transaction_plan"]
+    captured = []
+    @proof_traversal
+    def inspect(module, *, _inputs=None):
+        captured.append(_inputs)
+        other = SimpleNamespace(**vars(module))
+        other.OUTPUT_DIR = tmp_path / "other/output/chapters"
+        with pytest.raises(ProductionIntegrityError, match="SCOPE_DRIFT"):
+            _inputs.check_module(other)
+        with pytest.raises(ProductionIntegrityError, match="INDEPENDENT_PROOF_BOUNDARY_REQUIRED"):
+            history.writer_authorization(module, plan, _inputs=_inputs)
+        return _inputs.read(module.OUTPUT_DIR / "0001.md")
+    before = _discovery_snapshot(case.root)
+    assert inspect(e) == (e.OUTPUT_DIR / "0001.md").read_bytes()
+    assert len(captured) == 1 and not captured[0].active
+    assert not captured[0].files and not captured[0].plans and not captured[0].directories
+    with pytest.raises(ProductionIntegrityError, match="CLOSED_PROOF_INPUTS"):
+        captured[0].read(e.OUTPUT_DIR / "0001.md")
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_one_capture_and_one_real_revalidation_read(discovery_novel, monkeypatch):
+    case = discovery_novel()
+    target = case.engine.OUTPUT_DIR / "0001.md"
+    original = Path.read_bytes
+    reads = []
+    def read(path):
+        if path.absolute() == target.absolute():
+            reads.append(path)
+        return original(path)
+    monkeypatch.setattr(Path, "read_bytes", read)
+    @proof_traversal
+    def inspect(module, *, _inputs=None):
+        expected = _inputs.read(target)
+        for _ in range(10):
+            assert _inputs.read(target) == expected
+            assert _inputs.sha(target) == tx.digest(expected)
+        return expected
+    assert inspect(case.engine)
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("changed", ["request", "bytes", "source"])
+def test_pure_plan_memo_uses_complete_inputs_and_detached_results(discovery_novel, monkeypatch, changed):
+    case = discovery_novel()
+    e, plan = case.engine, case.intent["transaction_plan"]
+    request = copy.deepcopy(plan["request"])
+    chapters = {n: (e.OUTPUT_DIR / f"{n:04d}.md").read_bytes() for n in request["committed_chapters"]}
+    source = copy.deepcopy(e.chapter_map)
+    original = tx.build_plan
+    calls = []
+    def build(*args):
+        calls.append(True)
+        return original(*args)
+    monkeypatch.setattr(tx, "build_plan", build)
+    @proof_traversal
+    def inspect(module, *, _inputs=None):
+        expected = original(request, chapters, source)
+        first = _inputs.build_plan(request, chapters, source)
+        assert first == expected
+        first["chapters"][0]["before_sha256"] = "corrupted returned copy"
+        assert _inputs.build_plan(request, chapters, source) == expected
+        new_request, new_chapters, new_source = copy.deepcopy((request, chapters, source))
+        if changed == "request": new_request["audit_label"] = "different-scope"
+        elif changed == "bytes": new_chapters[1] += b" "
+        else: new_source[1]["text"] += "變"
+        recomputed = _inputs.build_plan(new_request, new_chapters, new_source)
+        assert recomputed == original(new_request, new_chapters, new_source)
+        assert recomputed != expected
+    inspect(e)
+    assert len(calls) == 2
+
+
+def test_source_context_must_match_captured_library_before_traversal(discovery_novel):
+    case = discovery_novel()
+    e = case.engine
+    path = e.CHAPTERS_FILE
+    info = path.stat()
+    raw = path.read_bytes()
+    old = case.key.encode("utf-8")
+    new = ("漢" if case.key != "漢" else "韓").encode("utf-8")
+    assert len(old) == len(new) and old in raw
+    path.write_bytes(raw.replace(old, new, 1))
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    before = _discovery_snapshot(case.root)
+    @proof_traversal
+    def inspect(module, *, _inputs=None):
+        pytest.fail("stale source context must refuse before consumer runs")
+    with pytest.raises(ProductionIntegrityError, match="SOURCE_INVENTORY_DRIFT"):
+        inspect(e)
+    assert _discovery_snapshot(case.root) == before
+
+
+def test_in_memory_source_change_cannot_escape_traversal(discovery_novel):
+    case = discovery_novel()
+    e = case.engine
+    original = copy.deepcopy(e.chapter_map)
+    before = _discovery_snapshot(case.root)
+    @proof_traversal
+    def inspect(module, *, _inputs=None):
+        _inputs.read(module.OUTPUT_DIR / "0001.md")
+        module.chapter_map[1]["text"] += "變"
+    try:
+        with pytest.raises(ProductionIntegrityError, match="SCOPE_DRIFT"):
+            inspect(e)
+    finally:
+        e.chapter_map.clear()
+        e.chapter_map.update(original)
+    assert _discovery_snapshot(case.root) == before
+
+
+@pytest.mark.parametrize("kind", ["is_symlink", "is_junction"])
+def test_parent_link_observations_are_fresh_at_traversal_exit(discovery_novel, monkeypatch, kind):
+    case = discovery_novel()
+    target = case.engine.OUTPUT_DIR / "0001.md"
+    original = getattr(Path, kind)
+    state = {"changed": False}
+    def linked(path):
+        return (state["changed"] and path.absolute() == target.parent.absolute()) or original(path)
+    before = _discovery_snapshot(case.root)
+    with monkeypatch.context() as mp:
+        mp.setattr(Path, kind, linked)
+        @proof_traversal
+        def inspect(module, *, _inputs=None):
+            _inputs.read(target)
+            state["changed"] = True
+        with pytest.raises(ProductionIntegrityError, match="LINKED_EVIDENCE"):
+            inspect(case.engine)
+    assert _discovery_snapshot(case.root) == before

@@ -14,6 +14,8 @@ from noveltranslator_core import atomic_write_json, strict_term_valid_targets
 from production_failure_classification import ProductionIntegrityError
 from retroactive_span_planning import canonical_hash, digest, target_spans, ownership_policy, plan_chapter, normalized_rules
 import retroactive_transactions as tx
+from contextlib import contextmanager
+from functools import wraps
 
 REVISION = "aut2-history-evidence-v1"
 PREFLIGHT_REVISION = "aut2-impact-preflight-v2"
@@ -25,6 +27,187 @@ MAX_DISCOVERY_ROWS = 100000
 def require(condition, reason):
     if not condition:
         raise ProductionIntegrityError("AUT2: " + reason)
+
+
+def _proof_plain(path, checked=None):
+    path = Path(path).absolute()
+    for part in (path, *path.parents):
+        if checked is not None and part in checked:
+            continue
+        if part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction()):
+            raise ProductionIntegrityError("AUT2: LINKED_EVIDENCE")
+        if checked is not None:
+            checked.add(part)
+    return path
+
+
+class _ProofInputs:
+    def __init__(self, module):
+        # Parent link observations are shared only inside this non-writing
+        # traversal and checked afresh at exit, alongside actual file bytes.
+        self.checked = set()
+        self.root = _proof_plain(module.OUTPUT_DIR, self.checked).parent.parent
+        self.config = copy.deepcopy(module.ACTIVE_NOVEL_CONFIG)
+        self.source = copy.deepcopy(module.chapter_map)
+        self.profile = copy.deepcopy(module.ACTIVE_PROFILE)
+        # Read-only publication consumers deliberately supply a narrower
+        # context. Missing convenience paths are derived from this novel root;
+        # writer_inventory still independently requires its full writer context.
+        relative = dict(OUTPUT_DIR="output/chapters", CHAPTERS_FILE="data/chapters.json",
+            GLOSSARY_FILE="data/glossary.json", PROGRESS_FILE="data/progress.json",
+            ISSUES_FILE="data/issues.json", AUDIT_HISTORY_FILE="data/audit_history.json",
+            CONTINUITY_FILE="data/continuity.json", BACKUP_DIR="backup",
+            AUDIT_DIR="output/audits", RETROACTIVE_DIR="output/retroactive_fixes")
+        self.paths = {name: Path(getattr(module, name, self.root / path)).absolute()
+                      for name, path in relative.items()}
+        self.files = {}
+        self.directories = {}
+        self.plans = {}
+        self.active = True
+        # Namespace observations are revalidated as well as captured bytes.
+        # No negative file lookup can become a reusable proof input.
+        for path in (self.root, self.root / "data", module.OUTPUT_DIR,
+                     self.paths["AUDIT_DIR"], self.paths["RETROACTIVE_DIR"],
+                     self.paths["RETROACTIVE_DIR"] / "transactions", self.paths["BACKUP_DIR"]):
+            self._watch(path)
+        if self.paths["BACKUP_DIR"].is_dir():
+            for path in self.paths["BACKUP_DIR"].rglob("*"):
+                if path.is_dir():
+                    self._watch(path)
+        for name in ("CHAPTERS_FILE", "GLOSSARY_FILE", "PROGRESS_FILE", "ISSUES_FILE",
+                     "AUDIT_HISTORY_FILE", "CONTINUITY_FILE"):
+            path = self.paths[name]
+            if path.is_file():
+                self.read(path)
+        config = self.root / "novel.json"
+        if config.is_file():
+            self.read(config)
+        # local_module may have loaded its source before this traversal began.
+        # Bind that context to the ACTUAL captured library, not just its path.
+        source_path = self.paths["CHAPTERS_FILE"]
+        if source_path in self.files:
+            from chapter_library import index_chapter_library
+            from novel_project import NovelConfig, legacy_project
+            policy = (NovelConfig.from_dict(json.loads(self.read(config))) if config.is_file()
+                      else legacy_project(self.root).config)
+            if self.config is not None and policy.id != self.config.id:
+                raise ProductionIntegrityError("AUT2: FOREIGN_PROOF_INPUT")
+            source = index_chapter_library(json.loads(self.read(source_path)),
+                policy.final_chapter, policy.chapter_numbering)
+            if source != self.source:
+                raise ProductionIntegrityError("AUT2: SOURCE_INVENTORY_DRIFT")
+
+    def check_module(self, module):
+        if (not self.active or self.config != module.ACTIVE_NOVEL_CONFIG
+                or self.source != module.chapter_map or self.profile != module.ACTIVE_PROFILE
+                or any(Path(getattr(module, name, path)).absolute() != path
+                       for name, path in self.paths.items())):
+            raise ProductionIntegrityError("AUT2: PROOF_INPUT_SCOPE_DRIFT")
+
+    def _watch(self, path):
+        path = Path(path).absolute()
+        if path in self.directories:
+            return
+        path = _proof_plain(path, self.checked)
+        # An absent directory is observed afresh; its nearest existing parent
+        # detects creation during this traversal. Absence is never memoized.
+        while not path.is_dir() and path != path.parent:
+            path = _proof_plain(path.parent, self.checked)
+        if path not in self.directories:
+            self.directories[path] = frozenset(p.name for p in path.iterdir())
+
+    def _entry(self, path):
+        if not self.active:
+            raise ProductionIntegrityError("AUT2: CLOSED_PROOF_INPUTS")
+        path = Path(path).absolute()
+        if not path.is_relative_to(self.root):
+            raise ProductionIntegrityError("AUT2: FOREIGN_PROOF_INPUT")
+        if path not in self.files:
+            path = _proof_plain(path, self.checked)
+            self._watch(path.parent)
+            raw = path.read_bytes()
+            from hashlib import sha256
+            self.files[path] = (raw, sha256(raw).hexdigest())
+        return self.files[path]
+
+    def read(self, path):
+        return self._entry(path)[0]
+
+    def sha(self, path):
+        # Observe existence on each call; recheck links and bytes before return.
+        # Missing evidence is not stored. Revalidation detects removed inputs.
+        path = Path(path)
+        if not path.is_file():
+            _proof_plain(path)
+            return ""
+        return self._entry(path)[1]
+
+    def read_json(self, path):
+        return json.loads(self.read(path))
+
+    def read_object(self, path):
+        from historical_reconciliation import read_object
+        return read_object(path, _inputs=self)
+
+    def build_plan(self, request, chapters, chapter_map):
+        # Exact request values, original bytes and source text qualify a PURE
+        # computation. Neither path nor metadata nor a previous verdict is a key.
+        import retroactive_transactions as tx
+        key = (tx.SCHEMA_VERSION, tx.POLICY_VERSION, tx.build_plan,
+               json.dumps(request, ensure_ascii=False, sort_keys=True, allow_nan=False),
+               tuple((n, raw, chapter_map.get(n, {}).get("text"))
+                     for n, raw in sorted(chapters.items())))
+        if key not in self.plans:
+            self.plans[key] = copy.deepcopy(tx.build_plan(request, chapters, chapter_map))
+        return copy.deepcopy(self.plans[key])
+
+    def revalidate(self, module):
+        self.check_module(module)
+        from hashlib import sha256
+        checked = set()  # Fresh link observations; no metadata crosses boundaries.
+        for path, (raw, digest) in self.files.items():
+            fresh = _proof_plain(path, checked).read_bytes()
+            if fresh != raw or sha256(fresh).hexdigest() != digest:
+                raise ProductionIntegrityError("AUT2: PROOF_INPUT_BYTES_CHANGED")
+        for path, names in self.directories.items():
+            if frozenset(p.name for p in _proof_plain(path).iterdir()) != names:
+                raise ProductionIntegrityError("AUT2: PROOF_INPUT_NAMESPACE_CHANGED")
+        self.check_module(module)
+
+    def close(self):
+        self.active = False
+        self.files.clear()
+        self.directories.clear()
+        self.plans.clear()
+        self.checked.clear()
+
+
+@contextmanager
+def proof_input_scope(module):
+    """One non-writing traversal, with fresh physical revalidation on success."""
+    inputs = _ProofInputs(module)
+    try:
+        yield inputs
+        inputs.revalidate(module)
+    finally:
+        inputs.close()
+
+
+def proof_traversal(function=None, *, fresh=False):
+    """Explicitly shared only by nested pure validators; fresh at every caller."""
+    if function is None:
+        return lambda owner: proof_traversal(owner, fresh=fresh)
+    @wraps(function)
+    def wrapped(module, *args, _inputs=None, **kwargs):
+        if fresh and _inputs is not None:
+            raise ProductionIntegrityError("AUT2: INDEPENDENT_PROOF_BOUNDARY_REQUIRED")
+        if _inputs is not None:
+            _inputs.check_module(module)
+            return function(module, *args, _inputs=_inputs, **kwargs)
+        with proof_input_scope(module) as inputs:
+            return function(module, *args, _inputs=inputs, **kwargs)
+    return wrapped
+
 
 
 def plain(path):
@@ -54,11 +237,12 @@ def _invalid_constant(value):
     raise ValueError("nonfinite evidence constant")
 
 
-def read_value(path):
+def read_value(path, *, _inputs=None):
     try:
         # Decode explicitly: json.loads(bytes) also accepts UTF-16/32. Existing
         # UTF-8/BOM, whitespace, CRLF and pretty printing remain valid.
-        value = json.loads(plain(path).read_bytes().decode("utf-8-sig"),
+        raw = plain(path).read_bytes() if _inputs is None else _inputs.read(path)
+        value = json.loads(raw.decode("utf-8-sig"),
                            object_pairs_hook=_unique_object, parse_float=_finite_float,
                            parse_constant=_invalid_constant)
         json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -67,20 +251,20 @@ def read_value(path):
     return value
 
 
-def read_object(path):
-    value = read_value(path)
+def read_object(path, *, _inputs=None):
+    value = read_value(path, _inputs=_inputs)
     require(isinstance(value, dict), "INVALID_EVIDENCE")
     return value
 
 
 
-def audit_intent(module, path):
+def audit_intent(module, path, *, _inputs=None):
     from production_periodic_audit_finalization import load_intent
-    value = read_object(path)
+    value = read_object(path, _inputs=_inputs)
     require(type(value.get("start")) is int and type(value.get("end")) is int
             and 1 <= value["start"] <= value["end"], "INVALID_AUDIT_BOUNDARY")
     try:
-        intent = load_intent(module, value["start"], value["end"])
+        intent = load_intent(module, value["start"], value["end"], _inputs=_inputs)
         transaction = intent["transaction_plan"]["transaction_id"]
         require(isinstance(transaction, str) and len(transaction) == 64
                 and all(c in "0123456789abcdef" for c in transaction), "INVALID_TRANSACTION_ID")
@@ -151,7 +335,8 @@ def _discovery_intent(module, start, end, expected_sha):
 
 
 
-def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False, chapter_bytes=None, _events=None):
+@proof_traversal
+def _historical_reservations(module, selected, *, unpublished=False, writer_zero_send=False, chapter_bytes=None, _events=None, _inputs=None):
     """Prove prior immutable publications before reserving their ownership.
 
     Only a veto inventory: never feed it into positive edit authorization.
@@ -163,10 +348,12 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
     from production_periodic_audit_finalization import (
         transaction_proof, prepare_finalization, state_paths,
     )
+    read_bytes = _inputs.read
+    read_object = _inputs.read_object
     try:
         records = selected["baseline"]["history"]["audits"]
         paths = list(plain(module.AUDIT_DIR).glob("*.finalization.json"))
-        intents = [audit_intent(module, path) for path in paths]
+        intents = [audit_intent(module, path, _inputs=_inputs) for path in paths]
         if unpublished:
             require(not any(i["start"] == selected["start"] for i in intents),
                     "COMPETING_UNPUBLISHED_OWNERSHIP_INTENT")
@@ -179,14 +366,14 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
                 "PRIOR_RECORD_WITHOUT_VALIDATING_INTENT")
         blobs = {digest(raw): raw for raw in (
             chapter_bytes[n] if chapter_bytes is not None else
-            plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+            read_bytes(module.OUTPUT_DIR / f"{n:04d}.md")
             for n in module.progress["completed"])}
         for intent in intents:
             for item in intent["transaction_plan"]["chapters"]:
                 backup = plain(module.BACKUP_DIR / f"retroactive_{intent['transaction_plan']['transaction_id']}" /
                                "chapters_before" / f"{item['chapter']:04d}.md")
                 if item["edits"] and backup.exists():
-                    raw = backup.read_bytes()
+                    raw = read_bytes(backup)
                     require(digest(raw) == item["before_sha256"], "HISTORICAL_BACKUP_DRIFT")
                     blobs[digest(raw)] = raw
         from production_standalone_lineage import witnesses, add_blobs, prove_gap
@@ -221,10 +408,10 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
             if writer_zero_send:
                 _writer_checkpoint(module, intent)
             else:
-                require(digest(checkpoint.read_bytes()) == intent["checkpoint_sha256"],
+                require(digest(read_bytes(checkpoint)) == intent["checkpoint_sha256"],
                         "HISTORICAL_OWNERSHIP_CHECKPOINT_DRIFT")
-            require(digest(plain(module.BACKUP_DIR / f"checkpoint_{end:04d}" /
-                                 module.CONTINUITY_FILE.name).read_bytes()) == intent["continuity_sha256"],
+            require(digest(read_bytes(module.BACKUP_DIR / f"checkpoint_{end:04d}" /
+                                 module.CONTINUITY_FILE.name)) == intent["continuity_sha256"],
                     "HISTORICAL_OWNERSHIP_CONTINUITY_DRIFT")
             if detached.progress.get("provider") == "command_code_provider" and intent["chunking"].get("candidate_count", 0):
                 from goat_periodic_audit_finalize_plan import checkpoint_proof
@@ -241,12 +428,12 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
                 after[n] = tx.transform_bytes(raw, item["edits"])
                 latest[n] = item["after_sha256"]
             proof = transaction_proof(detached, start, end, intent["baseline"]["glossary"],
-                intent["post"]["glossary"], intent["record"]["changes"], chapter_bytes=after)
+                intent["post"]["glossary"], intent["record"]["changes"], chapter_bytes=after, _inputs=_inputs)
             require(proof["state"] and proof["state"]["state"] == "FINALIZED",
                     "HISTORICAL_OWNERSHIP_NOT_FINALIZED")
             prepared = prepare_finalization(detached, start, end, intent["audit_result"],
                 intent["audit_stats"], intent["chunking"], timestamp=intent["record"]["timestamp_unix"],
-                chapter_bytes=after)
+                chapter_bytes=after, _inputs=_inputs)
             for record in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
                 record["retroactive"] = intent["record"]["retroactive"]
             require(all(prepared[k] == intent[k] for k in ("post", "record", "transaction_plan", "operation_id")),
@@ -265,7 +452,7 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
         selected_before = {i["chapter"]: i["before_sha256"] for i in selected["transaction_plan"]["chapters"]}
         for n, sha in latest.items():
             current = (chapter_bytes[n] if chapter_bytes is not None else
-                       plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes())
+                       read_bytes(module.OUTPUT_DIR / f"{n:04d}.md"))
             require(selected_before.get(n, digest(current)) == sha,
                     "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
         return policy, evidence
@@ -402,13 +589,13 @@ def read_only_inventory(module, supplied, through):
                 pending_exception={name: digest(files[name].read_bytes()) for name in extra})
 
 
-def writer_evidence_files(module, lineage):
+def writer_evidence_files(module, lineage, *, _inputs=None):
     historical_files = {}
     # Bind physical immutable evidence as well as semantic intent identities.
     # Current transaction/publication prefixes are deliberately excluded; their
     # exact immutable plan and BEFORE inventory are bound separately below.
     for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
-        prior = audit_intent(module, path)
+        prior = audit_intent(module, path, _inputs=_inputs)
         if prior["intent_sha256"] not in lineage:
             continue
         prior_request = prior["transaction_plan"]["request"]
@@ -428,13 +615,14 @@ def writer_evidence_files(module, lineage):
         root = Path(module.OUTPUT_DIR).absolute().parent.parent
         for evidence in files:
             require(plain(evidence).is_file(), "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
-            historical_files[Path(evidence).absolute().relative_to(root).as_posix()] = digest(evidence.read_bytes())
+            historical_files[Path(evidence).absolute().relative_to(root).as_posix()] = digest(evidence.read_bytes() if _inputs is None else _inputs.read(evidence))
     from production_standalone_lineage import evidence_files
     historical_files.update(evidence_files(module, lineage))
     return historical_files
 
 
-def writer_authorization(module, plan, *, selected=None, unpublished=False, recovery_before=None):
+@proof_traversal(fresh=True)
+def writer_authorization(module, plan, *, selected=None, unpublished=False, recovery_before=None, _inputs=None):
     """Fresh veto proof for this exact immutable plan; never edit authority alone.
 
     This is not the discovery report. Both callers rederive disk inventory and
@@ -442,6 +630,7 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
     hashes to the original plan without rewriting that plan's schema or bytes.
     """
     from production_periodic_audit_finalization import load_intent, verify_publication
+    read_bytes, read_object = _inputs.read, _inputs.read_object
     request = plan["request"]
     inventory = writer_inventory(module, request["committed_chapters"], request["through_chapter"])
     require(request["novel_id"] == inventory["novel_id"], "FOREIGN_WRITER_NOVEL")
@@ -458,25 +647,25 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
     originals = {}
     for item in plan["chapters"]:
         n = item["chapter"]
-        path = plain(module.OUTPUT_DIR / f"{n:04d}.md")
-        raw = recovery_before[n] if recovery_before is not None else path.read_bytes()
+        path = module.OUTPUT_DIR / f"{n:04d}.md"
+        raw = recovery_before[n] if recovery_before is not None else read_bytes(path)
         require(digest(raw) in {item["before_sha256"], item["after_sha256"]},
                 f"Chapter {n}: current SHA neither BEFORE nor AFTER")
         backup = plain(module.BACKUP_DIR / f"retroactive_{plan['transaction_id']}" / "chapters_before" / path.name)
         if backup.exists():
-            require(digest(backup.read_bytes()) == item["before_sha256"], f"Chapter {n}: backup hash mismatch")
+            require(digest(read_bytes(backup)) == item["before_sha256"], f"Chapter {n}: backup hash mismatch")
         if item["edits"] and digest(raw) == item["after_sha256"]:
             require(backup.is_file(), f"Chapter {n}: AFTER lacks BEFORE backup")
-            raw = backup.read_bytes()
+            raw = read_bytes(backup)
         originals[n] = raw
-    require(tx.build_plan(request, originals, module.chapter_map) == plan, "IMMUTABLE_PLAN_POLICY_CONFLICT")
+    require(_inputs.build_plan(request, originals, module.chapter_map) == plan, "IMMUTABLE_PLAN_POLICY_CONFLICT")
     if selected is None:
         import re
         match = re.fullmatch(r"(\d{4,})_(\d{4,})", request["audit_label"])
         if match:
             start, end = map(int, match.groups())
             require(end == request["through_chapter"], "WRITER_ACCEPTED_CHANGE_UNPROVEN")
-            selected = load_intent(module, start, end)
+            selected = load_intent(module, start, end, _inputs=_inputs)
             if selected is None and request["rules"]:
                 # The legacy GOAT direct-before-intent prefix has a transport-
                 # free accepted-checkpoint owner. Derive its candidate afresh.
@@ -487,7 +676,7 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                 from production_periodic_audit_finalization import prepare_finalization, publication_timestamp
                 paid = checkpoint_proof(module, start, end)
                 selected = prepare_finalization(module, start, end, paid["audit_result"], paid["audit_stats"],
-                    paid["chunking"], timestamp=publication_timestamp(module, start, end))
+                    paid["chunking"], timestamp=publication_timestamp(module, start, end), _inputs=_inputs)
                 require(selected["transaction_plan"] == plan, "WRITER_ACCEPTED_CHANGE_UNPROVEN")
                 unpublished = True
         if selected is None:
@@ -501,7 +690,7 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
             unpublished = True
         else:
             require(selected["transaction_plan"] == plan, "IMMUTABLE_PLAN_POLICY_CONFLICT")
-            verify_publication(module, selected)
+            verify_publication(module, selected, _inputs=_inputs)
             # Direct recovery must reprove the current accepted audit too, not
             # merely trust a self-consistent stored intent/hash.
             from types import SimpleNamespace
@@ -516,9 +705,9 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                 require(all(paid[k] == selected[k] for k in ("audit_result", "audit_stats")),
                         "WRITER_ACCEPTED_CHANGE_UNPROVEN")
             transaction_proof(detached, selected["start"], selected["end"], selected["baseline"]["glossary"],
-                              selected["post"]["glossary"], selected["record"]["changes"])
+                              selected["post"]["glossary"], selected["record"]["changes"], _inputs=_inputs)
             prepared = prepare_finalization(detached, selected["start"], selected["end"], selected["audit_result"],
-                selected["audit_stats"], selected["chunking"], timestamp=selected["record"]["timestamp_unix"])
+                selected["audit_stats"], selected["chunking"], timestamp=selected["record"]["timestamp_unix"], _inputs=_inputs)
             for value in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
                 value["retroactive"] = selected["record"]["retroactive"]
             require(all(prepared[k] == selected[k] for k in ("post", "record", "transaction_plan", "operation_id")),
@@ -534,7 +723,7 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                 "HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN")
         _writer_checkpoint(module, selected)
     reservations, lineage = _historical_reservations(module, selected, unpublished=unpublished,
-        writer_zero_send=True, chapter_bytes=recovery_before)
+        writer_zero_send=True, chapter_bytes=recovery_before, _inputs=_inputs)
     reserved = copy.deepcopy(request["ownership_policy"])
     _reserve_policy(reserved, reservations)
     for item in plan["chapters"]:
@@ -544,14 +733,14 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
         require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
     known_plans = [plan]
     for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
-        known_plans.append(audit_intent(module, path)["transaction_plan"])
+        known_plans.append(audit_intent(module, path, _inputs=_inputs)["transaction_plan"])
     from production_standalone_lineage import witnesses, verify_transaction_inventory
     known_plans.extend(w["plan"] for w in witnesses(module, active_plan=plan))
     verify_transaction_inventory(module, known_plans)
     before_manifest = {f"{n:04d}.md": digest(recovery_before[n] if recovery_before is not None else
-                       plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes()) for n in inventory["committed"]}
+                       read_bytes(module.OUTPUT_DIR / f"{n:04d}.md")) for n in inventory["committed"]}
     before_manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in plan["chapters"]})
-    historical_files = writer_evidence_files(module, lineage)
+    historical_files = writer_evidence_files(module, lineage, _inputs=_inputs)
     accepted = ({k: selected[k] for k in ("start", "end", "baseline", "audit_result", "audit_stats",
                  "checkpoint_sha256", "continuity_sha256")} if "checkpoint_sha256" in selected else
                 {"standalone_exact_policy": request["ownership_policy"]})
@@ -569,6 +758,8 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
     receipt = plain(module.RETROACTIVE_DIR / "transactions" / f"{slot}.authorization.json")
     require(not receipt.exists() or read_object(receipt) == proof,
             "IMMUTABLE_PLAN_POLICY_CONFLICT: WRITER_AUTHORIZATION_DRIFT")
+    require(writer_inventory(module, request["committed_chapters"], request["through_chapter"]) == inventory,
+            "WRITER_INVENTORY_CHANGED_DURING_PROOF")
     return proof
 
 
@@ -1012,7 +1203,8 @@ def require_publication_freshness(project):
         require(not revisions, "PUBLICATION_STALE_REVALIDATE_DOWNSTREAM_PLANS")
 
 
-def final_consistency_report(module):
+@proof_traversal
+def final_consistency_report(module, *, _inputs=None):
     """Whole-book local consistency pass, distinct from acquisition's tail audit.
 
     Reprove original audit transactions and their byte chain, then examine every
@@ -1022,6 +1214,7 @@ def final_consistency_report(module):
     from production_periodic_audit_finalization import (
         transaction_proof, prepare_finalization, file_sha, state_paths,
     )
+    file_sha, read_object = _inputs.sha, _inputs.read_object
     from types import SimpleNamespace
     numbers = module.progress["completed"]
     boundary = module.progress["last_completed"]
@@ -1031,20 +1224,20 @@ def final_consistency_report(module):
     require(set(numbers) <= set(module.chapter_map), "MISSING_SOURCE")
     files = {p.name for p in plain(module.OUTPUT_DIR).glob("*.md")}
     require(files == {f"{n:04d}.md" for n in numbers}, "COMMITTED_FILE_INVENTORY_DRIFT")
-    current = {n: plain(module.OUTPUT_DIR / f"{n:04d}.md").read_bytes() for n in numbers}
+    current = {n: _inputs.read(module.OUTPUT_DIR / f"{n:04d}.md") for n in numbers}
     # Later BEFORE backups witness unchanged bytes in earlier audit plans.
     blobs = {digest(raw): raw for raw in current.values()}
     intents = []
     for path in sorted(plain(module.AUDIT_DIR).glob("*.finalization.json")):
-        intent = audit_intent(module, path)
+        intent = audit_intent(module, path, _inputs=_inputs)
         require(intent["end"] <= boundary, "UNFINISHED_AUDIT_INTENT")
         for item in intent["transaction_plan"]["chapters"]:
             if item["edits"]:
                 backup = plain(module.BACKUP_DIR / f"retroactive_{intent['transaction_plan']['transaction_id']}" /
                                "chapters_before" / f"{item['chapter']:04d}.md")
-                require(backup.is_file() and digest(backup.read_bytes()) == item["before_sha256"],
+                require(backup.is_file() and digest(_inputs.read(backup)) == item["before_sha256"],
                         "MISSING_OR_CORRUPT_BEFORE_BACKUP")
-                blobs[item["before_sha256"]] = backup.read_bytes()
+                blobs[item["before_sha256"]] = _inputs.read(backup)
         intents.append(intent)
     from production_standalone_lineage import witnesses, add_blobs, prove_gap, verified_events
     standalone = witnesses(module)
@@ -1083,10 +1276,10 @@ def final_consistency_report(module):
             after[item["chapter"]] = tx.transform_bytes(raw, item["edits"])
             latest[item["chapter"]] = item["after_sha256"]
         proof = transaction_proof(detached, intent["start"], intent["end"], intent["baseline"]["glossary"],
-                                  intent["post"]["glossary"], intent["record"]["changes"], chapter_bytes=after)
+                                  intent["post"]["glossary"], intent["record"]["changes"], chapter_bytes=after, _inputs=_inputs)
         require(proof["state"] and proof["state"]["state"] == "FINALIZED", "TRANSACTION_NOT_FINALIZED")
         prepared = prepare_finalization(detached, intent["start"], intent["end"], intent["audit_result"],
-            intent["audit_stats"], intent["chunking"], timestamp=intent["record"]["timestamp_unix"], chapter_bytes=after)
+            intent["audit_stats"], intent["chunking"], timestamp=intent["record"]["timestamp_unix"], chapter_bytes=after, _inputs=_inputs)
         for value in (prepared["record"], prepared["post"]["history"]["audits"][-1]):
             value["retroactive"] = intent["record"]["retroactive"]
         require(all(prepared[k] == intent[k] for k in ("post", "record", "transaction_plan", "operation_id")),

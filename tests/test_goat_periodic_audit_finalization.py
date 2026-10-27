@@ -300,7 +300,8 @@ def test_recovery_drift_fails_closed(incident, fault):
         execute(project, approved)
     # The existing empty rendezvous lock is the only executor side effect.
     after = snapshot(project)
-    assert {k: v for k, v in after.items() if k != ".production.lock"} == before
+    assert {k: v for k, v in after.items() if k != ".production.lock"} == {
+        k: v for k, v in before.items() if k != ".production.lock"}
 
 
 def test_zero_candidate_goat_audit_no_fabricated_paid_accounting(incident):

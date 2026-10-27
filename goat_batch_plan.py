@@ -215,15 +215,29 @@ def build_goat_batch_plan(novel_id, *, initial_chapter, chapter_count,
                  and (project.audit_dir / f"audit_{first:04d}_{last:04d}.json").is_file(),
                  "unfinished or invalid audit checkpoint requires reconciliation")
     # Historical UNCERTAIN is accepted only by the verified inventory above.
-    # A transaction without an outer audit intent has no production completion proof.
+    # Completion is owned by an outer audit intent or a re-proven standalone witness.
     referenced = set()
     authorizations = {}
+    standalone_authorizations = {}
     for path in project.audit_dir.glob("*.finalization.json"):
         owned_plan = _read_json(path)["transaction_plan"]
         referenced.add(owned_plan["transaction_id"])
         slot = _canonical_hash({k: owned_plan["request"][k]
             for k in ("novel_id", "audit_label", "through_chapter")})
         authorizations[slot + ".authorization.json"] = owned_plan
+    if (project.retroactive_dir / "standalone_lineage").exists():
+        from goat_periodic_audit_finalize_plan import local_module
+        from production_standalone_lineage import verified_events, witnesses, slot_for, bound_authorization
+        module = local_module(project)
+        verified_events(module)  # Original source/profile/policy, chronology, spans and durable receipts.
+        for witness in witnesses(module):
+            owned_plan = witness["plan"]
+            name = slot_for(owned_plan) + ".authorization.json"
+            _require(name not in authorizations, "duplicate historical writer authorization slot")
+            authorizations[name] = owned_plan
+            referenced.add(owned_plan["transaction_id"])
+            standalone_authorizations[name] = bound_authorization(
+                witness["authorization"], witness["witness_sha256"])
     for path in (project.retroactive_dir / "transactions").glob("*.json"):
         value = _read_json(path)
         if path.name.endswith(".authorization.json"):
@@ -233,7 +247,12 @@ def build_goat_batch_plan(novel_id, *, initial_chapter, chapter_count,
             fields = {"plan_sha256", "accepted_change_sha256", "historical_evidence_sha256",
                 "inventory_sha256", "reservations_sha256", "prior_intents_sha256", "authorization_sha256"}
             owned_plan = authorizations.get(path.name)
-            _require(owned_plan is not None and set(value) == fields | {"revision"}
+            witnessed = standalone_authorizations.get(path.name)
+            expected_fields = fields | {"revision"}
+            if witnessed is not None:
+                expected_fields.add("standalone_witness_sha256")
+                _require(value == witnessed, "standalone writer authorization witness mismatch")
+            _require(owned_plan is not None and set(value) == expected_fields
                 and value["revision"] == WRITER_AUTHORIZATION_REVISION
                 and all(isinstance(value[k], str) and len(value[k]) == 64
                         and set(value[k]) <= set("0123456789abcdef") for k in fields)

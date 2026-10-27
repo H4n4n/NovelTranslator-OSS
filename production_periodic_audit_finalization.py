@@ -390,8 +390,7 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
     writer_inventory(module, module.progress.get("completed"), end)
     intent = load_intent(module, start, end)
     if intent is None:
-        if (module.progress.get("provider") == PROVIDER_COMMAND_CODE and chunking.get("candidate_count", 0)
-                and getattr(module, "_experimental_runtime", None) is None):
+        if module.progress.get("provider") == PROVIDER_COMMAND_CODE and chunking.get("candidate_count", 0):
             from goat_periodic_audit_finalize_plan import checkpoint_proof
             paid = checkpoint_proof(module, start, end)
             require(paid["audit_result"] == audit_result and paid["audit_stats"] == audit_stats,
@@ -414,8 +413,7 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
     detached = SimpleNamespace(**vars(module))
     for key, name in (("glossary", "glossary"), ("progress", "progress"), ("issues", "issues_data"), ("history", "audit_history")):
         setattr(detached, name, copy.deepcopy(intent["baseline"][key]))
-    if (detached.progress.get("provider") == PROVIDER_COMMAND_CODE and chunking.get("candidate_count", 0)
-            and getattr(detached, "_experimental_runtime", None) is None):
+    if detached.progress.get("provider") == PROVIDER_COMMAND_CODE and chunking.get("candidate_count", 0):
         # A completed checkpoint cannot authorize altered lower paid evidence
         # after a local-publication crash. This is a read-only proof, never an
         # acquisition/recovery callback capable of sending a request.

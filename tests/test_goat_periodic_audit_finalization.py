@@ -83,10 +83,17 @@ def incident(tmp_path, monkeypatch, request):
     # Supply a genuine local zero-send prior intent/checkpoint instead.
     module.progress["last_audited_chapter"] = 0
     _write_json(project.progress_file, module.progress)
-    _write_json(module.periodic_audit_checkpoint_path(1, 375), {"synthetic_zero_send": True})
-    locked_finalize(module, 1, 375, {"decisions": [], "issues": []},
-        {field: 0 for field in final.STAT_TOTAL_FIELDS},
-        {"candidate_count": 0, "api_request_count": 0, "candidate_set_hash": "synthetic-zero-prefix"})
+    from glossary_audit import run_chunked_audit
+    from production_run_lock import production_run_lock
+    with production_run_lock(project.root):
+        assert not module.audit_targets(1, 375)
+        prefix = run_chunked_audit(candidates=[], all_glossary_keys=module.glossary["entries"],
+            start_chapter=1, end_chapter=375,
+            checkpoint_path=module.periodic_audit_checkpoint_path(1, 375),
+            request_chunk=lambda *a: pytest.fail("zero-candidate prefix must never send"))
+        final.finalize_periodic_audit(module, 1, 375, prefix["audit_result"], prefix["stats"],
+            {"candidate_count": 0, "api_request_count": 0,
+             "candidate_set_hash": prefix["candidate_set_hash"]})
     if fixture_mode == "relative":
         monkeypatch.chdir(project.root)
         for name in ("CHAPTERS_FILE", "GLOSSARY_FILE", "PROGRESS_FILE", "CONTINUITY_FILE", "ISSUES_FILE", "AUDIT_HISTORY_FILE",

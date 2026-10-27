@@ -217,10 +217,31 @@ def build_goat_batch_plan(novel_id, *, initial_chapter, chapter_count,
     # Historical UNCERTAIN is accepted only by the verified inventory above.
     # A transaction without an outer audit intent has no production completion proof.
     referenced = set()
+    authorizations = {}
     for path in project.audit_dir.glob("*.finalization.json"):
-        referenced.add(_read_json(path)["transaction_plan"]["transaction_id"])
+        owned_plan = _read_json(path)["transaction_plan"]
+        referenced.add(owned_plan["transaction_id"])
+        slot = _canonical_hash({k: owned_plan["request"][k]
+            for k in ("novel_id", "audit_label", "through_chapter")})
+        authorizations[slot + ".authorization.json"] = owned_plan
     for path in (project.retroactive_dir / "transactions").glob("*.json"):
         value = _read_json(path)
+        if path.name.endswith(".authorization.json"):
+            # Writer receipts bind a complete plan hash, not a transaction_id.
+            # The ordinary preflight above still owns the historical proof.
+            from historical_reconciliation import WRITER_AUTHORIZATION_REVISION
+            fields = {"plan_sha256", "accepted_change_sha256", "historical_evidence_sha256",
+                "inventory_sha256", "reservations_sha256", "prior_intents_sha256", "authorization_sha256"}
+            owned_plan = authorizations.get(path.name)
+            _require(owned_plan is not None and set(value) == fields | {"revision"}
+                and value["revision"] == WRITER_AUTHORIZATION_REVISION
+                and all(isinstance(value[k], str) and len(value[k]) == 64
+                        and set(value[k]) <= set("0123456789abcdef") for k in fields)
+                and value["plan_sha256"] == _canonical_hash(owned_plan)
+                and value["authorization_sha256"] == _canonical_hash(
+                    {k: v for k, v in value.items() if k != "authorization_sha256"}),
+                "invalid or orphan historical writer authorization")
+            continue
         _require(value.get("transaction_id") in referenced, "orphan historical transaction")
         if path.name.endswith(".state.json"):
             _require(value.get("state") == "FINALIZED", "incomplete historical transaction")

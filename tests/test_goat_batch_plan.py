@@ -283,6 +283,19 @@ def test_great_king_historical_audit_compatibility(audit_incident, legacy):
     before = snapshot(project)
     assert plan(project)["authorization_binding"]["initial_chapter"] == 401
     assert snapshot(project) == before
+    # A self-consistent rehash cannot attach a foreign plan to a proven audit.
+    path = next((project.retroactive_dir / "transactions").glob("*.authorization.json"))
+    original = path.read_bytes()
+    forged = json.loads(original)
+    forged["plan_sha256"] = "f" * 64
+    forged["authorization_sha256"] = planner._canonical_hash(
+        {k: v for k, v in forged.items() if k != "authorization_sha256"})
+    _write_json(path, forged)
+    damaged = snapshot(project)
+    with pytest.raises((ValueError, RuntimeError), match="authorization"):
+        plan(project)
+    assert snapshot(project) == damaged
+    path.write_bytes(original)
     # Broken immutable BEFORE evidence must still block.
     next((project.backup_dir).glob("retroactive_*/chapters_before/0388.md")).write_bytes(b"changed")
     with pytest.raises((ValueError, RuntimeError)): plan(project)

@@ -286,10 +286,61 @@ runtime qualification. No unrelated expensive suite was rerun to improve these
 projections. Timing variability remains an explicit limitation, not a semantic
 publication blocker or evidence that hosted L3 passed.
 
-Total completed local validation: **339 passed, 1 expected skip**. The initial
-publication run was stopped and restarted with JUnit output when main's measured
-schedule requirement was discovered; that partial run is not included in counts.
-The original accepted branch and all main historical reconciliation behavior are
-preserved. No remaining local functional blocker was found. Unsupported source
-layouts/history, J5/J8 and automatic D2 regeneration retain the separate-work
-boundaries stated above.
+The previous report claimed **339 passed, 1 expected skip**. Retained JUnit
+artifacts support **323 passed, 1 expected skip**: 316 publication passes plus
+7 metadata passes. The separately reported 16 historical cross-integration
+passes have no retained JUnit artifact and are excluded from the supported total.
+The initial publication run was stopped and restarted with JUnit output when
+main's measured schedule requirement was discovered; that partial run is not
+included in counts. The original accepted branch and all main historical
+reconciliation behavior are preserved. Hermes subsequently found BLOCKER-1:
+test fixtures supplied a missing generation glossary snapshot and concealed a
+fresh-regeneration certification failure. Unsupported source layouts/history,
+J5/J8 and automatic D2 regeneration retain the separate-work boundaries stated
+above.
+
+## Hermes BLOCKER-1 correction
+
+Starting from `eef837cb5ed42a67a72bf817beb7f9e00a4c6bbb` on the same integration
+branch, `_regenerate_locked` now writes the immutable `final/glossary.json`
+snapshot immediately before `source_bound_provenance.json`, using the existing
+helper and current project glossary. Source authority, generation identity and
+CURRENT pointer publication are unchanged.
+
+The EPUB fixture no longer supplies that snapshot. The readiness fixture runs
+the real locked regeneration path to a synthetic interruption immediately before
+EPUB creation instead of assembling equivalent stages and a glossary itself.
+The existing Chinese/Korean fresh `regenerate()` test starts without a generation
+or pointer, checks the generated glossary and pointer, and independently requires
+`current_generation()` to return CURRENT. Synthetic review evidence remains
+explicit; no semantic review bypass was added.
+
+The CI shard schedule is unchanged. Its exact test-source freshness assertion
+currently fails because the corrected fixtures differ from the source hashes in
+the retained timing evidence; the other six metadata checks pass. This is a
+remaining CI metadata blocker, not a claimed green CI result. No timing hash was
+relabelled, old weight reduced, or projected headroom increased. Hosted timing
+remains unverified until a separately authorized push.
+
+Correction validation on Windows Python 3.14.4:
+
+- Removing fixture glossary injection first reproduced two expected fresh-path
+  failures (Chinese/Korean), both due to missing `final/glossary.json`.
+- After the one-line production fix, the fresh-path and readiness smoke checks
+  passed all four cases. These overlap the complete suite and are not added to
+  its total.
+- The complete affected `test_publication_readiness.py` and
+  `test_build_publication_epub.py` suites passed **316 tests, 1 expected skip**
+  in 909.23 seconds. The skip is the unchanged private installed-corpus opt-in.
+- Compilation passed for the production module and both changed test modules.
+- The separate seven-case metadata selection recorded **6 passed, 1 failed**,
+  solely at `test_refreshed_schedule_weights_bind_complete_current_sources` as
+  explained above. This correction does not claim all CI checks pass.
+
+Raw console/JUnit artifacts, compilation output, source fingerprints and copies
+of the prior integration JUnit files are retained under system TEMP at
+`nt-aut2-d1-glossary-fix-20261028/`. Final commit/tree and inventory-guard results
+are recorded there separately to avoid self-referential commit identities.
+No private novel, credential, paid provider, GitHub issue or push operation was
+used. The original D1 branch remains at `c10f0b9aa13abc133c2b4fc7da560fa64506becf`.
+Hermes independent review and hosted timing remain outstanding.

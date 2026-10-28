@@ -1178,7 +1178,6 @@ def novel(aut1_engine, monkeypatch, request):
             original_immutable(path, value)
             if path.name == "source_bound_provenance.json":
                 final_dir = path.parent.parent
-                original_immutable(final_dir / "glossary.json", history.read_object(project.glossary_file))
                 workspace = regen.PublicationWorkspace(project, final_dir)
                 graph = readiness.dependency_graph(workspace)
                 review = {"revision": readiness.REVISION,
@@ -1251,9 +1250,15 @@ def test_aut2_real_fresh_epub_from_approved_history_and_all_stage_owners(novel):
     project, e, _, h = novel
     before = snapshot(project.root)
     assert history.publication_freshness(project)["status"] == "STALE"
+    assert not (project.root / regen.GENERATIONS).exists()
+    assert not (project.root / regen.POINTER).exists()
     result = regen.regenerate(project)
     assert result["status"] == "CURRENT" and result["content_document_count"] == 3
     output = Path(result["epub"])
+    assert history.read_object(output.parent.parent / "glossary.json") == history.read_object(project.glossary_file)
+    assert history.read_object(project.root / regen.POINTER)["generation"] == result["generation"]
+    current = regen.current_generation(project)
+    assert current["status"] == "CURRENT" and current["generation"] == result["generation"]
     with zipfile.ZipFile(output) as archive:
         body = "\n".join(archive.read(n).decode() for n in archive.namelist() if "unit_" in n)
     assert "Hann walked" in body and "New Title" in body and "street" in body

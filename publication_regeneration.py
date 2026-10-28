@@ -360,6 +360,7 @@ def _regenerate_locked(project):
         atomic_write_bytes(md, expected_md)
     if not (final_dir / "editorial_chapters").exists():
         editorial.apply_ready_plan(workspace)
+    _immutable_json(final_dir / "glossary.json", read_object(project.glossary_file))
     _immutable_json(reports / "source_bound_provenance.json", inputs)
     verify_generation_corpus(project, final_dir)
     output = epub.publication_paths(workspace)["output"]

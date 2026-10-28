@@ -16,27 +16,18 @@ from test_production_lifecycle import aut1_engine
 
 
 def prepare_existing_evidence(project):
-    """Existing owners produce synthetic non-EPUB stages; never regenerate()."""
-    from build_finalization_corpus import build_identity_finalization_corpus
+    """Run the real locked regeneration path up to the EPUB boundary."""
     inputs = generation._inputs(project)
     final = project.root / generation.GENERATIONS / canonical_hash(inputs) / "final"
     workspace = generation.PublicationWorkspace(project, final)
-    generation._immutable_json(final.parent / "intent.json", inputs)
-    build_identity_finalization_corpus(project, final)
-    reports = final / "reports"
-    normal = generation._stage_previews(project, final, inputs)
-    generation.normalization.publish_normalized_corpus(normal, output_dir=final / "normalized_chapters",
-        report_json_path=reports / "normalization_application.json", report_md_path=reports / "normalization_application.md")
-    title = generation._title_preview(project, final, inputs)
-    generation.titles.publish_titled_corpus(title, final / "titled_chapters", reports / "title_application.json", reports / "title_application.md")
-    presentation = generation.cleanup.build_plan(final / "titled_chapters", project.config.final_chapter)
-    generation.cleanup.publish_plan(presentation, final / "publication_chapters", reports / "publication_cleanup.json", reports / "publication_cleanup.md")
-    plan = generation.editorial.build_plan_report(workspace)
-    generation._immutable_json(reports / "final_editorial_plan.json", plan)
-    (reports / "final_editorial_plan.md").write_bytes(generation.editorial.render_plan_markdown(plan).encode("utf-8"))
-    generation.editorial.apply_ready_plan(workspace)
-    generation._immutable_json(reports / "source_bound_provenance.json", inputs)
-    write(final / "glossary.json", history.read_object(project.glossary_file))
+
+    def stop_before_epub(project):
+        raise InterruptedError("synthetic pre-EPUB stop")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(epub, "build_publication_epub", stop_before_epub)
+        with pytest.raises(InterruptedError, match="synthetic pre-EPUB stop"):
+            generation._regenerate_locked(project)
     return workspace
 
 

@@ -32,6 +32,7 @@ import sys
 
 INVENTORY_NAME = "public_inventory.txt"
 ALLOWED_MODES = {"100644", "100755"}
+MAX_SCANNED_BLOBS = 8192
 
 FORBIDDEN_COMPONENTS = {
     "novels", "data", "backup", "backups", "incoming", "output", "outputs",
@@ -223,8 +224,33 @@ def _commit_for(sha):
     return git(["rev-parse", sha + "^{commit}"]).decode("ascii", "strict").strip()
 
 
-def validate_commit(commit, seen=None):
+def scan_blob(path, sha, size, scanned):
+    """Reuse only successful exact object/path scans in this validation walk.
+
+    ls-tree -l still reproves each referenced blob's presence/size. Cache no
+    content or failures; eviction causes a full reread and scan, never a skip.
+    """
+    key = (sha, path)  # Synthetic exceptions are exact and path-scoped.
+    if key in scanned:
+        if scanned[key] != size:
+            raise GuardError("inconsistent cached blob size: " + path)
+        return
+    data = git(["cat-file", "blob", sha])
+    if len(data) != size:
+        raise GuardError("inconsistent tree blob size: " + path)
+    # Bind the cached success to actual Git object bytes, not an asserted ID.
+    digest = {40: hashlib.sha1, 64: hashlib.sha256}.get(len(sha))
+    if digest is None or digest(b"blob " + str(size).encode("ascii") + b"\0" + data).hexdigest() != sha:
+        raise GuardError("blob identity mismatch: " + path)
+    scan_content(path, data)
+    if len(scanned) >= MAX_SCANNED_BLOBS:
+        scanned.clear()
+    scanned[key] = size
+
+
+def validate_commit(commit, seen=None, *, scanned=None):
     seen = seen if seen is not None else set()
+    scanned = scanned if scanned is not None else {}
     resolved = _commit_for(commit)
     if resolved in seen:
         return 0
@@ -247,7 +273,9 @@ def validate_commit(commit, seen=None):
         if mode not in ALLOWED_MODES:
             raise GuardError("unsupported tree mode " + mode + ": " + path)
         check_path(path, inventory)
-        scan_content(path, git(["cat-file", "blob", sha]))
+        if not _size.isascii() or not _size.isdecimal():
+            raise GuardError("invalid tree blob size: " + path)
+        scan_blob(path, sha, int(_size), scanned)
         count += 1
     message = git(["log", "-1", "--format=%B", resolved])
     if message.strip():
@@ -275,8 +303,9 @@ def _tag_header(raw):
     return header
 
 
-def validate_object(sha, seen, seen_tags=None):
+def validate_object(sha, seen, seen_tags=None, *, scanned=None):
     seen_tags = seen_tags if seen_tags is not None else set()
+    scanned = scanned if scanned is not None else {}
     kind = _object_type(sha)
     if kind == "tag":
         if sha in seen_tags:
@@ -291,19 +320,20 @@ def validate_object(sha, seen, seen_tags=None):
             raise GuardError("malformed annotated tag object")
         if target_type not in {"commit", "tag"}:
             raise GuardError("unsupported annotated tag target type: " + target_type)
-        return validate_object(target, seen, seen_tags)
+        return validate_object(target, seen, seen_tags, scanned=scanned)
     if kind != "commit":
         raise GuardError("unsupported outgoing object type: " + kind)
-    return validate_commit(sha, seen)
+    return validate_commit(sha, seen, scanned=scanned)
 
 
-def validate_reachable(sha, seen, messages=True):
+def validate_reachable(sha, seen, messages=True, *, scanned=None):
+    scanned = scanned if scanned is not None else {}
     commits = git(["rev-list", sha]).decode("ascii", "strict").split()
     if not commits:
         raise GuardError("no commits reachable from outgoing object")
     total = 0
     for commit in commits:
-        total += validate_commit(commit, seen)
+        total += validate_commit(commit, seen, scanned=scanned)
     return total
 
 
@@ -324,6 +354,7 @@ def validate_pre_push(updates):
     if _is_shallow():
         raise GuardError("shallow repository: ancestry cannot be validated")
     seen = set()
+    scanned = {}
     checked = 0
     saw_deletion = False
     for local_ref, local_sha, remote_ref, remote_sha in updates:
@@ -331,18 +362,18 @@ def validate_pre_push(updates):
             saw_deletion = True
             continue
         kind = _object_type(local_sha)
-        checked += validate_object(local_sha, seen)
+        checked += validate_object(local_sha, seen, scanned=scanned)
         if kind == "tag":
             peeled = _commit_for(local_sha)
-            checked += validate_reachable(peeled, seen)
+            checked += validate_reachable(peeled, seen, scanned=scanned)
             continue
         if remote_sha and set(remote_sha) != {"0"}:
             if subprocess.run(["git", "-C", REPO, "cat-file", "-e", remote_sha + "^{commit}"],
                               capture_output=True).returncode == 0:
                 for commit in git(["rev-list", remote_sha + ".." + local_sha]).decode("ascii", "strict").split():
-                    checked += validate_commit(commit, seen)
+                    checked += validate_commit(commit, seen, scanned=scanned)
                 continue
-        checked += validate_reachable(local_sha, seen)
+        checked += validate_reachable(local_sha, seen, scanned=scanned)
     if checked == 0 and not saw_deletion:
         raise GuardError("no outgoing objects validated")
     return checked
@@ -352,6 +383,7 @@ def validate_push_check():
     if _is_shallow():
         raise GuardError("shallow repository: ancestry cannot be validated")
     seen = set()
+    scanned = {}
     checked = 0
     refs = git(["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/tags"]).decode("ascii", "strict").split()
     head = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", "HEAD"],
@@ -362,9 +394,9 @@ def validate_push_check():
         raise GuardError("no local refs or HEAD to validate")
     for sha in dict.fromkeys(refs):
         kind = _object_type(sha)
-        checked += validate_object(sha, seen)
+        checked += validate_object(sha, seen, scanned=scanned)
         peeled = _commit_for(sha) if kind == "tag" else sha
-        checked += validate_reachable(peeled, seen)
+        checked += validate_reachable(peeled, seen, scanned=scanned)
     if checked == 0:
         raise GuardError("no objects validated")
     return checked

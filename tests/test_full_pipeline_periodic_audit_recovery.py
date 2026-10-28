@@ -14,6 +14,7 @@ from full_pipeline_periodic_audit_recovery import (
     reconcile_project_periodic_audit_recovery,
 )
 from production_paid_request_journal import _with_record_hash
+from production_run_lock import production_run_lock
 
 
 LUNA_HELPER_PATH = Path(__file__).with_name("test_full_pipeline_luna_runtime.py")
@@ -45,9 +46,9 @@ def _write(path, value):
     )
 
 
-def _runtime(tmp_path, monkeypatch):
+def _runtime(tmp_path, monkeypatch, *, completed=25):
     h = _helpers()
-    root, module, _initialized = h._load_initialized_engine(tmp_path, monkeypatch)
+    root, module, _initialized = h._load_initialized_engine(tmp_path, monkeypatch, final_chapter=completed)
     client = h.FakeClient()
     install_luna_auxiliary_runtime(
         module,
@@ -58,16 +59,26 @@ def _runtime(tmp_path, monkeypatch):
     progress = _read(root / "data" / "progress.json")
     progress.update(
         {
-            "completed": list(range(1, 26)),
-            "last_completed": 25,
-            "next_chapter": 26,
+            "completed": list(range(1, completed + 1)),
+            "last_completed": completed,
+            "next_chapter": completed + 1,
             "last_audited_chapter": 0,
         }
     )
     _write(root / "data" / "progress.json", progress)
     module.progress.clear()
     module.progress.update(progress)
+    for number in progress["completed"]:
+        (root / "output/chapters" / f"{number:04d}.md").write_text(
+            f"# Chapter {number}\n\nComplete synthetic English.\n", encoding="utf-8")
     return h, root, module, client
+
+
+@pytest.fixture
+def runtime(tmp_path, monkeypatch):
+    result = _runtime(tmp_path, monkeypatch)
+    with production_run_lock(result[1]):
+        yield result
 
 
 def _audit_candidate():
@@ -168,10 +179,9 @@ def _audit_journal(root):
 
 
 def test_recorded_audit_paid_response_hydrates_lost_chunk_without_reissue(
-    tmp_path,
-    monkeypatch,
+    runtime,
 ):
-    _h, root, module, client = _runtime(tmp_path, monkeypatch)
+    _h, root, module, client = runtime
     _snapshot_baseline(root, 1, 25)
     install_periodic_audit_recovery(module, root)
     _set_valid_audit_response(client)
@@ -202,10 +212,9 @@ def test_recorded_audit_paid_response_hydrates_lost_chunk_without_reissue(
 
 
 def test_uncertain_audit_paid_journal_blocks_automatic_reissue(
-    tmp_path,
-    monkeypatch,
+    runtime,
 ):
-    _h, root, module, client = _runtime(tmp_path, monkeypatch)
+    _h, root, module, client = runtime
     _snapshot_baseline(root, 1, 25)
     install_periodic_audit_recovery(module, root)
     _set_valid_audit_response(client)
@@ -236,10 +245,9 @@ def test_uncertain_audit_paid_journal_blocks_automatic_reissue(
 
 
 def test_publication_recovery_restores_pre_audit_bytes_but_preserves_paid_evidence(
-    tmp_path,
-    monkeypatch,
+    runtime,
 ):
-    _h, root, module, _client = _runtime(tmp_path, monkeypatch)
+    _h, root, module, _client = runtime
     chapter = root / "output" / "chapters" / "0001.md"
     retro = root / "output" / "retroactive_fixes" / "before.json"
     chapter.parent.mkdir(parents=True, exist_ok=True)
@@ -312,10 +320,9 @@ def test_publication_recovery_restores_pre_audit_bytes_but_preserves_paid_eviden
 
 
 def test_post_marker_restart_finishes_missing_backup_without_rerunning_audit(
-    tmp_path,
-    monkeypatch,
+    runtime,
 ):
-    _h, root, _module, _client = _runtime(tmp_path, monkeypatch)
+    _h, root, _module, _client = runtime
     _snapshot_baseline(root, 1, 25)
 
     audit_record = {
@@ -346,3 +353,183 @@ def test_post_marker_restart_finishes_missing_backup_without_rerunning_audit(
         "audit_history.json",
     ):
         assert (backup / name).read_bytes() == (root / "data" / name).read_bytes()
+
+
+
+def _tree_snapshot(root):
+    files = {}
+    for path in root.rglob("*"):
+        if path.is_file():
+            info = path.stat()
+            files[path.relative_to(root).as_posix()] = (
+                (info.st_ino, info.st_size) if path.name == ".production.lock" else path.read_bytes(),
+                info.st_mtime_ns)
+    return files, {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_dir()}
+
+
+def _post_marker(root):
+    record = dict(start_chapter=1, end_chapter=25, stats={}, chunking={},
+                  changes={}, retroactive={}, issues=[])
+    _write(root / "output/audits/audit_0001_0025.json", record)
+    _write(root / "data/audit_history.json", {"audits": [record]})
+    progress = _read(root / "data/progress.json")
+    progress["last_audited_chapter"] = 25
+    _write(root / "data/progress.json", progress)
+
+
+@pytest.mark.parametrize("operation", ["new_snapshot", "existing_snapshot", "restore", "post_marker", "staging"])
+def test_recovery_requires_actual_caller_lock_before_mutation(tmp_path, monkeypatch, operation):
+    from full_pipeline_periodic_audit_recovery import _restore_baseline
+    from production_run_lock import ProductionRunLockedError
+    _h, root, _module, client = _runtime(tmp_path, monkeypatch)
+    if operation != "new_snapshot":
+        with production_run_lock(root):
+            manifest, _ = _snapshot_baseline(root, 1, 25)
+        if operation == "post_marker":
+            _post_marker(root)
+        if operation == "staging":
+            (root / "data/full_pipeline_audit_recovery/.abandoned").mkdir()
+    before = _tree_snapshot(root)
+    with pytest.raises(ProductionRunLockedError, match="Actual caller-held"):
+        if operation in {"new_snapshot", "existing_snapshot"}:
+            _snapshot_baseline(root, 1, 25)
+        elif operation == "restore":
+            _restore_baseline(root, manifest)
+        else:
+            reconcile_project_periodic_audit_recovery(root)
+    assert _tree_snapshot(root) == before
+    assert client.completions.calls == []
+
+
+@pytest.mark.parametrize("operation,damage", [
+    (operation, damage)
+    for operation in ("snapshot", "restore", "post_marker")
+    for damage in ("missing", "sparse", "conflict")
+] + [(operation, "metadata") for operation in ("restore", "post_marker")])
+def test_recovery_authoritative_source_inventory_blocks_without_mutation(runtime, operation, damage):
+    _h, root, _module, client = runtime
+    if operation != "snapshot":
+        _snapshot_baseline(root, 1, 25)
+        if operation == "post_marker":
+            _post_marker(root)
+    path = root / "data/chapters.json"
+    library = _read(path)
+    if damage == "missing":
+        path.unlink()
+    else:
+        if damage == "sparse":
+            library.pop()
+        elif damage == "conflict":
+            library[-1]["production_index"] = 1
+        else:
+            library[-1]["text"] += " Exact source drift."
+        _write(path, library)
+    before = _tree_snapshot(root)
+    with pytest.raises(FullPipelinePeriodicAuditRecoveryError):
+        if operation == "snapshot":
+            _snapshot_baseline(root, 1, 25)
+        else:
+            reconcile_project_periodic_audit_recovery(root)
+    assert _tree_snapshot(root) == before
+    assert client.completions.calls == []
+
+
+@pytest.mark.parametrize("damage", ["missing_binding", "changed_binding", "baseline_bytes"])
+def test_legacy_rollback_requires_exact_original_snapshot_proof(runtime, damage):
+    from full_pipeline_periodic_audit_recovery import _with_record_hash as recovery_hash
+    _h, root, _module, client = runtime
+    _snapshot_baseline(root, 1, 25)
+    slot = root / "data/full_pipeline_audit_recovery/audit_0001_0025"
+    manifest_path = slot / "recovery_manifest.json"
+    if damage == "baseline_bytes":
+        (slot / "baseline/chapters/0001.md").write_bytes(b"Contradictory baseline")
+    else:
+        manifest = _read(manifest_path)
+        if damage == "missing_binding":
+            del manifest["writer_baseline_authorization"]
+        else:
+            manifest["writer_baseline_authorization"]["inventory_sha256"] = "0" * 64
+        _write(manifest_path, recovery_hash(manifest))
+    (root / "output/chapters/0001.md").write_bytes(b"Interrupted publication")
+    before = _tree_snapshot(root)
+    with pytest.raises(FullPipelinePeriodicAuditRecoveryError):
+        reconcile_project_periodic_audit_recovery(root)
+    assert _tree_snapshot(root) == before
+    assert client.completions.calls == []
+
+
+def test_recovery_snapshot_reproof_cannot_authorize_an_edit(runtime):
+    from historical_reconciliation import writer_module, writer_authorization
+    from retroactive_transactions import build_plan, ownership_policy
+    from production_failure_classification import ProductionIntegrityError
+    _h, root, module, client = runtime
+    context = writer_module(module.OUTPUT_DIR, module.ACTIVE_NOVEL_CONFIG.id)
+    originals = {n: (module.OUTPUT_DIR / f"{n:04d}.md").read_bytes() for n in module.progress["completed"]}
+    request = dict(novel_id=module.ACTIVE_NOVEL_CONFIG.id, audit_label="0001_0025", through_chapter=25,
+        committed_chapters=list(originals), safe_categories=sorted(module.ACTIVE_PROFILE.retroactive_safe_categories),
+        ownership_policy=ownership_policy(context.glossary),
+        rules=[dict(chinese="甲", old_english="Alpha", new_english="Beta", category="character")])
+    before = _tree_snapshot(root)
+    with pytest.raises(ProductionIntegrityError, match="RECOVERY_BASELINE_NOT_ZERO_EDIT"):
+        writer_authorization(context, build_plan(request, originals, context.chapter_map), recovery_before=originals)
+    assert _tree_snapshot(root) == before
+    assert client.completions.calls == []
+
+
+def test_real_experiment_caller_holds_lock_during_recovery_install_and_lifecycle(tmp_path, monkeypatch):
+    import full_pipeline_experiment_harness as harness
+    import full_pipeline_experiment_contract_v3 as contract
+    from production_run_lock import held_production_run_lock
+    _h, root, module, client = _runtime(tmp_path, monkeypatch)
+    with production_run_lock(root):
+        _snapshot_baseline(root, 1, 25)
+    _write(root / "data/issues.json", {"issues": ["partial publication"]})
+    calls = []
+    def locked_step(name):
+        held_production_run_lock(root)
+        calls.append(name)
+    def load(_script):
+        locked_step("load")
+        return dict(module=module, module_name=module.__name__)
+    def run(*, target_chapter):
+        locked_step("lifecycle")
+        assert target_chapter == 25
+        assert module.issues_data == {"issues": []}
+        assert _read(root / "data/issues.json") == {"issues": []}
+    monkeypatch.setattr(harness, "load_experiment_engine_module", load)
+    monkeypatch.setattr(harness, "initialize_engine_without_provider", lambda _m: locked_step("initialize"))
+    monkeypatch.setattr(harness, "install_luna_batch_qa_provenance", lambda *_a: locked_step("qa"))
+    monkeypatch.setattr(harness, "install_batch_acceptance_provenance", lambda *_a: locked_step("acceptance"))
+    monkeypatch.setattr(module, "run_unattended_production", run)
+    with contract._audit_runtime_contract():
+        harness._run_real_engine_for_result(root, Path(__file__).resolve().parents[1], 25, {}, client)
+    assert calls == ["load", "initialize", "qa", "acceptance", "lifecycle"]
+    assert client.completions.calls == []
+    with pytest.raises(RuntimeError, match="Actual caller-held"):
+        held_production_run_lock(root)
+
+
+
+def test_recovery_snapshot_binds_full_inventory_beyond_due_audit_prefix(tmp_path, monkeypatch):
+    _h, root, _module, client = _runtime(tmp_path, monkeypatch, completed=26)
+    with production_run_lock(root):
+        _snapshot_baseline(root, 1, 25)
+        originals = {p.name: p.read_bytes() for p in (root / "output/chapters").glob("*.md")}
+        for name in ("0001.md", "0026.md"):
+            (root / "output/chapters" / name).write_bytes(b"Interrupted publication")
+        assert reconcile_project_periodic_audit_recovery(root)[0]["action"] == "restored_baseline"
+        assert {p.name: p.read_bytes() for p in (root / "output/chapters").glob("*.md")} == originals
+    assert client.completions.calls == []
+
+
+
+def test_invalid_inventory_blocks_before_abandoned_snapshot_cleanup(runtime):
+    _h, root, _module, client = runtime
+    _snapshot_baseline(root, 1, 25)
+    (root / "data/full_pipeline_audit_recovery/.abandoned").mkdir()
+    (root / "data/chapters.json").unlink()
+    before = _tree_snapshot(root)
+    with pytest.raises(FullPipelinePeriodicAuditRecoveryError):
+        reconcile_project_periodic_audit_recovery(root)
+    assert _tree_snapshot(root) == before
+    assert client.completions.calls == []

@@ -47,7 +47,7 @@ def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _synthetic_project(root):
+def _synthetic_project(root, *, final_chapter=1):
     root.mkdir(parents=True, exist_ok=True)
     config = NovelConfig.from_dict(
         {
@@ -56,7 +56,7 @@ def _synthetic_project(root):
             "source_language": "zh",
             "target_language": "en",
             "profile": "historical_military",
-            "final_chapter": 1,
+            "final_chapter": final_chapter,
             "audit_interval": 25,
             "chapter_numbering": "global",
             "source_type": "epub",
@@ -67,19 +67,21 @@ def _synthetic_project(root):
     state = initial_project_state()
     state["chapters.json"] = [
         {
-            "chapter": 1,
-            "heading": "第一章",
+            "chapter": number,
+            "production_index": number,
+            "heading": f"第{number}章",
             "text": "第一章\n\n这是一段足够用于运行时测试的中文正文。",
         }
+        for number in range(1, final_chapter + 1)
     ]
     for name, value in state.items():
         _write_json(root / "data" / name, value)
     return config
 
 
-def _load_initialized_engine(tmp_path, monkeypatch):
+def _load_initialized_engine(tmp_path, monkeypatch, *, final_chapter=1):
     project_root = tmp_path / "experiment_project"
-    _synthetic_project(project_root)
+    _synthetic_project(project_root, final_chapter=final_chapter)
     monkeypatch.chdir(project_root)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     loaded = load_experiment_engine_module(

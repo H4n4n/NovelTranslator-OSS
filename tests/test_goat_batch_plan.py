@@ -13,7 +13,7 @@ from novel_project import load_novel_project
 from production_provider_runtime import goat_provenance, provider_identity
 from test_controlled_trial_plan import _empty_project, _write_json
 from test_production_goat_runtime import zero_network, engine
-from test_goat_periodic_audit_finalization import incident as audit_incident
+from goat_audit_finalization_support import incident as audit_incident
 from test_uncertain_request_disposition import incident as disposition_incident
 
 pytestmark = pytest.mark.usefixtures("zero_network", "synthetic_goat_hard_bound")
@@ -269,7 +269,7 @@ def test_historical_disposition_uses_verified_inventory(disposition_incident, mo
 @pytest.mark.parametrize("legacy", [False, True])
 def test_great_king_historical_audit_compatibility(audit_incident, legacy):
     import production_periodic_audit_finalization as final
-    from test_goat_periodic_audit_finalization import execute, local_module
+    from goat_audit_finalization_support import execute, local_module
     project = audit_incident[0]
     with pytest.raises((ValueError, RuntimeError)): plan(project)
     assert execute(project)["status"] == "FINALIZED"
@@ -283,6 +283,19 @@ def test_great_king_historical_audit_compatibility(audit_incident, legacy):
     before = snapshot(project)
     assert plan(project)["authorization_binding"]["initial_chapter"] == 401
     assert snapshot(project) == before
+    # A self-consistent rehash cannot attach a foreign plan to a proven audit.
+    path = next((project.retroactive_dir / "transactions").glob("*.authorization.json"))
+    original = path.read_bytes()
+    forged = json.loads(original)
+    forged["plan_sha256"] = "f" * 64
+    forged["authorization_sha256"] = planner._canonical_hash(
+        {k: v for k, v in forged.items() if k != "authorization_sha256"})
+    _write_json(path, forged)
+    damaged = snapshot(project)
+    with pytest.raises((ValueError, RuntimeError), match="authorization"):
+        plan(project)
+    assert snapshot(project) == damaged
+    path.write_bytes(original)
     # Broken immutable BEFORE evidence must still block.
     next((project.backup_dir).glob("retroactive_*/chapters_before/0388.md")).write_bytes(b"changed")
     with pytest.raises((ValueError, RuntimeError)): plan(project)

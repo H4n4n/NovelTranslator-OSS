@@ -351,6 +351,10 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
+  "tests/test_experimental_goat_audit_proof.py": {
+   "status": "public",
+   "reason": "Synthetic zero-provider ownership/proof controls; full module required."
+  },
   "tests/test_extract_txt.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"
@@ -467,6 +471,10 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
+  "tests/test_goat_batch_standalone_receipts.py": {
+   "status": "public",
+   "reason": "Synthetic zero-provider ownership/proof controls; full module required."
+  },
   "tests/test_goat_cap_recovery.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"
@@ -483,7 +491,19 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
-  "tests/test_goat_periodic_audit_finalization.py": {
+  "tests/test_goat_periodic_audit_finalization_part_1.py": {
+   "status": "public",
+   "reason": "synthetic/guarded public test"
+  },
+  "tests/test_goat_periodic_audit_finalization_part_2.py": {
+   "status": "public",
+   "reason": "synthetic/guarded public test"
+  },
+  "tests/test_goat_periodic_audit_finalization_part_3.py": {
+   "status": "public",
+   "reason": "synthetic/guarded public test"
+  },
+  "tests/test_goat_periodic_audit_finalization_part_4.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"
   },

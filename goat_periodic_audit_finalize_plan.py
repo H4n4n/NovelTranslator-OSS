@@ -19,6 +19,7 @@ from production_provider_runtime import provider_identity
 from production_goat_runtime import normalize_production_request
 from production_goat_cap_recovery import accepted_envelope
 from benchmark_longitudinal_provider import build_provider_request_identity
+from historical_reconciliation import proof_traversal
 from production_periodic_audit_finalization import (
     require, file_sha, read_json, authoritative_audit_stats, prepare_finalization,
     publication_timestamp, load_intent, verify_publication, state_paths,
@@ -82,7 +83,9 @@ def runtime_identity(project):
 
 
 def checkpoint_proof(module, start, end):
-    """Prove paid leaf decisions and exact wire journals entirely locally."""
+    """Prove paid leaves locally using native GOAT or the installed recorded experiment owner."""
+    from experimental_goat_audit_proof import owner_for
+    owner = owner_for(module)
     cp_path = module.periodic_audit_checkpoint_path(start, end)
     checkpoint = read_json(cp_path)
     targets, integrity = module.audit_targets(start, end, glossary_data=module.glossary, return_integrity=True)
@@ -115,7 +118,9 @@ def checkpoint_proof(module, start, end):
             require(actual["depth"] < config.max_split_depth and len(actual["candidate_ids"]) > 1, "invalid audit subdivision")
             queue.extend(audit._split_chunk(expected_chunk))
     require(topology == set(chunks_by_id), "unexpected audit chunk")
-    policy = provider_identity(PROVIDER_COMMAND_CODE, "v41-flash")
+    if owner is not None:
+        owner.start(checkpoint, initial)
+    policy = provider_identity(PROVIDER_COMMAND_CODE, "v41-flash") if owner is None else None
     target_by_id = {t["candidate_id"]: t for t in targets}
     sources = {t["candidate_id"]: t["chinese"] for t in targets}
     families = audit.resolve_audit_candidate_families(targets, all_glossary_keys=integrity["safe_glossary_keys"], glossary_entries=module.glossary["entries"])["members_by_candidate_id"]
@@ -150,6 +155,8 @@ def checkpoint_proof(module, start, end):
             kwargs = module.build_request_periodic_audit_chunk(start, end, index, request_candidates, metadata)
             require(attempt["operation_id"] == audit._audit_attempt_operation_id(candidate_hash, chunk["chunk_id"], attempt["attempt"], kind), "audit attempt operation ID drift")
         elif kind == "json_repair":
+            if owner is not None:
+                require(metadata.get("family_context") == family_context, "experimental repair source family drift")
             require(prior and prior[-1]["kind"] == "audit", "audit JSON repair lacks original response")
             require(attempt["operation_id"] == audit._audit_attempt_operation_id(candidate_hash, chunk["chunk_id"], attempt["attempt"], kind), "audit repair operation ID drift")
             kwargs = module.build_repair_periodic_audit_chunk(prior[-1]["raw_content"], metadata)
@@ -178,27 +185,31 @@ def checkpoint_proof(module, start, end):
                     "semantic correction metadata drift")
             require(attempt["attempt"] == 1 and attempt["operation_id"] == f"periodic_glossary_audit_semantic_correction:{candidate_hash}:{chunk['chunk_id']}:semantic-fields-v1", "semantic correction operation ID drift")
             kwargs = module.build_correct_periodic_audit_chunk_semantics(correction_input, model_errors, metadata)
-        wire = normalize_production_request("periodic_audit", kwargs)
-        wire_sha = build_provider_request_identity(request_body=wire).request_sha256
-        transport_kind = "context_periodic_audit_" + wire_sha
-        identity = request_identity(operation_kind=transport_kind, novel_id=module.ACTIVE_NOVEL_CONFIG.id,
-            chapter=end, provider=PROVIDER_COMMAND_CODE, model=policy["wire_model"], profile_id=module.ACTIVE_PROFILE.id,
-            source_sha256=hashlib.sha256(module.chapter_map[end]["text"].encode()).hexdigest(),
-            request_payload=dict(wire_request=wire, provider_policy=policy))
-        identity.update(provider_policy=policy, wire_request_sha256=wire_sha,
-            auxiliary_domain_binding={**{k: copy.deepcopy(attempt[k]) for k in ("chunk_id", "kind", "attempt", "operation_id", "model_id_transport_version")}, "request_metadata": metadata})
-        path = module.PAID_REQUEST_JOURNAL_DIR / f"{end:04d}.{transport_kind}.json"
-        binding = attempt.get("transport_binding", {})
-        saved_path = Path(binding.get("journal_path", ""))
-        if not saved_path.is_absolute():
-            saved_path = module.PROGRESS_FILE.resolve().parent.parent / saved_path
-        require(binding.get("identity") == identity and saved_path.resolve() == path.resolve(), "paid audit transport binding drift")
-        journal = load_matching_journal(path, identity)
-        require(journal and journal["status"] == "response_recorded", "audit journal is not terminal RESPONSE_RECORDED")
+        if owner is not None:
+            identity, path, journal, envelope = owner.accept(attempt, kwargs)
+        else:
+            wire = normalize_production_request("periodic_audit", kwargs)
+            wire_sha = build_provider_request_identity(request_body=wire).request_sha256
+            transport_kind = "context_periodic_audit_" + wire_sha
+            identity = request_identity(operation_kind=transport_kind, novel_id=module.ACTIVE_NOVEL_CONFIG.id,
+                chapter=end, provider=PROVIDER_COMMAND_CODE, model=policy["wire_model"], profile_id=module.ACTIVE_PROFILE.id,
+                source_sha256=hashlib.sha256(module.chapter_map[end]["text"].encode()).hexdigest(),
+                request_payload=dict(wire_request=wire, provider_policy=policy))
+            identity.update(provider_policy=policy, wire_request_sha256=wire_sha,
+                auxiliary_domain_binding={**{k: copy.deepcopy(attempt[k]) for k in ("chunk_id", "kind", "attempt", "operation_id", "model_id_transport_version")}, "request_metadata": metadata})
+            path = module.PAID_REQUEST_JOURNAL_DIR / f"{end:04d}.{transport_kind}.json"
+            binding = attempt.get("transport_binding", {})
+            saved_path = Path(binding.get("journal_path", ""))
+            if not saved_path.is_absolute():
+                saved_path = module.PROGRESS_FILE.resolve().parent.parent / saved_path
+            require(binding.get("identity") == identity and saved_path.resolve() == path.resolve(), "paid audit transport binding drift")
+            journal = load_matching_journal(path, identity)
+            require(journal and journal["status"] == "response_recorded", "audit journal is not terminal RESPONSE_RECORDED")
         require(identity["operation_id"] not in operation_ids, "duplicate paid audit component")
         operation_ids.add(identity["operation_id"])
-        envelope = journal["response"]
-        require(accepted_envelope(envelope, wire) == envelope, "paid audit raw response/accounting mismatch")
+        if owner is None:
+            envelope = journal["response"]
+            require(accepted_envelope(envelope, wire) == envelope, "paid audit raw response/accounting mismatch")
         require(attempt.get("stats") == envelope["stats"] and attempt.get("raw_content") == envelope["content"]
                 and attempt.get("finish_reason") == envelope["finish_reason"], "audit attempt/paid journal mismatch")
         require(hashlib.sha256(attempt["raw_content"].encode()).hexdigest() == attempt.get("raw_content_hash"), "audit response content hash mismatch")
@@ -236,12 +247,23 @@ def checkpoint_proof(module, start, end):
     combined = audit.combine_audit_chunk_results(checkpoint["chunks"], ids, integrity["safe_glossary_keys"])
     require(combined == checkpoint.get("combined_result"), "combined audit result drift")
     run = dict(checkpoint=checkpoint, stats=audit._combine_attempt_stats(records))
-    stats = authoritative_audit_stats(run, module.combine_stats, provider=PROVIDER_COMMAND_CODE)
+    stats = (owner.finish(records) if owner is not None else
+             authoritative_audit_stats(run, module.combine_stats, provider=PROVIDER_COMMAND_CODE))
     chunking = dict(policy_version=config.policy_version, candidate_set_hash=candidate_hash, candidate_count=len(targets),
         total_chunks=len(leaves), completed_chunks=[c["chunk_id"] for c in leaves], api_request_count=len(records),
         resumed=True, checkpoint_file=str(cp_path), source_integrity=integrity, superseded_checkpoint=checkpoint.get("superseded_checkpoint", ""))
     return dict(checkpoint=checkpoint, checkpoint_sha256=file_sha(cp_path), context_fingerprint=context,
                 journals=journals, audit_result=combined, audit_stats=stats, chunking=chunking)
+
+
+@proof_traversal
+def _finalization_inputs(module, start, end, proof, timestamp, *, _inputs=None):
+    """One no-write traversal; execution/authorization never receive its inputs."""
+    candidate = prepare_finalization(module, start, end, proof["audit_result"],
+        proof["audit_stats"], proof["chunking"], timestamp=timestamp, _inputs=_inputs)
+    transaction = transaction_proof(module, start, end, candidate["baseline"]["glossary"],
+        candidate["post"]["glossary"], candidate["record"]["changes"], _inputs=_inputs)
+    return candidate, transaction
 
 
 def build_goat_periodic_audit_finalize_plan(novel_id, *, repo_root=None, start_chapter, end_chapter):
@@ -265,8 +287,7 @@ def build_goat_periodic_audit_finalize_plan(novel_id, *, repo_root=None, start_c
         require(proof["audit_result"] == intent["audit_result"] and proof["audit_stats"] == intent["audit_stats"], "paid checkpoint/finalization intent drift")
         proof["chunking"] = intent["chunking"]
     timestamp = intent["record"]["timestamp_unix"] if intent else publication_timestamp(module, start_chapter, end_chapter)
-    candidate = prepare_finalization(module, start_chapter, end_chapter, proof["audit_result"], proof["audit_stats"], proof["chunking"], timestamp=timestamp)
-    tx_proof = transaction_proof(module, start_chapter, end_chapter, candidate["baseline"]["glossary"], candidate["post"]["glossary"], candidate["record"]["changes"])
+    candidate, tx_proof = _finalization_inputs(module, start_chapter, end_chapter, proof, timestamp)
     if intent:
         candidate["post"]["history"]["audits"][-1]["retroactive"] = intent["record"]["retroactive"]
         require(candidate["post"] == intent["post"] and candidate["transaction_plan"] == intent["transaction_plan"], "expected audit publication drift")

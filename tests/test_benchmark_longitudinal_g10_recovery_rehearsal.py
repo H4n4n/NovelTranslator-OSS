@@ -29,7 +29,11 @@ def _minimal_project(root):
     (root / "output" / "retroactive_fixes").mkdir(parents=True)
     (root / "output" / "audits").mkdir(parents=True)
     (root / "backup").mkdir(parents=True)
-    _write_json(root / "novel.json", {"id": "fixture"})
+    _write_json(root / "novel.json", {"id": "fixture", "title": "Synthetic Fixture",
+        "source_language": "zh", "target_language": "en",
+        "profile": "historical_military", "final_chapter": 25})
+    _write_json(root / "data" / "chapters.json",
+        [{"chapter": n, "text": "甲在此。"} for n in range(1, 26)])
     _write_json(
         root / "data" / "progress.json",
         {
@@ -42,11 +46,12 @@ def _minimal_project(root):
     )
     _write_json(root / "data" / "glossary.json", {"entries": {}})
     _write_json(root / "data" / "continuity.json", {"summary": "before"})
-    _write_json(root / "data" / "issues.json", {"open": []})
+    _write_json(root / "data" / "issues.json", {"issues": []})
     _write_json(root / "data" / "audit_history.json", {"audits": []})
-    (root / "output" / "chapters" / "0001.md").write_text(
-        "before chapter\n", encoding="utf-8"
-    )
+    for n in range(1, 26):
+        (root / "output" / "chapters" / f"{n:04d}.md").write_text(
+            "before chapter\n", encoding="utf-8"
+        )
     (root / "output" / "retroactive_fixes" / "before.json").write_text(
         "before retro\n", encoding="utf-8"
     )
@@ -243,7 +248,9 @@ def test_ambiguous_shadow_never_reaches_transport(tmp_path, status):
 
 def test_real_audit_recovery_restores_shadow_and_never_mutates_original(tmp_path):
     original = _minimal_project(tmp_path / "original")
-    _snapshot_baseline(original, 1, 25)
+    from production_run_lock import production_run_lock
+    with production_run_lock(original):
+        _snapshot_baseline(original, 1, 25)
     shadow = tmp_path / "shadow"
     g10d.create_physical_shadow(original, shadow)
     original_before = g10d.tree_fingerprint(original)
@@ -280,10 +287,11 @@ def test_real_audit_recovery_restores_shadow_and_never_mutates_original(tmp_path
     backup.mkdir(parents=True)
     (backup / "partial.txt").write_text("partial\n", encoding="utf-8")
 
-    result = g10d.reconcile_audit_on_physical_shadow(
-        original_root=original,
-        shadow_root=shadow,
-    )
+    with production_run_lock(shadow):
+        result = g10d.reconcile_audit_on_physical_shadow(
+            original_root=original,
+            shadow_root=shadow,
+        )
     assert result["provider_calls"] == 0
     assert result["transport_poisoned"] is True
     assert result["original_unchanged"] is True
@@ -310,3 +318,17 @@ def test_shadow_and_original_may_not_contain_each_other(tmp_path):
     original.mkdir()
     with pytest.raises(g10d.G10DRehearsalError, match="inside original"):
         g10d.create_physical_shadow(original, original / "shadow")
+
+
+def test_audit_snapshot_refuses_missing_or_foreign_novel_lease(tmp_path):
+    from production_run_lock import production_run_lock, ProductionRunLockedError
+    original = _minimal_project(tmp_path / "original")
+    other = tmp_path / "other"
+    other.mkdir()
+    before = g10d.tree_fingerprint(original)
+    with pytest.raises(ProductionRunLockedError, match="Actual caller-held novel"):
+        _snapshot_baseline(original, 1, 25)
+    with production_run_lock(other):
+        with pytest.raises(ProductionRunLockedError, match="Actual caller-held novel"):
+            _snapshot_baseline(original, 1, 25)
+    assert g10d.tree_fingerprint(original) == before

@@ -36,6 +36,8 @@ import shutil
 import uuid
 from typing import Any, Mapping
 
+from production_run_lock import held_production_run_lock, ProductionRunLockedError
+
 from production_paid_request_journal import (
     PaidRequestJournalError,
     load_matching_journal,
@@ -59,6 +61,14 @@ _KIND_PREFIX = {
 
 class FullPipelinePeriodicAuditRecoveryError(RuntimeError):
     """Periodic-audit experiment recovery evidence is missing or inconsistent."""
+
+
+def _require_novel_lock(project_root):
+    """Verify the caller's real lease; never acquire a nested rendezvous lock."""
+    try:
+        held_production_run_lock(project_root)
+    except RuntimeError as exc:
+        raise ProductionRunLockedError("Actual caller-held novel production lock required") from exc
 
 
 def _canonical_json(value: Any) -> str:
@@ -296,6 +306,7 @@ def _snapshot_baseline(
 ) -> tuple[dict[str, Any], bool]:
     """Create one immutable pre-audit baseline, or load the existing one."""
     _validate_window(start_chapter, end_chapter)
+    _require_novel_lock(project_root)
     project_root = Path(project_root).resolve()
     slot = _slot_path(project_root, start_chapter, end_chapter)
     if slot.exists():
@@ -326,6 +337,23 @@ def _snapshot_baseline(
             "periodic-audit recovery window is not the next scheduled audit"
         )
 
+    # An acquisition backup is not edit authority. Prove independent inventory
+    # and prior ownership before creating even this pre-audit baseline.
+    from historical_reconciliation import writer_module, writer_inventory, writer_authorization
+    from retroactive_transactions import build_plan, ownership_policy
+    from production_failure_classification import ProductionIntegrityError
+    try:
+        novel = _read_object(project_root / "novel.json", "novel config")["id"]
+        context = writer_module(project_root / "output/chapters", novel)
+        writer_inventory(context, progress.get("completed"), end_chapter)
+        request = dict(novel_id=novel, audit_label=f"{start_chapter:04d}_{end_chapter:04d}",
+            through_chapter=end_chapter, rules=[], ownership_policy=ownership_policy(context.glossary),
+            safe_categories=sorted(context.ACTIVE_PROFILE.retroactive_safe_categories),
+            committed_chapters=list(range(1, end_chapter + 1)))
+        baseline_authorization = writer_authorization(context, build_plan(request, {n: (context.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+            for n in request["committed_chapters"]}, context.chapter_map))
+    except (ProductionIntegrityError, OSError, ValueError) as exc:
+        raise FullPipelinePeriodicAuditRecoveryError("local retroactive baseline blocked: " + str(exc)) from exc
     root = _recovery_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     staging = root / f".{slot.name}.creating-{uuid.uuid4().hex}"
@@ -386,6 +414,7 @@ def _snapshot_baseline(
                 "last_audited_chapter": last_audited,
             },
             "baseline_data": data_records,
+            "writer_baseline_authorization": baseline_authorization,
             "chapters_tree": _tree_fingerprint(baseline / "chapters"),
             "retroactive_fixes_tree": _tree_fingerprint(
                 baseline / "retroactive_fixes"
@@ -466,6 +495,7 @@ def _validate_baseline(slot: Path, manifest: Mapping[str, Any]) -> None:
 
 def _restore_baseline(project_root: Path, manifest: Mapping[str, Any]) -> None:
     """Restore pre-audit state while preserving provider/checkpoint evidence."""
+    _require_novel_lock(project_root)
     project_root = Path(project_root).resolve()
     window = manifest["audit_window"]
     start_chapter = int(window["start_chapter"])
@@ -488,12 +518,14 @@ def _restore_baseline(project_root: Path, manifest: Mapping[str, Any]) -> None:
     # The local span engine owns restart reconciliation. Never erase its durable
     # intent or restore its AFTER prose to BEFORE through a whole-tree rollback.
     from retroactive_transactions import RetroactiveBlocked, verify_audit_recovery_baseline
+    from production_failure_classification import ProductionIntegrityError
     try:
         preserve_span_transaction = verify_audit_recovery_baseline(
             project_root, baseline, manifest["project_id"],
             f"{start_chapter:04d}_{end_chapter:04d}", end_chapter,
+            baseline_authorization=manifest.get("writer_baseline_authorization"),
         )
-    except (RetroactiveBlocked, OSError, ValueError) as exc:
+    except (RetroactiveBlocked, ProductionIntegrityError, OSError, ValueError) as exc:
         raise FullPipelinePeriodicAuditRecoveryError(
             f"local retroactive transaction recovery blocked: {exc}"
         ) from exc
@@ -612,7 +644,43 @@ def _ensure_backup_checkpoint(project_root: Path, manifest: Mapping[str, Any]) -
             _atomic_write_bytes(destination, source.read_bytes())
 
 
+def _recovery_inventory(project_root, *, through=None, novel_id=None):
+    """Pure inventory precheck before any reconciliation mutation or cleanup."""
+    from historical_reconciliation import writer_module, writer_inventory, read_object
+    from production_failure_classification import ProductionIntegrityError
+    try:
+        novel_id = novel_id or read_object(project_root / "novel.json")["id"]
+        context = writer_module(project_root / "output/chapters", novel_id)
+        progress = read_object(context.PROGRESS_FILE)
+        return writer_inventory(context, progress.get("completed"),
+            progress.get("last_completed") if through is None else through)
+    except (ProductionIntegrityError, OSError, ValueError) as exc:
+        raise FullPipelinePeriodicAuditRecoveryError("local recovery inventory blocked: " + str(exc)) from exc
+
+
+def _verify_snapshot_inventory(project_root, manifest):
+    """Bind post-marker backup repair to the original complete source inventory."""
+    from historical_reconciliation import plain
+    from retroactive_span_planning import canonical_hash
+    from production_failure_classification import ProductionIntegrityError
+    try:
+        inventory = _recovery_inventory(project_root, novel_id=manifest["project_id"],
+                                        through=manifest["audit_window"]["end_chapter"])
+        slot = _slot_path(project_root, *(
+            manifest["audit_window"][key] for key in ("start_chapter", "end_chapter")))
+        before = {f"{n:04d}.md": _sha256_bytes(plain(_baseline_path(slot) / "chapters" /
+                   f"{n:04d}.md").read_bytes()) for n in inventory["committed"]}
+        proof = manifest.get("writer_baseline_authorization")
+        if (not isinstance(proof, dict) or proof.get("inventory_sha256") !=
+                canonical_hash({**inventory, "before_chapters": before})):
+            raise ProductionIntegrityError("AUT2: SOURCE_INVENTORY_DRIFT: recovery baseline")
+    except (ProductionIntegrityError, OSError, ValueError) as exc:
+        raise FullPipelinePeriodicAuditRecoveryError("local recovery inventory blocked: " + str(exc)) from exc
+
+
 def _mark_manifest_committed(project_root: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    _require_novel_lock(project_root)
+    _verify_snapshot_inventory(project_root, manifest)
     value = copy.deepcopy(dict(manifest))
     _validate_committed_audit(project_root, value)
     _ensure_backup_checkpoint(project_root, value)
@@ -641,6 +709,7 @@ def reconcile_project_periodic_audit_recovery(
     project_root: Path | str,
 ) -> list[dict[str, Any]]:
     """Reconcile durable audit-publication recovery state without provider access."""
+    _require_novel_lock(project_root)
     project_root = Path(project_root).resolve()
     root = _recovery_root(project_root)
     if not root.exists():
@@ -649,6 +718,7 @@ def reconcile_project_periodic_audit_recovery(
         raise FullPipelinePeriodicAuditRecoveryError(
             f"periodic-audit recovery root is not a directory: {root}"
         )
+    _recovery_inventory(project_root)
     actions = []
     for slot in sorted(item for item in root.iterdir() if item.is_dir()):
         if slot.name.startswith("."):

@@ -104,6 +104,7 @@ controlled_trial_plan.py
 controlled_trial_repo_env.py
 create_novel.py
 docs/ASTRA_F1_F2_HISTORICAL_PROOF.md
+docs/AUT2_L3_FUNCTIONAL_CLOSURE.md
 docs/AUTONOMOUS_RECOVERY.md
 docs/G10FG_PAID_EXECUTORS.md
 docs/G10H_BLIND_CORPUS_FREEZE.md
@@ -124,6 +125,7 @@ docs/publication_guard.md
 docs/retroactive_edit_safety.md
 experimental_goat.py
 experimental_goat_accounting.py
+experimental_goat_audit_proof.py
 experimental_goat_budget.py
 experimental_goat_experiment.py
 experimental_goat_policy.py
@@ -344,6 +346,7 @@ tests/test_controlled_trial_plan.py
 tests/test_controlled_trial_repo_env.py
 tests/test_engine_glossary_regressions.py
 tests/test_experimental_goat.py
+tests/test_experimental_goat_audit_proof.py
 tests/test_extract_txt.py
 tests/test_final_editorial.py
 tests/test_finalization_corpus.py
@@ -373,11 +376,11 @@ tests/test_glossary_candidate_resolution.py
 tests/test_glossary_integrity.py
 tests/test_goat_accounting_epoch_migration.py
 tests/test_goat_batch_plan.py
+tests/test_goat_batch_standalone_receipts.py
 tests/test_goat_cap_recovery.py
 tests/test_goat_chapter_review_response_reconciliation.py
 tests/test_goat_glossary_review_recovery.py
 tests/test_goat_historical_identity.py
-tests/test_goat_periodic_audit_finalization.py
 tests/test_goat_post_smoke_hardening.py
 tests/test_goat_reviewed_capability.py
 tests/test_goat_saturation_recovery.py
@@ -489,8 +492,18 @@ scripts/public_ci.py
 scripts/public_ci_policy.json
 historical_reconciliation.py
 docs/AUT2_HISTORY_RECONCILIATION.md
+docs/AUT2_HOSTED_L3_RECONCILIATION.md
 docs/AUT2_PUBLICATION_REGENERATION.md
 publication_regeneration.py
+production_standalone_lineage.py
 docs/GOAT_UNATTENDED.md
 docs/GOAT_UNATTENDED_VALIDATION.md
 tests/test_goat_unattended.py
+docs/AUT2_MAIN_INTEGRATION.md
+docs/AUT2_FINALIZATION_CASE_MAPPING.json
+docs/AUT2_PUBLIC_CI_REPARTITION.md
+tests/goat_audit_finalization_support.py
+tests/test_goat_periodic_audit_finalization_part_1.py
+tests/test_goat_periodic_audit_finalization_part_2.py
+tests/test_goat_periodic_audit_finalization_part_3.py
+tests/test_goat_periodic_audit_finalization_part_4.py

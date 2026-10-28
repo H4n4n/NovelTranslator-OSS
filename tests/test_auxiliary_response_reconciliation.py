@@ -9,7 +9,16 @@ from auxiliary_response_reconciliation import JournalOwnedAuditCallback
 from noveltranslator_core import add_accounting_totals_once
 from production_paid_request_journal import _updated_record, _sha256_json
 from test_glossary_audit import identified_candidate
-from test_production_goat_runtime import engine, zero_network, response, IDENTITY
+from test_production_goat_runtime import engine as unlocked_engine, zero_network, response, IDENTITY
+from production_run_lock import production_run_lock
+
+
+@pytest.fixture
+def engine(unlocked_engine):
+    # Direct mutating calls reproduce the launcher's outer novel lock lifetime.
+    # Keep the shared fixture unlocked: executor tests own their own acquisition.
+    with production_run_lock(unlocked_engine[0].root):
+        yield unlocked_engine
 
 
 class Crash(BaseException):
@@ -65,7 +74,8 @@ def reset_synthetic_publication(module):
 
     Finalization now deliberately rejects checkpoint rewinds after its intent;
     transport tests must rewind the entire synthetic associated publication.
-    Paid journals and PR155 evidence remain intact.
+    Paid journals remain intact. Only the proven zero-edit transaction belonging
+    to the discarded synthetic publication is reset with that publication.
     """
     from production_periodic_audit_finalization import load_intent
     from historical_reconciliation import (
@@ -73,6 +83,22 @@ def reset_synthetic_publication(module):
     )
     intent = load_intent(module, 1, 1)
     if intent is not None:
+        import production_periodic_audit_finalization as final
+        plan = intent["transaction_plan"]
+        assert not any(item["edits"] for item in plan["chapters"])
+        proof = final.transaction_proof(module, 1, 1, intent["baseline"]["glossary"],
+            intent["post"]["glossary"], intent["record"]["changes"])
+        assert proof["plan"] == plan and proof["state"]["state"] == "FINALIZED"
+        slot = final.canonical_sha256({k: plan["request"][k]
+            for k in ("novel_id", "audit_label", "through_chapter")})
+        directory = module.RETROACTIVE_DIR / "transactions"
+        authorization = directory / (slot + ".authorization.json")
+        assert read(authorization)["plan_sha256"] == final.canonical_sha256(plan)
+        owned = [directory / (slot + suffix) for suffix in
+                 (".plan.json", ".authorization.json", ".state.json", ".result.json")]
+        owned += list(directory.glob(slot + ".reconcile.*.json"))
+        for path in owned:
+            path.unlink()
         receipt = validate_invalidation_identity(module, intent, 1, 1)
         if receipt.exists():
             # Only discard the exact derived receipt of the discarded intent.
@@ -533,8 +559,25 @@ def test_synthetic_rewind_preserves_unrelated_receipt_and_paid_evidence(engine, 
     paid = journal(read(path)["attempt_records"][0])
     original_paid = paid.read_bytes()
     transactions = {p: p.read_bytes() for p in (module.RETROACTIVE_DIR / "transactions").glob("*.json")}
+    unrelated_transaction = module.RETROACTIVE_DIR / "transactions" / "unrelated.json"
+    unrelated_transaction.write_bytes(b"Unrelated disposable transaction")
     reset_synthetic_publication(module)
     assert not receipt.exists()
     assert unrelated.read_bytes() == b"Unrelated disposable evidence"
     assert paid.read_bytes() == original_paid
-    assert transactions == {p: p.read_bytes() for p in transactions}
+    assert transactions and all(not p.exists() for p in transactions)
+    assert unrelated_transaction.read_bytes() == b"Unrelated disposable transaction"
+
+
+def test_direct_audit_finalization_requires_real_caller_lease(unlocked_engine, monkeypatch):
+    from production_run_lock import ProductionRunLockedError
+    module, sends, *_ = setup(unlocked_engine, monkeypatch)
+    project = unlocked_engine[0]
+    before = {p.relative_to(project.root): p.read_bytes()
+              for p in project.root.rglob("*") if p.is_file()}
+    with pytest.raises(ProductionRunLockedError, match="Actual caller-held novel"):
+        module.finalize_periodic_audit(1, 1, {"decisions": [], "issues": []},
+            module.zero_stats(), {"candidate_count": 0, "candidate_set_hash": ""})
+    assert not sends
+    assert before == {p.relative_to(project.root): p.read_bytes()
+                      for p in project.root.rglob("*") if p.is_file()}

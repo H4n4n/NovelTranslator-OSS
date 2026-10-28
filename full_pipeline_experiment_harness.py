@@ -774,7 +774,7 @@ def _run_real_engine_for_result(
 ) -> None:
     script = engine_root / PRODUCTION_SCRIPT_NAME
     loaded = None
-    with _working_directory(project_root):
+    with production_run_lock(project_root), _working_directory(project_root):
         try:
             loaded = load_experiment_engine_module(script)
             module = loaded["module"]
@@ -786,8 +786,7 @@ def _run_real_engine_for_result(
                 project_root / "output" / "qa",
                 evidence,
             )
-            with production_run_lock(project_root):
-                module.run_unattended_production(target_chapter=chapter)
+            module.run_unattended_production(target_chapter=chapter)
         finally:
             if loaded is not None:
                 sys.modules.pop(loaded["module_name"], None)

@@ -18,9 +18,9 @@ from scripts import publication_guard as guard
 GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
-    '9b9fe66e65a694830dabf3a596521bfb430e89151aaf3ba2fc92669d1f6610ad',
-    'd648ae51ad4cb551696f91a10362ccb631f72f39232949ea3e183016bc4b737f',
-    '3915275275054bae3866d1334f8a7aaf97de26c02a64ad47bf9f211a36f44b46',
+    '583019901ff74d5050ee63cd3967d9b12815e7a04cb19deb788dbedbc8eef9bd',
+    '8fcd8a6f9089a5f0b3d580931efb588f42140e98cf127501873e58f9eec28cbd',
+    'befb70dc1796f57ba86aa85a55cf364556267e385b69abbd77d1bdb6caeb7386',
 )
 
 
@@ -36,7 +36,7 @@ def test_exact_public_partition_and_reviewed_deselections():
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
     buckets = runner.balanced_shards(public, 3)
     flat = sum(buckets, [])
-    assert len(flat) == len(set(flat)) == len(public) == 192
+    assert len(flat) == len(set(flat)) == len(public) == 197
     assert set(flat) == set(public)
     assert SYNTHETIC_WITNESS_MODULE in flat
     assert flat.count(GOAT_UNATTENDED_MODULE) == 1
@@ -47,18 +47,27 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa'
-    # Retain every reviewed baseline weight; only the new suite is measured locally.
-    assert risk.digest({p: seconds for p, seconds in schedule['module_seconds'].items()
-                        if p != GOAT_UNATTENDED_MODULE}) == (
-        '83ebfddccc07f990a7f10d81215abac9627e8c820a9a76eb616d2670771c5368')
+    assert risk.digest(schedule['module_seconds']) == 'e4395d5152c1439d71a9cb16c9e05ab74832769e0c385c465868d7db90ff77b9'
+    # Original published weights and hosted provenance remain independently pinned.
+    assert risk.digest(schedule['published_schedule']['module_seconds']) == (
+        '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa')
+    assert risk.digest({k: schedule[k] for k in ('measurement_source', 'artifacts', 'old_shards')}) == (
+        '5847227f4168111d9ed24c394a045f885dcdd6309945c83e29b8fdaca9a9649e')
+    assert risk.digest(schedule['supplemental_measurements'][0]) == '7c12a824bacefa730cdcef3ddf20f412f201d306bcf098aecba78bd1ce64f830'
     for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
-    assert [len(b) for b in buckets] == [61, 64, 67]
+    assert [len(b) for b in buckets] == [64, 67, 66]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [1555.7515266, 1555.7472575, 1555.7486438])
-    assert 'tests/test_goat_periodic_audit_finalization.py' in buckets[0]
-    assert 'tests/test_completed_uncertain_history.py' in buckets[1]
+        [3200.201488, 3200.2001272, 3200.1936559])
+    assert schedule['shards'] == runner.measured_shards(schedule['module_seconds'])
+    assert max(schedule['variability']['conservative_seconds']) < 4500
+    assert max(schedule['variability']['sensitivity_seconds']) < 4500
+    assert {f'tests/test_goat_periodic_audit_finalization_part_{i}.py' for i in range(1, 5)} <= set(flat)
+    assert {'tests/test_completed_uncertain_history.py', 'tests/test_retroactive_transactions.py',
+            'tests/test_auxiliary_response_reconciliation.py', 'tests/test_goat_batch_plan.py',
+            'tests/test_experimental_goat_audit_proof.py', 'tests/test_goat_batch_standalone_receipts.py',
+            'tests/test_production_paid_request_journal.py', 'tests/test_production_run_lock.py',
+            'tests/test_build_publication_chapters.py', 'tests/test_build_publication_epub.py'} <= set(flat)
     assert len(deselect) == 15
     assert hashlib.sha256(json.dumps(deselect, separators=(',', ':')).encode()).hexdigest() == (
         '792817b3b0524eb25d6bb0e9267327ce85911c5c7ea9058cda53b979f708fc32')
@@ -164,7 +173,7 @@ def test_partition_never_probes_source_sizes_or_other_drives(monkeypatch):
     def forbidden_stat(*args, **kwargs):
         raise AssertionError('allocation must not probe filesystem sizes')
     monkeypatch.setattr(Path, 'stat', forbidden_stat)
-    assert len(sum(runner.balanced_shards(public, 3), [])) == 192
+    assert len(sum(runner.balanced_shards(public, 3), [])) == 197
 
 
 @pytest.mark.parametrize('args', [['--shard', '-1'], ['--shard', '3'], ['--shards', '0'],
@@ -702,7 +711,7 @@ def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatc
         risk.select(decision, 1 if tier == 'L3' else 3, 0)
     assert set(risk.SMOKE) <= set(decision['selected'])
     if tier == 'L3':
-        assert len(decision['selected']) == 192 and len(decision['deselect']) == 15
+        assert len(decision['selected']) == 197 and len(decision['deselect']) == 15
     elif tier == 'L2':
         assert len(decision['selected']) == 5
 
@@ -1078,3 +1087,407 @@ def test_every_source_mapping_must_be_complete(monkeypatch, path):
     monkeypatch.setattr(runner, 'read_json', lambda p: policy)
     with pytest.raises(ValueError, match='impact coverage'):
         risk.load_policy(files)
+
+
+# Publication performance must preserve the frozen accepted guard's decisions.
+@pytest.fixture(scope="module")
+def original_publication_guard():
+    from types import ModuleType
+    baseline = "57187ab7fc67979c72abf3ee71063bf2a23adcdb"
+    repo = Path(__file__).resolve().parents[1]
+    source = subprocess.check_output(["git", "-C", str(repo), "show",
+                                      baseline + ":scripts/publication_guard.py"])
+    assert subprocess.check_output(["git", "-C", str(repo), "show",
+        baseline + ":scripts/guard_allowlist.py"]) == (repo / "scripts/guard_allowlist.py").read_bytes().replace(b"\r\n", b"\n")
+    module = ModuleType("_original_publication_guard")
+    module.__file__ = str(repo / "scripts/publication_guard.py")
+    exec(compile(source, module.__file__, "exec"), module.__dict__)
+    return module
+
+
+def _publication_git(repo, *args, data=None):
+    return subprocess.check_output(["git", "-C", str(repo), *args], input=data,
+                                   stderr=subprocess.PIPE)
+
+
+def _publication_commit(repo, files, *, inventory=None, message="synthetic safe commit"):
+    # Only disposable repositories in the guarded external TEMP are mutated.
+    for name in _publication_git(repo, "ls-files").decode().splitlines():
+        path = repo / name
+        assert path.resolve().is_relative_to(repo.resolve())
+        if path.exists():
+            path.unlink()
+    values = dict(files)
+    values["public_inventory.txt"] = (inventory if inventory is not None else
+        ("\n".join(sorted([*files, "public_inventory.txt"])) + "\n").encode())
+    for name, data in values.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    _publication_git(repo, "add", "-A")
+    _publication_git(repo, "commit", "-qm", message, "--allow-empty")
+    return _publication_git(repo, "rev-parse", "HEAD").decode().strip()
+
+
+@pytest.fixture
+def publication_history(tmp_path):
+    repo = tmp_path / "public_history"
+    repo.mkdir()
+    _publication_git(repo, "init", "-q", "--initial-branch=main")
+    _publication_git(repo, "config", "user.name", "Synthetic Guard Fixture")
+    _publication_git(repo, "config", "user.email", "guard@example.invalid")
+    _publication_git(repo, "config", "core.autocrlf", "false")
+    _publication_git(repo, "config", "core.hooksPath", ".no-hooks")
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    return repo
+
+
+def _publication_decision(module, repo, *, updates=None):
+    module.REPO = str(repo)
+    try:
+        checked = (module.validate_push_check() if updates is None else
+                   module.validate_pre_push(updates))
+        return "accept", checked
+    except module.GuardError:
+        return "reject", None
+
+
+@pytest.mark.parametrize("case", [
+    "repeated", "inventory_evolution", "inventory_mismatch", "duplicate_inventory",
+    "empty_inventory", "invalid_inventory", "forbidden_path", "changed_content",
+    "invalid_utf8", "binary", "unsafe_mode", "unsafe_message", "divergent_branch",
+    "nested_tag", "malformed_tag", "missing_blob", "missing_parent", "shallow",
+    "path_scoped_exception",
+])
+def test_publication_cached_history_matches_original(
+    publication_history, original_publication_guard, monkeypatch, case,
+):
+    repo = publication_history
+    original = original_publication_guard
+    # Construct a synthetic match at runtime; never commit a credential literal.
+    synthetic = "sk" + "-" + chr(81) * 24
+    safe = {"stable.txt": b"safe repeated contents\n"}
+    base = _publication_git(repo, "rev-parse", "HEAD").decode().strip()
+    if case == "repeated":
+        for _ in range(6):
+            _publication_commit(repo, safe)
+    elif case == "inventory_evolution":
+        _publication_commit(repo, {**safe, "added.txt": b"new safe text\n"})
+        _publication_commit(repo, {"renamed.txt": safe["stable.txt"]})
+    elif case in {"inventory_mismatch", "duplicate_inventory", "empty_inventory", "invalid_inventory"}:
+        inventory = {"inventory_mismatch": b"public_inventory.txt\n",
+            "duplicate_inventory": b"public_inventory.txt\nstable.txt\nstable.txt\n",
+            "empty_inventory": b"", "invalid_inventory": b"\xff"}[case]
+        _publication_commit(repo, safe, inventory=inventory)
+        _publication_commit(repo, safe)  # A clean tip must not hide bad history.
+    elif case == "forbidden_path":
+        _publication_commit(repo, {**safe, "nested/output/hidden.txt": b"safe text"})
+        _publication_commit(repo, safe)
+    elif case in {"changed_content", "invalid_utf8", "binary"}:
+        value = {"changed_content": synthetic.encode(), "invalid_utf8": b"\xff",
+                 "binary": b"safe\0binary"}[case]
+        _publication_commit(repo, {"stable.txt": value})
+        _publication_commit(repo, safe)
+    elif case == "unsafe_mode":
+        blob = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+        _publication_git(repo, "update-index", "--cacheinfo", "120000," + blob + ",stable.txt")
+        _publication_git(repo, "commit", "-qm", "unsupported mode")
+        _publication_commit(repo, safe)
+    elif case == "unsafe_message":
+        _publication_commit(repo, safe, message=synthetic)
+        _publication_commit(repo, safe)
+    elif case == "divergent_branch":
+        _publication_git(repo, "switch", "-qc", "other", base)
+        _publication_commit(repo, {"stable.txt": synthetic.encode()})
+        _publication_git(repo, "switch", "-q", "main")
+        _publication_commit(repo, safe)
+    elif case == "nested_tag":
+        _publication_git(repo, "tag", "-a", "inner", "-m", synthetic)
+        _publication_git(repo, "tag", "-a", "outer", "inner", "-m", "safe outer tag")
+    elif case == "malformed_tag":
+        target = _publication_git(repo, "rev-parse", "HEAD").strip()
+        raw = b"object " + target + b"\ntag malformed\n\nmissing type\n"
+        oid = _publication_git(repo, "hash-object", "-w", "-t", "tag", "--literally", "--stdin", data=raw).decode().strip()
+        # update-ref itself rejects a malformed tag; install only disposable
+        # corrupt ref evidence so both guards must encounter and reject it.
+        (repo / ".git/refs/tags").mkdir(parents=True, exist_ok=True)
+        (repo / ".git/refs/tags/malformed").write_bytes(oid.encode() + b"\n")
+    elif case == "missing_blob":
+        oid = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+        import stat
+        loose = repo / ".git/objects" / oid[:2] / oid[2:]
+        loose.chmod(stat.S_IWRITE)  # Git loose objects are read-only on Windows.
+        loose.unlink()
+    elif case == "missing_parent":
+        tree = _publication_git(repo, "rev-parse", "HEAD^{tree}").strip()
+        raw = (b"tree " + tree + b"\nparent " + b"0" * 40 +
+               b"\nauthor Fixture <fixture@example.invalid> 1 +0000\n"
+               b"committer Fixture <fixture@example.invalid> 1 +0000\n\nmissing parent\n")
+        oid = _publication_git(repo, "hash-object", "-w", "-t", "commit", "--literally", "--stdin", data=raw).decode().strip()
+        _publication_git(repo, "update-ref", "refs/heads/main", oid)
+    elif case == "shallow":
+        (repo / ".git/shallow").write_bytes(base.encode() + b"\n")
+    else:
+        for module in (original, guard):
+            monkeypatch.setattr(module, "EXACT_SYNTHETIC",
+                {"allowed.txt": {hashlib.sha256(synthetic.encode()).hexdigest()}})
+        _publication_commit(repo, {"allowed.txt": synthetic.encode(), "z-other.txt": synthetic.encode()})
+    expected = "accept" if case in {"repeated", "inventory_evolution"} else "reject"
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    before = {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+    old = _publication_decision(original, repo)
+    new = _publication_decision(guard, repo)
+    assert old == new and new[0] == expected
+    assert {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
+    if case == "nested_tag":
+        outer = _publication_git(repo, "rev-parse", "refs/tags/outer").decode().strip()
+        updates = [("refs/custom/outgoing", outer, "refs/custom/outgoing", "0" * 40)]
+        assert _publication_decision(original, repo, updates=updates) == _publication_decision(guard, repo, updates=updates) == ("reject", None)
+
+
+def test_publication_cache_reuses_scans_but_rechecks_each_inventory(
+    publication_history, original_publication_guard, monkeypatch,
+):
+    repo = publication_history
+    for _ in range(5):
+        _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    measurements = []
+    for module in (original_publication_guard, guard):
+        reads, inventories, messages = [], [], []
+        real_git = module.git
+        def observed(args, **kwargs):
+            if args[:2] == ["cat-file", "blob"]:
+                reads.append(args[2])
+            if args[:1] == ["show"]:
+                inventories.append(args[1])
+            if args[:1] == ["log"]:
+                messages.append(args[-1])
+            return real_git(args, **kwargs)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "git", observed)
+            patch.setattr(module, "REPO", str(repo))
+            checked = module.validate_push_check()
+        measurements.append((checked, len(reads), len(inventories), len(messages)))
+    assert measurements == [(12, 12, 6, 6), (12, 2, 6, 6)]
+    # Force eviction: it must only cost more reads, never alter the decision.
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    monkeypatch.setattr(guard, "MAX_SCANNED_BLOBS", 1)
+    assert guard.validate_push_check() == 12
+
+
+def test_publication_cache_is_local_to_each_validation(publication_history, monkeypatch):
+    repo = publication_history
+    synthetic = "sk" + "-" + chr(81) * 24
+    _publication_commit(repo, {"allowed.txt": synthetic.encode()})
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    monkeypatch.setattr(guard, "EXACT_SYNTHETIC", {"allowed.txt": {hashlib.sha256(synthetic.encode()).hexdigest()}})
+    assert guard.validate_push_check() > 0
+    monkeypatch.setattr(guard, "EXACT_SYNTHETIC", {})
+    with pytest.raises(guard.GuardError):
+        guard.validate_push_check()
+
+
+def test_publication_cache_never_stores_failure_or_inconsistent_evidence(monkeypatch):
+    data = b"safe text"
+    oid = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+    cache = {}
+    monkeypatch.setattr(guard, "git", lambda args: data)
+    with pytest.raises(guard.GuardError, match="inconsistent tree blob size"):
+        guard.scan_blob("stable.txt", oid, len(data) + 1, cache)
+    assert cache == {}
+    with pytest.raises(guard.GuardError, match="blob identity mismatch"):
+        guard.scan_blob("stable.txt", "0" * 40, len(data), cache)
+    assert cache == {}
+    guard.scan_blob("stable.txt", oid, len(data), cache)
+    with pytest.raises(guard.GuardError, match="inconsistent cached blob size"):
+        guard.scan_blob("stable.txt", oid, len(data) + 1, cache)
+    invalid = b"\xff"
+    invalid_oid = hashlib.sha1(b"blob 1\0" + invalid).hexdigest()
+    monkeypatch.setattr(guard, "git", lambda args: invalid)
+    with pytest.raises(guard.GuardError, match="invalid UTF-8"):
+        guard.scan_blob("invalid.txt", invalid_oid, 1, cache)
+    assert cache == {(oid, "stable.txt"): len(data)}
+    def timed_out(args):
+        raise subprocess.TimeoutExpired("synthetic git", 180)
+    monkeypatch.setattr(guard, "git", timed_out)
+    with pytest.raises(subprocess.TimeoutExpired):
+        guard.scan_blob("unseen.txt", oid, len(data), cache)
+    assert len(cache) == 1
+
+
+def test_publication_timeout_never_becomes_success(monkeypatch, capsys):
+    def timed_out():
+        raise subprocess.TimeoutExpired("synthetic git", 180)
+    monkeypatch.setattr(guard, "validate_push_check", timed_out)
+    assert guard.main(["--push-check", "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is False and report["checked"] == 0
+    assert report["error"] == "git command timed out"
+
+
+@pytest.mark.parametrize("implementation", ["original", "cached"])
+def test_publication_missing_object_after_successful_scan_still_blocks(
+    publication_history, original_publication_guard, monkeypatch, implementation,
+):
+    import stat
+    repo = publication_history
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    module = original_publication_guard if implementation == "original" else guard
+    oid = _publication_git(repo, "rev-parse", "HEAD:stable.txt").decode().strip()
+    real_git = module.git
+    trees = []
+    def disappear(args, **kwargs):
+        if args[:1] == ["ls-tree"]:
+            trees.append(args[-1])
+            if len(trees) == 2:
+                loose = repo / ".git/objects" / oid[:2] / oid[2:]
+                loose.chmod(stat.S_IWRITE)
+                loose.unlink()
+        return real_git(args, **kwargs)
+    monkeypatch.setattr(module, "REPO", str(repo))
+    monkeypatch.setattr(module, "git", disappear)
+    with pytest.raises(module.GuardError):
+        module.validate_push_check()
+    assert len(trees) == 2
+
+
+@pytest.mark.parametrize("algorithm", ["sha1", "sha256"])
+def test_publication_cache_proves_supported_git_object_formats(monkeypatch, algorithm):
+    data = b"safe text"
+    oid = hashlib.new(algorithm, b"blob 9\0" + data).hexdigest()
+    cache = {}
+    monkeypatch.setattr(guard, "git", lambda args: data)
+    guard.scan_blob("stable.txt", oid, len(data), cache)
+    assert cache == {(oid, "stable.txt"): len(data)}
+
+
+def test_publication_benign_nested_tags_and_custom_refs_match_original(
+    publication_history, original_publication_guard, monkeypatch,
+):
+    repo = publication_history
+    _publication_commit(repo, {"stable.txt": b"safe repeated contents\n"})
+    _publication_git(repo, "tag", "-a", "inner", "-m", "safe inner tag")
+    _publication_git(repo, "tag", "-a", "outer", "inner", "-m", "safe outer tag")
+    outer = _publication_git(repo, "rev-parse", "refs/tags/outer").decode().strip()
+    updates = [("refs/custom/outgoing", outer, "refs/custom/outgoing", "0" * 40)]
+    monkeypatch.setattr(guard, "REPO", str(repo))
+    for operation in (None, updates):
+        assert _publication_decision(original_publication_guard, repo, updates=operation) == (
+            _publication_decision(guard, repo, updates=operation)) == ("accept", 4)
+
+
+def test_finalization_repartition_preserves_original_sources_and_cases():
+    mapping = runner.read_json(runner.REPO / 'docs/AUT2_FINALIZATION_CASE_MAPPING.json')
+    original = subprocess.check_output([
+        'git', '-C', str(runner.REPO), 'show',
+        mapping['baseline_commit'] + ':' + mapping['original_module']], timeout=30)
+    sha = lambda raw: hashlib.sha256(raw).hexdigest()
+    normalized = lambda raw: raw.replace(b'\r\n', b'\n')
+    assert sha(original) == mapping['original_git_blob_sha256']
+    assert sha(original.replace(b'\n', b'\r\n')) == mapping['original_source_sha256']
+    support = (runner.REPO / mapping['support_module']).read_bytes()
+    assert sha(normalized(support)) == mapping['support_normalized_sha256']
+    original_lines = original.splitlines(keepends=True)
+    assert normalized(support) == b''.join(original_lines[:166])
+    original_tree = ast.parse(original.decode())
+    assert all(n.end_lineno <= 166 or
+               (isinstance(n, ast.FunctionDef) and n.name.startswith('test_'))
+               for n in original_tree.body)
+    original_tests = {n.name: n for n in original_tree.body
+                      if isinstance(n, ast.FunctionDef) and n.name.startswith('test_')}
+    assert len(original_tests) == len(mapping['functions']) == 22
+    seen = set()
+    for module, meta in mapping['modules'].items():
+        raw = (runner.REPO / module).read_bytes()
+        assert sha(normalized(raw)) == meta['normalized_sha256']
+        source = normalized(raw).decode()
+        lines = source.splitlines(keepends=True)
+        tree = ast.parse(source)
+        # Every original import, constant and module marker is copied verbatim.
+        assert normalized(raw).startswith(b''.join(original_lines[:mapping['original_import_header_lines']]))
+        imports = [n for n in tree.body if isinstance(n, ast.ImportFrom)
+                   and n.module == 'goat_audit_finalization_support']
+        assert len(imports) == 1
+        header = ast.parse(b''.join(original_lines[:mapping['original_import_header_lines']]).decode())
+        assert all(n in tree.body[:len(header.body)] or n in imports or
+                   (isinstance(n, ast.FunctionDef) and n.name.startswith('test_'))
+                   for n in tree.body)
+        assert [n.name for n in imports[0].names] == ['locked_finalize', 'snapshot', 'incident', 'plan', 'execute']
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            assert node.name not in seen and mapping['functions'][node.name]['module'] == module
+            seen.add(node.name)
+            old = original_tests[node.name]
+            assert ast.dump(node, include_attributes=False) == ast.dump(old, include_attributes=False)
+            start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            segment = ''.join(lines[start - 1:node.end_lineno]).encode()
+            before_start, before_end = mapping['functions'][node.name]['original_lines']
+            before = b''.join(original_lines[before_start - 1:before_end])
+            assert segment == before
+            assert sha(segment) == mapping['functions'][node.name]['decorated_normalized_sha256']
+    assert seen == set(original_tests) == set(mapping['functions'])
+    batch_before = subprocess.check_output(['git', '-C', str(runner.REPO), 'show',
+        mapping['baseline_commit'] + ':tests/test_goat_batch_plan.py'], timeout=30)
+    batch_after = (runner.REPO / 'tests/test_goat_batch_plan.py').read_bytes()
+    assert batch_before.count(b'from test_goat_periodic_audit_finalization import') == 2
+    assert normalized(batch_after) == batch_before.replace(
+        b'from test_goat_periodic_audit_finalization import',
+        b'from goat_audit_finalization_support import')
+    cases = mapping['cases']
+    assert mapping['case_count'] == len(cases) == 97
+    assert len({c['old'] for c in cases}) == len({c['new'] for c in cases}) == 97
+    assert [sum(c['new'].split('::', 1)[0] == p for c in cases)
+            for p in mapping['modules']] == [26, 20, 31, 20]
+    for case in cases:
+        assert case['old'].split('::', 1)[0] == mapping['original_module']
+        identity = case['old'].split('::', 1)[1]
+        assert identity == case['new'].split('::', 1)[1]
+        assert case['function'] + case['parameter_identity'] == identity
+        assert mapping['functions'][case['function']]['module'] == case['new'].split('::', 1)[0]
+        assert case['original_source_sha256'] == mapping['original_source_sha256']
+
+    before_classification = json.loads(subprocess.check_output([
+        'git', '-C', str(runner.REPO), 'show',
+        mapping['baseline_commit'] + ':tests/public_test_classification.json'], timeout=30))
+    after_classification = runner.read_json(runner.CLASSIFICATION)
+    assert after_classification['deselect'] == before_classification['deselect']
+    assert after_classification['deselect_reason'] == before_classification['deselect_reason']
+    before_files, after_files = before_classification['files'], after_classification['files']
+    assert set(before_files) - set(after_files) == {mapping['original_module']}
+    additions = set(mapping['modules']) | {'tests/test_experimental_goat_audit_proof.py',
+                                         'tests/test_goat_batch_standalone_receipts.py'}
+    assert set(after_files) - set(before_files) == additions
+    assert all(after_files[p]['status'] == 'public' for p in additions)
+    assert all(after_files[p] == meta for p, meta in before_files.items()
+               if p != mapping['original_module'])
+
+
+def test_refreshed_schedule_weights_bind_complete_current_sources():
+    schedule = runner.read_json(runner.SCHEDULE)
+    published = schedule['published_schedule']['module_seconds']
+    latest = {m['module']: m for m in schedule['supplemental_measurements']}
+    for path, seconds in schedule['module_seconds'].items():
+        if path in latest:
+            measurement = latest[path]
+            assert measurement['hosted_run_id'] is None
+            assert measurement['module_seconds'] == seconds
+            expected_skips = (['tests/test_build_publication_epub.py::test_real_rogue_publication_temporary_integration']
+                              if path == 'tests/test_build_publication_epub.py' else [])
+            assert measurement['skipped'] == len(expected_skips)
+            assert measurement.get('existing_skipped_nodes', []) == expected_skips
+            assert measurement['collected'] == measurement['passed'] + measurement['skipped']
+            source = (runner.REPO / path).read_bytes()
+            if 'module_normalized_sha256' in measurement:
+                assert hashlib.sha256(source.replace(b'\r\n', b'\n')).hexdigest() == measurement['module_normalized_sha256']
+            else:
+                assert hashlib.sha256(source).hexdigest() == measurement['module_sha256']
+        else:
+            assert seconds == published[path]
+    variability = schedule['variability']
+    totals = [sum(schedule['module_seconds'][p] for p in b) for b in schedule['shards']]
+    assert variability['execution_deadline_seconds'] == 4500
+    assert variability['fraction'] == 0.25 and variability['sensitivity_fraction'] == 0.30
+    assert variability['unattributed_seconds_per_shard'] == 60
+    assert variability['conservative_seconds'] == [round(x * 1.25 + 60, 3) for x in totals]
+    assert variability['sensitivity_seconds'] == [round(x * 1.30 + 60, 3) for x in totals]

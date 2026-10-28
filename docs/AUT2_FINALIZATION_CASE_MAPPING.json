@@ -1,0 +1,1077 @@
+{
+  "version": 1,
+  "baseline_commit": "0814f211e4ee645c2685ca9ae4eb3e61c0fadf58",
+  "original_module": "tests/test_goat_periodic_audit_finalization.py",
+  "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+  "proposal_sha256": "738c28b4ed7bb344067d159bee92a3bee3f593e7d776b6010da6a3d67e4d85cf",
+  "original_ordered_nodes_sha256": "cfae0b7a49aa79745e3ad91844b24906ec1a913d01e88b4e5c5f44637da9d4ca",
+  "case_count": 97,
+  "support_module": "tests/goat_audit_finalization_support.py",
+  "support_source_sha256": "de06de9dcca91cdbbc663d2ef8d414b050338ce7dd09e1282d6d8d42b132b378",
+  "original_prefix_bytes": 10846,
+  "modules": {
+    "tests/test_goat_periodic_audit_finalization_part_1.py": {
+      "sha256": "31711d39ef82be07c6c07cc481477e31355630f4be9f4032569076663c947ecf",
+      "cases": 26,
+      "proposal_local_seconds": 919.8730150000192,
+      "normalized_sha256": "b9c431d9f7ecffcdec5855a113ecc019af751f84de89d56b4788774daa54476a"
+    },
+    "tests/test_goat_periodic_audit_finalization_part_2.py": {
+      "sha256": "0d61e76c72761c929bb5988f14f706c368b1cc4bf374aca689b7dfb61477875c",
+      "cases": 20,
+      "proposal_local_seconds": 935.8762009000638,
+      "normalized_sha256": "03c1c367dff2228a0fc95992c1d822f16e54b81641f84094f7c7e5d67484fa0d"
+    },
+    "tests/test_goat_periodic_audit_finalization_part_3.py": {
+      "sha256": "26851ce790a51546d6f627935d90e94996a87219c3b1889c443493deae579780",
+      "cases": 31,
+      "proposal_local_seconds": 932.6415443009464,
+      "normalized_sha256": "7113a2242469e7c2e2b2f1be1747016834ab773b730d86ddf227331bba53de45"
+    },
+    "tests/test_goat_periodic_audit_finalization_part_4.py": {
+      "sha256": "498fb3a545bdcb0eb60c75901371aa06edf86a07ad9eaa83720fac2d191f5040",
+      "cases": 20,
+      "proposal_local_seconds": 937.0073383001145,
+      "normalized_sha256": "e5715ec064b80e3f0ac42e34ea6353e023d7fb17292df146bb52303cfaa8e937"
+    }
+  },
+  "functions": {
+    "test_direct_generic_aggregate_unchanged": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_1.py",
+      "original_lines": [
+        322,
+        324
+      ],
+      "decorated_source_sha256": "dbbb22126b4202c8676c6e585fab99c8207b813b56c50b4594c6d6f7eee534f3",
+      "proposal_function_sha256": "c453b1a8abc45b941e4590b524301f52655412c0798ff9a09808734274b7714c",
+      "decorated_normalized_sha256": "17e6c08cf4d605a4efa48d6ec24e2c204b26b5d3458a6bdc93f69706a5ef3207"
+    },
+    "test_fresh_audit_mixed_old_and_preferred_baseline_finalizes_once": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_1.py",
+      "original_lines": [
+        401,
+        414
+      ],
+      "decorated_source_sha256": "d20638b5edfd0866084ba5c1c69dad4d9193c0d7c5eb38e0a5253766a4a607aa",
+      "proposal_function_sha256": "d5c75d68f0a10c38fcc8951bed35af3587a8e814cbd7ccffeae8eb2ca68c251c",
+      "decorated_normalized_sha256": "d7afcdf38ca608f6496438ab7a9698dc8ee9b1c38295cba5beba3e0d7248d63a"
+    },
+    "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_1.py",
+      "original_lines": [
+        417,
+        446
+      ],
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523",
+      "proposal_function_sha256": "d7ea140346e2688b621a83b19634cce5371848f7f90749714eee0b2005681bdc",
+      "decorated_normalized_sha256": "544b4abf90b7a546a854cc9b0335f8c9c72631fec0baf9adca7d535499daea3b"
+    },
+    "test_out_of_order_chapter_after_prefix_blocks_local_reconciliation": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_1.py",
+      "original_lines": [
+        509,
+        531
+      ],
+      "decorated_source_sha256": "531029da0b12ec05b4c398141274c9c7692fc89382a8d11ebedb53117dc01add",
+      "proposal_function_sha256": "a788fc079b1db978c465482fedd4d038648f9a8076ee46188eb06523c17c8b1f",
+      "decorated_normalized_sha256": "abf3a73da2cceaeefba217606e6b903af3b8b184767b7bfdc06a0ffe79294098"
+    },
+    "test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_1.py",
+      "original_lines": [
+        590,
+        623
+      ],
+      "decorated_source_sha256": "f95eb5e6d212eefdfe6b2183b04401ec76f3fa741aee41e38ffc80ca2be1fead",
+      "proposal_function_sha256": "79b8ef3984a51f4abd8127c891d4f942a9a486f20c64c51c9319ad3a37e6c0f9",
+      "decorated_normalized_sha256": "0f1587d4a367d2c9b3f98571798e679c1bd36ac142ed131b13e3f1b81dd94963"
+    },
+    "test_authoritative_accounting_rejects_component_or_numeric_drift": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_2.py",
+      "original_lines": [
+        202,
+        213
+      ],
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57",
+      "proposal_function_sha256": "f77a9f9de082c87b24fa00543e1438a1d87e68fc1bdb5bee19ead3fd335b8dea",
+      "decorated_normalized_sha256": "7af679186f5142cc4c8ca76040e06d0455183fc06c12681bd6eed43a5a574cfd"
+    },
+    "test_accounting_failure_before_any_prose_transaction": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_2.py",
+      "original_lines": [
+        216,
+        228
+      ],
+      "decorated_source_sha256": "dfe411d4f7fdcbe8f0eabfbc9c2b98871609e555d19c70382e0ad9772f1f03c5",
+      "proposal_function_sha256": "93416e432e44978c691cf5169c5bdeee1db1b87c4962520eb884ab29fccfadcf",
+      "decorated_normalized_sha256": "16e6fc78f9dba686d18d13786fdc24d2d396c53ada9cd978cb1293f8ac898ebe"
+    },
+    "test_zero_candidate_goat_audit_no_fabricated_paid_accounting": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_2.py",
+      "original_lines": [
+        307,
+        319
+      ],
+      "decorated_source_sha256": "4da775d5913722697f35ab81989def772a5c714cd2519d1adad9e38b7268f371",
+      "proposal_function_sha256": "be017d8ec5ca604f130f01ccd82cd1e2dac13ac48a3c516626d950e7af6db1c3",
+      "decorated_normalized_sha256": "3c3711459862bbcca90371434ae4efbc93fdb705cae28163c288da865a63c231"
+    },
+    "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_2.py",
+      "original_lines": [
+        465,
+        506
+      ],
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36",
+      "proposal_function_sha256": "2ef7be5bd6db97dca2ef7c1f218098e364ff285359d8a6a727c1a573f5a9c00e",
+      "decorated_normalized_sha256": "79abbae3dfc1ddbb39b1d9d73e6dd2e58d0f66c2e8711f21b4feba6b088a98b0"
+    },
+    "test_aut2_crash_invalidation_precedes_edits_and_progress_last": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_2.py",
+      "original_lines": [
+        626,
+        663
+      ],
+      "decorated_source_sha256": "c16cf234938e6a4d76dab27f61434f766d7fd602fed8ded4f3ffed2238aeaf92",
+      "proposal_function_sha256": "5fc91a70267412f8cae9080a350878fe343bd013d8a342b6870e1dd979f545cc",
+      "decorated_normalized_sha256": "1bbd857baf975652a8a823c91e62638ef8af6d527f676eaa2931e3416c84272f"
+    },
+    "test_live_shaped_local_recovery_and_already_finalized": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        169,
+        199
+      ],
+      "decorated_source_sha256": "c6773f0f4dd6a3fae90b7659fcadb65c453f3a2bb14ff2defb0d66a023b2809c",
+      "proposal_function_sha256": "92ec73bea4b95d83169e60f683315643095f70acf5ced04e2f04e79d31546fd2",
+      "decorated_normalized_sha256": "733e0b71b4c4f9458496497b9bd9d541092a7440314826e19d55b6fb27ecc2f7"
+    },
+    "test_every_local_publication_prefix_reconciles_without_duplicates": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        231,
+        264
+      ],
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0",
+      "proposal_function_sha256": "4d7cc53733904b3b71d18dac2bd68a9995833029f281d4f73c92da0b0dc3623e",
+      "decorated_normalized_sha256": "da8ad82834a80f0da1d46a7653f0b06a21b8e9d1825b418f7db22a67de697cdd"
+    },
+    "test_recovery_drift_fails_closed": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        267,
+        304
+      ],
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3",
+      "proposal_function_sha256": "76a42aff1e5149a5b3cb8a2691f078ddcffb6a8a9e669087ce928eb307390539",
+      "decorated_normalized_sha256": "57a1c971512be8645944fdcfd59c65642c4da8d0d8fa71f63c84d6a0ee75f452"
+    },
+    "test_legacy_intent_preserves_completion_but_cannot_regenerate_plan": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        534,
+        566
+      ],
+      "decorated_source_sha256": "d7ba15f12a51ce41d263a059d214a241c406d7084aca90f8e5438fa2a2f7d4b1",
+      "proposal_function_sha256": "f1e7b43d97bee5bd267e86f4743f854e23cb4e0de153668a81f42e92546d9d4f",
+      "decorated_normalized_sha256": "98cbf336102900bb06b6b73e63d38f16b4e1e601c21cffe33d99795e3d303003"
+    },
+    "test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        569,
+        587
+      ],
+      "decorated_source_sha256": "df6f07c8df56d74da8f0eabf17ed994b39234a6c7f6b2fc42a50d7038e93a16c",
+      "proposal_function_sha256": "1258f4c750614cc5cc410a35a5116bc6b3f435c3d1a6d7acbb1c6450e6544d22",
+      "decorated_normalized_sha256": "081ab8765c8cd605cfc25daccf98e485f0a6f081930b7d537b75a7f4008e23af"
+    },
+    "test_aut2_review_paid_proof_failure_precedes_first_receipt": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_3.py",
+      "original_lines": [
+        688,
+        717
+      ],
+      "decorated_source_sha256": "8fb1ddd484a2e75e964667301dd8a00a78b57b3dc65de3469b28dc6d4d565a80",
+      "proposal_function_sha256": "d5545167412f9580ad356840ba48e0c5b272562ccc6abf3d6b9c801ba5751357",
+      "decorated_normalized_sha256": "1e00e54e157cd6da6407784eae139db90036af990e5e24df5acc664bc1d3c79d"
+    },
+    "test_local_executor_requires_explicit_flag_and_installs_tripwire": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        327,
+        341
+      ],
+      "decorated_source_sha256": "31d19a53a05063932578215afcee684dba66125f1a775a536444a35ea881ef0a",
+      "proposal_function_sha256": "46471e9c7bf60738f5291c9717e4170c7061960c557d5f8554573a98c7458a21",
+      "decorated_normalized_sha256": "360fc604679c4a5125e8ca86da22bd9b2599244a58db44c7ca1e8232bd1995f5"
+    },
+    "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        344,
+        377
+      ],
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f",
+      "proposal_function_sha256": "02e26442ae242326ca4b7c436eb7dcb547fa3e14bd4bcace2fcaabea25607661",
+      "decorated_normalized_sha256": "ab507cbcd7937d56292055719daf9d03e6f4ddc0888802f64a356c11c72b054d"
+    },
+    "test_recovery_reuses_generic_repair_and_split_semantics": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        380,
+        388
+      ],
+      "decorated_source_sha256": "6b83dc6ad5856c9a89ff96759c7746baeb3c182daef2aaf3e3dbc6e90225997b",
+      "proposal_function_sha256": "49eee4235258d32bdf4244a5f178f8669cb5b52ebb81223996c291c00b355eb7",
+      "decorated_normalized_sha256": "057bbe5dcd547513a2c6963413cfc1c33ec6c9b19118c68fb44075285417c33f"
+    },
+    "test_relative_production_evidence_paths_remain_exact_and_replayable": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        391,
+        398
+      ],
+      "decorated_source_sha256": "ea4d00b474992fbbd4f5095d9286129a47e80ac9016599e34f62a0ef88d7bc43",
+      "proposal_function_sha256": "11737248a8bb8b620debd14436e9b30afc11e06b3e8cd46e24c747287a75f2dc",
+      "decorated_normalized_sha256": "cbfa751450bb2d17a1725bd5f481c6a733273002d5094ae68efb821507e30789"
+    },
+    "test_fresh_baseline_ownership_markdown_case_and_noops": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        449,
+        462
+      ],
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb",
+      "proposal_function_sha256": "43fabe5782ddb96d0124ed0e99e5e6285e8a5c047d5c35d680f41486e211ae60",
+      "decorated_normalized_sha256": "ad4fd5dc6bfeb5b37121690f9d25c7efaf2bd6e870ce835c539aa32333548ed5"
+    },
+    "test_aut2_invalid_freshness_never_certifies_editorial_copy": {
+      "module": "tests/test_goat_periodic_audit_finalization_part_4.py",
+      "original_lines": [
+        666,
+        685
+      ],
+      "decorated_source_sha256": "601e6a27ed1205a2493a2d30ead9d5e678bfcd319f27c9b60f88ffdb6e788056",
+      "proposal_function_sha256": "27fac596ab4d16774606b1fe61d6fc160925ca99fa095df4f86c024c8e5643dd",
+      "decorated_normalized_sha256": "f7cf9d850432794bfdc9a9c1366b14b3d409057441bdb784e7b09f84b4055f1b"
+    }
+  },
+  "cases": [
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-plan-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-plan-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-False-plan-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-state-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-state-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-False-state-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-result-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-result-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-False-result-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-backup-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-backup-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-False-backup-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-reconcile-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-False-reconcile-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-False-reconcile-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-plan-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-plan-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-True-plan-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-state-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-state-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-True-state-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-result-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-result-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-True-result-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-backup-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-backup-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-True-backup-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-reconcile-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[False-True-reconcile-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[False-True-reconcile-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-plan-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-plan-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-False-plan-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-state-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-state-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-False-state-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-result-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-result-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-False-result-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-backup-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-backup-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-False-backup-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-reconcile-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-False-reconcile-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-False-reconcile-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-plan-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-plan-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-True-plan-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-state-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-state-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-True-state-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-result-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-result-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-True-result-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-backup-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-backup-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-True-backup-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-reconcile-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh[True-True-reconcile-mixed]",
+      "function": "test_missing_transaction_evidence_after_edit_cannot_be_reclassified_as_fresh",
+      "parameter_identity": "[True-True-reconcile-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "18f34cae0b5dd3b92ede3b87165c7298933917705530ad145ec25427f84fa523"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed]",
+      "function": "test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail",
+      "parameter_identity": "[mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f95eb5e6d212eefdfe6b2183b04401ec76f3fa741aee41e38ffc80ca2be1fead"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed_competing]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed_competing]",
+      "function": "test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail",
+      "parameter_identity": "[mixed_competing]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f95eb5e6d212eefdfe6b2183b04401ec76f3fa741aee41e38ffc80ca2be1fead"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed_contextual]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail[mixed_contextual]",
+      "function": "test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail",
+      "parameter_identity": "[mixed_contextual]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f95eb5e6d212eefdfe6b2183b04401ec76f3fa741aee41e38ffc80ca2be1fead"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_audit_mixed_old_and_preferred_baseline_finalizes_once[mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_fresh_audit_mixed_old_and_preferred_baseline_finalizes_once[mixed]",
+      "function": "test_fresh_audit_mixed_old_and_preferred_baseline_finalizes_once",
+      "parameter_identity": "[mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "d20638b5edfd0866084ba5c1c69dad4d9193c0d7c5eb38e0a5253766a4a607aa"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_out_of_order_chapter_after_prefix_blocks_local_reconciliation[mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_out_of_order_chapter_after_prefix_blocks_local_reconciliation[mixed_multi]",
+      "function": "test_out_of_order_chapter_after_prefix_blocks_local_reconciliation",
+      "parameter_identity": "[mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "531029da0b12ec05b4c398141274c9c7692fc89382a8d11ebedb53117dc01add"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_direct_generic_aggregate_unchanged",
+      "new": "tests/test_goat_periodic_audit_finalization_part_1.py::test_direct_generic_aggregate_unchanged",
+      "function": "test_direct_generic_aggregate_unchanged",
+      "parameter_identity": "",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "dbbb22126b4202c8676c6e585fab99c8207b813b56c50b4594c6d6f7eee534f3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[intent-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[intent-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[intent-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[plan-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[plan-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[plan-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[backup-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[backup-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[backup-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[chapter-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[chapter-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[chapter-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[APPLIED-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[APPLIED-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[APPLIED-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[result-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[result-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[result-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[FINALIZED-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[FINALIZED-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[FINALIZED-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[audit-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[audit-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[audit-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[progress-mixed_multi]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once[progress-mixed_multi]",
+      "function": "test_fresh_baseline_crash_prefixes_preserve_manifest_and_account_once",
+      "parameter_identity": "[progress-mixed_multi]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "176d825a069e907f1692f9fdaaa67af88ad582c3520fa6a387d956ee8c72ae36"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[invalidation-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[invalidation-mixed]",
+      "function": "test_aut2_crash_invalidation_precedes_edits_and_progress_last",
+      "parameter_identity": "[invalidation-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c16cf234938e6a4d76dab27f61434f766d7fd602fed8ded4f3ffed2238aeaf92"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[first_chapter-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[first_chapter-mixed]",
+      "function": "test_aut2_crash_invalidation_precedes_edits_and_progress_last",
+      "parameter_identity": "[first_chapter-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c16cf234938e6a4d76dab27f61434f766d7fd602fed8ded4f3ffed2238aeaf92"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[glossary-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[glossary-mixed]",
+      "function": "test_aut2_crash_invalidation_precedes_edits_and_progress_last",
+      "parameter_identity": "[glossary-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c16cf234938e6a4d76dab27f61434f766d7fd602fed8ded4f3ffed2238aeaf92"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[progress-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_aut2_crash_invalidation_precedes_edits_and_progress_last[progress-mixed]",
+      "function": "test_aut2_crash_invalidation_precedes_edits_and_progress_last",
+      "parameter_identity": "[progress-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c16cf234938e6a4d76dab27f61434f766d7fd602fed8ded4f3ffed2238aeaf92"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_authoritative_accounting_rejects_component_or_numeric_drift[mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_authoritative_accounting_rejects_component_or_numeric_drift[mixed]",
+      "function": "test_authoritative_accounting_rejects_component_or_numeric_drift",
+      "parameter_identity": "[mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_authoritative_accounting_rejects_component_or_numeric_drift[metadata]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_authoritative_accounting_rejects_component_or_numeric_drift[metadata]",
+      "function": "test_authoritative_accounting_rejects_component_or_numeric_drift",
+      "parameter_identity": "[metadata]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_authoritative_accounting_rejects_component_or_numeric_drift[numeric]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_authoritative_accounting_rejects_component_or_numeric_drift[numeric]",
+      "function": "test_authoritative_accounting_rejects_component_or_numeric_drift",
+      "parameter_identity": "[numeric]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_authoritative_accounting_rejects_component_or_numeric_drift[usage]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_authoritative_accounting_rejects_component_or_numeric_drift[usage]",
+      "function": "test_authoritative_accounting_rejects_component_or_numeric_drift",
+      "parameter_identity": "[usage]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_authoritative_accounting_rejects_component_or_numeric_drift[duplicate]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_authoritative_accounting_rejects_component_or_numeric_drift[duplicate]",
+      "function": "test_authoritative_accounting_rejects_component_or_numeric_drift",
+      "parameter_identity": "[duplicate]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "19cd330c1d5ebfc484756ba2c17fd79ae12386810e9b191e3e0cfff657421c57"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_zero_candidate_goat_audit_no_fabricated_paid_accounting",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_zero_candidate_goat_audit_no_fabricated_paid_accounting",
+      "function": "test_zero_candidate_goat_audit_no_fabricated_paid_accounting",
+      "parameter_identity": "",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "4da775d5913722697f35ab81989def772a5c714cd2519d1adad9e38b7268f371"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_accounting_failure_before_any_prose_transaction",
+      "new": "tests/test_goat_periodic_audit_finalization_part_2.py::test_accounting_failure_before_any_prose_transaction",
+      "function": "test_accounting_failure_before_any_prose_transaction",
+      "parameter_identity": "",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "dfe411d4f7fdcbe8f0eabfbc9c2b98871609e555d19c70382e0ad9772f1f03c5"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[missing_tx]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[missing_tx]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[missing_tx]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[chapter]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[chapter]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[chapter]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[backup]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[backup]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[backup]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[result]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[result]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[result]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[state]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[state]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[state]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[extra_prose]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[extra_prose]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[extra_prose]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[glossary]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[glossary]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[glossary]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[checkpoint]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[checkpoint]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[checkpoint]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[candidate]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[candidate]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[candidate]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[journal]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[journal]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[journal]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[started]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[started]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[started]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[uncertain]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[uncertain]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[uncertain]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[corrupt]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[corrupt]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[corrupt]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[window]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[window]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[window]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[progress]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[progress]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[progress]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[continuity]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[continuity]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[continuity]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_drift_fails_closed[policy]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_recovery_drift_fails_closed[policy]",
+      "function": "test_recovery_drift_fails_closed",
+      "parameter_identity": "[policy]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c8d7502270834ece97f2873b1c504f955709ee1c7d7eb3f74a31f5ff6be23bb3"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[glossary]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[glossary]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[glossary]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[issues]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[issues]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[issues]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[history]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[history]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[history]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[audit]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[audit]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[audit]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[backup]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[backup]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[backup]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_every_local_publication_prefix_reconciles_without_duplicates[progress]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_every_local_publication_prefix_reconciles_without_duplicates[progress]",
+      "function": "test_every_local_publication_prefix_reconciles_without_duplicates",
+      "parameter_identity": "[progress]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "f2613fb1b2a982111ab5e48f171db497cf009e52caa9cf4301dc9a6d5a4a55a0"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[False-False]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[False-False]",
+      "function": "test_legacy_intent_preserves_completion_but_cannot_regenerate_plan",
+      "parameter_identity": "[False-False]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "d7ba15f12a51ce41d263a059d214a241c406d7084aca90f8e5438fa2a2f7d4b1"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[False-True]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[False-True]",
+      "function": "test_legacy_intent_preserves_completion_but_cannot_regenerate_plan",
+      "parameter_identity": "[False-True]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "d7ba15f12a51ce41d263a059d214a241c406d7084aca90f8e5438fa2a2f7d4b1"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[True-False]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[True-False]",
+      "function": "test_legacy_intent_preserves_completion_but_cannot_regenerate_plan",
+      "parameter_identity": "[True-False]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "d7ba15f12a51ce41d263a059d214a241c406d7084aca90f8e5438fa2a2f7d4b1"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[True-True]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_legacy_intent_preserves_completion_but_cannot_regenerate_plan[True-True]",
+      "function": "test_legacy_intent_preserves_completion_but_cannot_regenerate_plan",
+      "parameter_identity": "[True-True]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "d7ba15f12a51ce41d263a059d214a241c406d7084aca90f8e5438fa2a2f7d4b1"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_live_shaped_local_recovery_and_already_finalized",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_live_shaped_local_recovery_and_already_finalized",
+      "function": "test_live_shaped_local_recovery_and_already_finalized",
+      "parameter_identity": "",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "c6773f0f4dd6a3fae90b7659fcadb65c453f3a2bb14ff2defb0d66a023b2809c"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_review_paid_proof_failure_precedes_first_receipt[checkpoint-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_aut2_review_paid_proof_failure_precedes_first_receipt[checkpoint-mixed]",
+      "function": "test_aut2_review_paid_proof_failure_precedes_first_receipt",
+      "parameter_identity": "[checkpoint-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "8fb1ddd484a2e75e964667301dd8a00a78b57b3dc65de3469b28dc6d4d565a80"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_review_paid_proof_failure_precedes_first_receipt[paid_journal-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_aut2_review_paid_proof_failure_precedes_first_receipt[paid_journal-mixed]",
+      "function": "test_aut2_review_paid_proof_failure_precedes_first_receipt",
+      "parameter_identity": "[paid_journal-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "8fb1ddd484a2e75e964667301dd8a00a78b57b3dc65de3469b28dc6d4d565a80"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix[mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_3.py::test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix[mixed]",
+      "function": "test_intent_before_plan_with_orphan_checkpoint_is_not_untouched_prefix",
+      "parameter_identity": "[mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "df6f07c8df56d74da8f0eabf17ed994b39234a6c7f6b2fc42a50d7038e93a16c"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_plan]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_plan]",
+      "function": "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction",
+      "parameter_identity": "[after_plan]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_backup]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_backup]",
+      "function": "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction",
+      "parameter_identity": "[after_backup]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_chapter]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_chapter]",
+      "function": "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction",
+      "parameter_identity": "[after_chapter]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_applied]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_applied]",
+      "function": "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction",
+      "parameter_identity": "[after_applied]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_result]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_shared_finalizer_reconciles_interrupted_new_pr155_transaction[after_result]",
+      "function": "test_shared_finalizer_reconciles_interrupted_new_pr155_transaction",
+      "parameter_identity": "[after_result]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "3a81c20c1873306cc444559a00261907069efb93e0eeb56a113d92b55fd5855f"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_multi-2]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_multi-2]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_multi-2]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_case-1]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_case-1]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_case-1]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_nested-1]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_nested-1]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_nested-1]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_competing-0]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_competing-0]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_competing-0]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_contextual-0]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_contextual-0]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_contextual-0]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_noop-0]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_fresh_baseline_ownership_markdown_case_and_noops[mixed_noop-0]",
+      "function": "test_fresh_baseline_ownership_markdown_case_and_noops",
+      "parameter_identity": "[mixed_noop-0]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "39c00e426b1b12d2030300b737db013b32ee000b49c53c64e311e22af3d994eb"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[malformed-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[malformed-mixed]",
+      "function": "test_aut2_invalid_freshness_never_certifies_editorial_copy",
+      "parameter_identity": "[malformed-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "601e6a27ed1205a2493a2d30ead9d5e678bfcd319f27c9b60f88ffdb6e788056"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[missing-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[missing-mixed]",
+      "function": "test_aut2_invalid_freshness_never_certifies_editorial_copy",
+      "parameter_identity": "[missing-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "601e6a27ed1205a2493a2d30ead9d5e678bfcd319f27c9b60f88ffdb6e788056"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[tampered-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[tampered-mixed]",
+      "function": "test_aut2_invalid_freshness_never_certifies_editorial_copy",
+      "parameter_identity": "[tampered-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "601e6a27ed1205a2493a2d30ead9d5e678bfcd319f27c9b60f88ffdb6e788056"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[foreign-mixed]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_aut2_invalid_freshness_never_certifies_editorial_copy[foreign-mixed]",
+      "function": "test_aut2_invalid_freshness_never_certifies_editorial_copy",
+      "parameter_identity": "[foreign-mixed]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "601e6a27ed1205a2493a2d30ead9d5e678bfcd319f27c9b60f88ffdb6e788056"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_reuses_generic_repair_and_split_semantics[json_repair]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_recovery_reuses_generic_repair_and_split_semantics[json_repair]",
+      "function": "test_recovery_reuses_generic_repair_and_split_semantics",
+      "parameter_identity": "[json_repair]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "6b83dc6ad5856c9a89ff96759c7746baeb3c182daef2aaf3e3dbc6e90225997b"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_reuses_generic_repair_and_split_semantics[semantic_correction]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_recovery_reuses_generic_repair_and_split_semantics[semantic_correction]",
+      "function": "test_recovery_reuses_generic_repair_and_split_semantics",
+      "parameter_identity": "[semantic_correction]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "6b83dc6ad5856c9a89ff96759c7746baeb3c182daef2aaf3e3dbc6e90225997b"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_recovery_reuses_generic_repair_and_split_semantics[split]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_recovery_reuses_generic_repair_and_split_semantics[split]",
+      "function": "test_recovery_reuses_generic_repair_and_split_semantics",
+      "parameter_identity": "[split]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "6b83dc6ad5856c9a89ff96759c7746baeb3c182daef2aaf3e3dbc6e90225997b"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_relative_production_evidence_paths_remain_exact_and_replayable[relative]",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_relative_production_evidence_paths_remain_exact_and_replayable[relative]",
+      "function": "test_relative_production_evidence_paths_remain_exact_and_replayable",
+      "parameter_identity": "[relative]",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "ea4d00b474992fbbd4f5095d9286129a47e80ac9016599e34f62a0ef88d7bc43"
+    },
+    {
+      "old": "tests/test_goat_periodic_audit_finalization.py::test_local_executor_requires_explicit_flag_and_installs_tripwire",
+      "new": "tests/test_goat_periodic_audit_finalization_part_4.py::test_local_executor_requires_explicit_flag_and_installs_tripwire",
+      "function": "test_local_executor_requires_explicit_flag_and_installs_tripwire",
+      "parameter_identity": "",
+      "original_source_sha256": "2efc63b46eab54fd4890b445966b5c29cebec0ac20bc79e8bd8128cb39dfead0",
+      "decorated_source_sha256": "31d19a53a05063932578215afcee684dba66125f1a775a536444a35ea881ef0a"
+    }
+  ],
+  "original_git_blob_sha256": "1d444b8184e8175e30a3075b9ad22497b5ecbf6f4c0af7e5371560763b2c1070",
+  "original_import_header_lines": 26,
+  "support_normalized_sha256": "148e2982b7a6313273fda839b875f8ad64cb16755c6f903e17370ad1639c7383",
+  "external_imports": [
+    {
+      "module": "tests/test_goat_batch_plan.py",
+      "original_line": 16,
+      "names": [
+        "incident as audit_incident"
+      ]
+    },
+    {
+      "module": "tests/test_goat_batch_plan.py",
+      "original_line": 272,
+      "names": [
+        "execute",
+        "local_module"
+      ]
+    }
+  ],
+  "helper_equivalence": "Exact original 166-line module prefix; imports, constants, module marker, function-scoped fixture and helper bodies retained byte-for-byte. All original imports/constants/markers also retained in every part. Only the two external import module paths change; fixture aliases and helper names are unchanged.",
+  "classification_comparison": {
+    "baseline_git_blob_sha256": "f35b916b049d4bd05bbd5f51d3242cb2ab4f74fe4cad28ebaf1d3cdf37d01586",
+    "updated_normalized_sha256": "26bc4766a7b105b8fd92add84b1555ddd42e3e8f1782049a0c24e17f56ba00f3",
+    "original_metadata_preserved_except_replaced_module": true,
+    "public_modules_before": 192,
+    "public_modules_after": 197,
+    "private_modules_unchanged": 2,
+    "historical_modules_unchanged": 7,
+    "deselection_list_and_reasons_unchanged": true,
+    "deselection_compact_json_sha256": "792817b3b0524eb25d6bb0e9267327ce85911c5c7ea9058cda53b979f708fc32",
+    "mandatory_dpapi_node": "tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip"
+  },
+  "protected_production_source_sha256": {
+    "historical_reconciliation.py": "377422374467a89b73fae7a90317b12abf697ff23d8b5ae29b1efbd41a852344",
+    "production_periodic_audit_finalization.py": "fd2ebb7c14537f118e9e78bbfede91c9006ecd64d158c8ef2739aea447994e4d",
+    "production_historical_lineage.py": "9a8e93e8762a59487c43879773c8608296bfacb48eda3ea427e23ff31527603d",
+    "goat_periodic_audit_finalize_plan.py": "e85af0e0153827c89ceded45c51ec6a065a0032ba3b1db5621fde9edb103aad8"
+  }
+}

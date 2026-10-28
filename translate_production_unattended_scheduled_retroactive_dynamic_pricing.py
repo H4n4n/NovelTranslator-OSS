@@ -568,6 +568,7 @@ def apply_retroactive_replacements(
 ):
     """Plan and reconcile exact owned historical spans locally, with durable evidence."""
     from retroactive_transactions import execute_retroactive_transaction
+    from types import SimpleNamespace
 
     result = execute_retroactive_transaction(
         novel_id=ACTIVE_NOVEL_CONFIG.id if ACTIVE_NOVEL_CONFIG else "legacy_single_novel",
@@ -576,6 +577,7 @@ def apply_retroactive_replacements(
         safe_categories=ACTIVE_PROFILE.retroactive_safe_categories,
         committed_chapters=progress.get("completed", []), chapter_map=chapter_map,
         output_dir=OUTPUT_DIR, retroactive_dir=RETROACTIVE_DIR, backup_dir=BACKUP_DIR,
+        writer_context=SimpleNamespace(**globals()),
     )
     print(f"Retroactive {audit_label}: rules={result['replacement_rules_considered']}, "
           f"category eligible={result['rules_eligible_by_category']}, "
@@ -587,14 +589,15 @@ def apply_retroactive_replacements(
     return result
 
 
-def apply_known_glossary_fixes():
-    staged_glossary = copy.deepcopy(glossary)
+def _prepare_known_glossary_fixes(glossary_data, *, profile, ming_compatibility):
+    """Pure existing policy, also rederived before completing a saved witness."""
+    staged_glossary = copy.deepcopy(glossary_data)
     entries = staged_glossary["entries"]
     changed = []
     removed = []
     retroactive_rules = []
 
-    if MING_COMPATIBILITY_MODE and "蓋州游擊" in entries:
+    if ming_compatibility and "蓋州游擊" in entries:
         old_english = entries[
             "蓋州游擊"
         ].get(
@@ -650,7 +653,7 @@ def apply_known_glossary_fixes():
                 "蓋州游擊"
             )
 
-    if MING_COMPATIBILITY_MODE and "三十六計" in entries:
+    if ming_compatibility and "三十六計" in entries:
         old_english = entries[
             "三十六計"
         ].get(
@@ -718,7 +721,7 @@ def apply_known_glossary_fixes():
                     "",
                 )
             )
-            not in ACTIVE_PROFILE.formal_named_categories
+            not in profile.formal_named_categories
         ):
             continue
 
@@ -738,7 +741,7 @@ def apply_known_glossary_fixes():
                         "chinese": chinese,
                         "old_english": old_english,
                         "new_english": new_english,
-                        "category": "technique",
+                        "category": normalized_category_local(entry.get("category", "")),
                         "reason": (
                             "Normalize formal technique name "
                             "to user-preferred capitalization."
@@ -789,7 +792,7 @@ def apply_known_glossary_fixes():
                         chinese
                     )
 
-    if MING_COMPATIBILITY_MODE and "黑虎掏心" in entries:
+    if ming_compatibility and "黑虎掏心" in entries:
         old_english = entries[
             "黑虎掏心"
         ].get(
@@ -856,7 +859,7 @@ def apply_known_glossary_fixes():
         "倒夜壶",
         "西洋鏡",
         "西洋镜",
-    } if MING_COMPATIBILITY_MODE else set()
+    } if ming_compatibility else set()
 
     for term in remove_terms:
         if term in entries:
@@ -867,6 +870,15 @@ def apply_known_glossary_fixes():
                 term
             )
 
+    return staged_glossary, changed, removed, retroactive_rules
+
+
+def apply_known_glossary_fixes():
+    from types import SimpleNamespace
+    from production_standalone_lineage import recover_known_fix, apply_known_fix
+    recover_known_fix(SimpleNamespace(**globals()))
+    staged_glossary, changed, removed, retroactive_rules = _prepare_known_glossary_fixes(
+        glossary, profile=ACTIVE_PROFILE, ming_compatibility=MING_COMPATIBILITY_MODE)
     if changed or removed:
         print()
         print("=" * 70)
@@ -889,17 +901,8 @@ def apply_known_glossary_fixes():
 
     # Apply safe exact fixes to previously committed English chapters.
     if retroactive_rules:
-        apply_retroactive_replacements(
-            "startup",
-            progress.get(
-                "last_completed",
-                0,
-            ),
-            retroactive_rules,
-            staged_glossary=staged_glossary,
-        )
-
-    if changed or removed:
+        apply_known_fix(SimpleNamespace(**globals()), staged_glossary, retroactive_rules)
+    elif changed or removed:
         save_json(GLOSSARY_FILE, staged_glossary)
         glossary.clear()
         glossary.update(staged_glossary)

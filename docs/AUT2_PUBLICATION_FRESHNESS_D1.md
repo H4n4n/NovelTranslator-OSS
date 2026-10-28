@@ -315,8 +315,9 @@ or pointer, checks the generated glossary and pointer, and independently require
 `current_generation()` to return CURRENT. Synthetic review evidence remains
 explicit; no semantic review bypass was added.
 
-The CI shard schedule is unchanged. Its exact test-source freshness assertion
-currently fails because the corrected fixtures differ from the source hashes in
+At commit `37b4e1b`, the CI shard schedule remained unchanged. Its exact
+test-source freshness assertion failed because the corrected fixtures differed
+from the source hashes in
 the retained timing evidence; the other six metadata checks pass. This is a
 remaining CI metadata blocker, not a claimed green CI result. No timing hash was
 relabelled, old weight reduced, or projected headroom increased. Hosted timing
@@ -343,4 +344,111 @@ of the prior integration JUnit files are retained under system TEMP at
 are recorded there separately to avoid self-referential commit identities.
 No private novel, credential, paid provider, GitHub issue or push operation was
 used. The original D1 branch remains at `c10f0b9aa13abc133c2b4fc7da560fa64506becf`.
-Hermes independent review and hosted timing remain outstanding.
+Hermes independent review and hosted timing were outstanding at that commit.
+
+## Final D1/D1.1 CI qualification
+
+Hermes accepted BLOCKER-1 and independently confirmed fresh regeneration and
+CURRENT recognition before this qualification repair. The readiness fixture now
+receives the exact workspace from the real regeneration call at its existing
+pre-EPUB interruption boundary, instead of repeating a complete `_inputs()` proof
+solely to calculate that workspace's path. Every test still generates its own
+isolated project. Shared generation copies would require rebinding absolute
+paths in normalization application reports; removing the redundant proof avoids
+that extra fixture machinery. No production validator, readiness gate, glossary
+snapshot, negative test, or fresh-regeneration assertion is replaced or bypassed.
+
+One complete Windows Python 3.14.4 zero-provider measurement retained the exact
+same 317 case identities as the previous corrected run: **316 passed, 1 expected
+private opt-in skip**, in 941.05 seconds (JUnit suite: 940.973 seconds).
+
+| Module | Previous active weight | Previous unoptimized case sum | Fresh case sum | New weight |
+| --- | ---: | ---: | ---: | ---: |
+| Readiness | 505.011 s | 522.523 s | 535.119 s | 535.499 s |
+| EPUB | 386.943 s | 386.315 s | 405.474 s | 405.854 s |
+
+The complete measured 0.380-second suite overhead is included in EACH new
+module weight. The EPUB weight is also bounded below by its prior active weight.
+This run did not demonstrate a runtime gain from the smaller fixture setup;
+there is no timing discount or estimate substituted for these actual results.
+Prior measurement records, original hosted provenance and all other module
+weights remain intact. The exact current module hashes and new JUnit are bound
+by two appended measurement records.
+
+The unchanged three-shard measured-LPT allocator gives:
+
+| Shard | Nominal seconds | 25% plus 60 s | 30% plus 60 s | Deadline margin |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 3431.8185225 | 4349.773 | 4521.364 | -21.364 s |
+| 1 | 3431.8134749 | 4349.767 | 4521.358 | -21.358 s |
+| 2 | 3431.8142737 | 4349.768 | 4521.359 | -21.359 s |
+
+The relevant metadata selection records **6 passed, 1 failed**. Exact source
+freshness now passes; the sole failure is the retained assertion that maximum
+30% sensitivity must be below the unchanged 4,500-second deadline. Compilation
+passes for the readiness, EPUB and CI metadata test modules. Public
+classification, all 15 mandatory exclusions, factors and assertions are
+unchanged apart from numerical measurement/allocation pins.
+
+The three-shard candidate remained blocked and **uncommitted**. Its starting HEAD
+was `37b4e1b1c8b5a5ace273266989b73e432b4549c9`, tree
+`419c4be2918810928a1c5a75f1594c63ca84ae59`. The smallest next fixture candidate
+is a real module-scoped baseline at a fixed path, restored as independent bytes
+for each sequential test; that keeps absolute report paths valid without
+fabricating evidence. It needs separate fixture work and guarded remeasurement.
+At least 49.293 aggregate nominal seconds must be removed before balancing
+effects; repartitioning alone cannot remove an aggregate overload. That attempt introduced no fourth
+shard, relaxed deadline, changed factor or coverage reduction.
+
+The sole fresh publication measurement, metadata JUnit/console output,
+pre-run source hashes, old schedule, projection calculations and publication
+guard result are retained under system TEMP at
+`nt-aut2-d1-ci-qualification-20261028-a/`. No private novel, paid provider,
+credential, GitHub write or push was used.
+
+## Authorized four-shard L3 qualification
+
+The user authorized four public Windows L3 shards after the preceding truthful
+three-shard capacity failure. The starting staged tree was
+`cfe62d7fc031583a2963e73b0ad72dc0e4780d97` at committed HEAD
+`37b4e1b1c8b5a5ace273266989b73e432b4549c9`. All staged work and measurements are
+preserved. No further publication fixture optimization was made.
+
+The existing measured-LPT allocator now has four buckets. The qualification
+selector and runner accept four for L3 and retain one for L1/L2; the workflow
+matrix is 0–3. Exact source/run-bound manifests and gate artifact reconciliation
+continue to require every selected shard, including shard 3. Obsolete three-shard
+requests and missing evidence for any of the four shards fail closed.
+
+The retained fresh publication JUnit still matches BOTH exact staged test-module
+hashes and its recorded evidence hashes: **316 passed, 1 expected private opt-in
+skip**, with all 317 case identities retained. Those cases were not rerun. Active
+weights remain 535.499 seconds for readiness and 405.854 seconds for EPUB,
+including the previously measured overhead. Every other weight, original hosted
+measurement, historical record, classification and mandatory deselection remains
+unchanged.
+
+| Shard | Modules | Nominal seconds | 25% plus 60 s | 30% plus 60 s | Deadline margin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1 | 2751.5100000 | 3499.388 | 3636.963 | 863.037 s |
+| 1 | 66 | 2514.6485398 | 3203.311 | 3329.043 | 1170.957 s |
+| 2 | 66 | 2514.6471875 | 3203.309 | 3329.041 | 1170.959 s |
+| 3 | 65 | 2514.6405438 | 3203.301 | 3329.033 | 1170.967 s |
+
+The 4,500-second execution deadline, variability factors and 60-second allowance
+are unchanged. These local projections clear the deadline; they are not hosted
+runtime qualification. Final source/commit/tree identities, reused functional
+proof and fresh CI reliability/guard evidence are retained under system TEMP at
+`nt-aut2-d1-four-shards-20261028-a/`. No private novels, paid providers, GitHub
+writes or push are authorized by this correction.
+
+Fresh guarded Windows Python 3.14.4 CI reliability validation passed **283 tests,
+zero skips**, in 105.43 seconds. This includes four-shard partition/source-binding
+pins, all 15 unchanged deselections, rejection of obsolete three-shard requests,
+real temporary-Git L1/L2/L3 decision → guarded runner → gate paths, and rejection
+of missing evidence for each required shard. L1/L2 remain single-shard.
+Compilation passed for both CI scripts and both changed test modules. Functional
+publication results remain the retained **316 passed, 1 expected skip**; they are
+reported separately and were not rerun. The prior three-shard capacity blocker
+is resolved locally; hosted Windows timing remains unverified pending independent
+review and a separately authorized push.

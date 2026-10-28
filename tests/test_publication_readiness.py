@@ -17,17 +17,20 @@ from test_production_lifecycle import aut1_engine
 
 def prepare_existing_evidence(project):
     """Run the real locked regeneration path up to the EPUB boundary."""
-    inputs = generation._inputs(project)
-    final = project.root / generation.GENERATIONS / canonical_hash(inputs) / "final"
-    workspace = generation.PublicationWorkspace(project, final)
+    # Regeneration proves its inputs and supplies the exact prepared workspace;
+    # do not repeat that complete source proof merely to predict its path.
+    workspace = None
 
-    def stop_before_epub(project):
+    def stop_before_epub(prepared):
+        nonlocal workspace
+        workspace = prepared
         raise InterruptedError("synthetic pre-EPUB stop")
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(epub, "build_publication_epub", stop_before_epub)
         with pytest.raises(InterruptedError, match="synthetic pre-EPUB stop"):
             generation._regenerate_locked(project)
+    assert workspace is not None
     return workspace
 
 

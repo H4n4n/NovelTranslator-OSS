@@ -1,13 +1,35 @@
 # Public CI reliability
 
-L3 retains all three mandatory PUBLIC Windows Python 3.14.4 shards. Private and
+L3 requires four mandatory PUBLIC Windows Python 3.14.4 shards. Private and
 historical modules remain excluded, not passed. The zero-provider wrapper,
 explicit DPAPI deselection, external temporary roots, publication history gate,
 credential exclusion and read-only workflow permissions are retained.
 
+## Active four-shard allocation
+
+`scripts/run_public_tests.py` uses `L3_SHARDS = 4` with the existing descending
+measured-cost/path ordering and least-load/bucket-index tie breaks. The CLI
+accepts one shard or four; obsolete three-shard plans are rejected. L1/L2 still
+select one shard. L3 decisions, workflow matrix indices 0–3, selection manifests,
+and required exact-run evidence all cover four shards.
+
+| Shard | Modules | Nominal seconds | 25% plus 60 s | 30% plus 60 s | Deadline margin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1 | 2751.5100000 | 3499.388 | 3636.963 | 863.037 s |
+| 1 | 66 | 2514.6485398 | 3203.311 | 3329.043 | 1170.957 s |
+| 2 | 66 | 2514.6471875 | 3203.309 | 3329.041 | 1170.959 s |
+| 3 | 65 | 2514.6405438 | 3203.301 | 3329.033 | 1170.967 s |
+
+Every public module belongs to exactly one shard. All 15 mandatory deselections,
+2 private and 7 historical classifications, existing weights and measurement
+records remain unchanged. Original hosted provenance retains its three recorded
+shards; only the active allocation and derived projections use four. Factors
+remain 25%/30% plus 60 seconds per shard, with a 4,500-second execution deadline.
+These are local projections; hosted timing still requires an authorized run.
+
 ## Original hosted scheduling evidence
 
-The current complete allocation is documented in [PR 15 public CI repartition](AUT2_PUBLIC_CI_REPARTITION.md): 197 public modules, source-bound local refreshes, and conservative per-shard budgets. The tables and projections below retain the original hosted scheduling evidence; they are not current shard estimates. The runner algorithm, three shards and 4500-second execution deadline remain unchanged.
+The active allocation contains 198 public modules across four shards, with the retained source-bound publication measurements documented in [D1/D1.1 qualification](AUT2_PUBLICATION_FRESHNESS_D1.md). [PR 15 public CI repartition](AUT2_PUBLIC_CI_REPARTITION.md) records the earlier three-shard allocation. The tables and projections in this historical section retain original hosted evidence; they are not current shard estimates. The deterministic measured-LPT algorithm and 4,500-second execution deadline are unchanged.
 
 The version-2 `tests/public_shard_schedule.json` uses complete per-module
 collection + setup/call/teardown seconds from successful hosted run
@@ -48,8 +70,8 @@ each module in the least-loaded bucket, with bucket-index ties. The selector
 recomputes that allocation and rejects missing/unknown/invalid weights, stale
 measurement identity or altered membership/order. It never measures file sizes.
 Regression assertions pin the measured-weight digest and reviewed partitions.
-All 191 public modules, 2 private / 7 historical exclusions and all 15 node
-deselections are preserved. No test body, workload or safety guard is shortened.
+That original allocation covered 191 public modules, with 2 private / 7 historical
+exclusions and all 15 node deselections preserved. No test body, workload or safety guard is shortened.
 
 The projected maximum is **25m42s**, plus unallocated session overhead (about
 four seconds in the old run), versus the measured old **60m31s** session. That is
@@ -122,7 +144,7 @@ The default `run_public_tests.py` invocation still runs the complete public suit
 | --- | --- | --- |
 | L1 | Only modifications to `docs/DEVELOPMENT_TIPS.md`, a navigation-only page | Public CI synthetic controls and runtime hardening smoke |
 | L2 | Only modifications to the five reviewed paths below | The same smoke plus the union of their exact affected public test modules |
-| L3 | Every other case | All 191 public modules in the measured three-shard partition, exactly once |
+| L3 | Every other case | All 198 public modules in the measured four-shard partition, exactly once |
 
 The impact map is deliberately confined to advisory, read-only calibration:
 

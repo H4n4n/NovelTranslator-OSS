@@ -24,6 +24,7 @@ FRAME_PREFIX = b'[public-ci-record] '
 MAX_FRAME_BYTES = 65536
 MAX_EVENTS = 100000
 MAX_TELEMETRY_BYTES = 64 * 1024 * 1024
+L3_SHARDS = 4
 
 TIMING_SOURCE = {'run_id': 39696534289, 'attempt': 1,
                  'commit': 'ff7e0975dcf172038b2376e3b3c5730b37cfff56',
@@ -74,9 +75,9 @@ def load_classification():
 
 def measured_shards(weights):
     """Longest measured module first; path and bucket index break ties."""
-    buckets, loads = [[], [], []], [0.0, 0.0, 0.0]
+    buckets, loads = [[] for _ in range(L3_SHARDS)], [0.0] * L3_SHARDS
     for path in sorted(weights, key=lambda p: (-weights[p], p)):
-        shard = min(range(3), key=lambda i: (loads[i], i))
+        shard = min(range(L3_SHARDS), key=lambda i: (loads[i], i))
         buckets[shard].append(path)
         loads[shard] += weights[path]
     return buckets
@@ -84,13 +85,13 @@ def measured_shards(weights):
 
 def balanced_shards(public, shards):
     """Replay the reviewed Windows module timings; never infer costs from size."""
-    if shards not in (1, 3) or not public or len(set(public)) != len(public):
+    if shards not in (1, L3_SHARDS) or not public or len(set(public)) != len(public):
         raise ValueError('invalid or empty public partition')
     schedule = read_json(SCHEDULE)
     buckets = schedule.get('shards')
     if (schedule.get('version') != 2 or schedule.get('strategy') != 'measured-module-lpt-39696534289'
             or schedule.get('measurement_source') != TIMING_SOURCE
-            or not isinstance(buckets, list) or len(buckets) != 3):
+            or not isinstance(buckets, list) or len(buckets) != L3_SHARDS):
         raise ValueError('invalid or stale measured schedule')
     if not all(isinstance(b, list) and b and all(isinstance(p, str) for p in b) for b in buckets):
         raise ValueError('empty or malformed scheduled shard')
@@ -103,7 +104,7 @@ def balanced_shards(public, shards):
         raise ValueError('missing or invalid measured module timings')
     if buckets != measured_shards(weights):
         raise ValueError('schedule differs from measured allocation')
-    return buckets if shards == 3 else [sorted(public)]
+    return buckets if shards == L3_SHARDS else [sorted(public)]
 
 
 def git(*args):
@@ -326,7 +327,7 @@ def selection_manifest(before, buckets, shard, selected, deselect, timeout_secon
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--shards', type=int, default=1, choices=(1, 3))
+    parser.add_argument('--shards', type=int, default=1, choices=(1, L3_SHARDS))
     parser.add_argument('--shard', type=int, default=0)
     parser.add_argument('--timeout-seconds', type=int, default=4500)
     parser.add_argument('--diagnostics')

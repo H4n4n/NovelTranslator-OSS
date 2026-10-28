@@ -149,7 +149,7 @@ def decide(event, env):
     bound = identity(event, env)
     files, deselect = runner.load_classification()
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
-    shards = runner.balanced_shards(public, 3)
+    shards = runner.balanced_shards(public, runner.L3_SHARDS)
     changes = changed_paths(bound['base'], bound['commit'])
     policy = None
     policy_sha = None
@@ -187,7 +187,7 @@ def verified_decision(path):
 
 
 def select(decision, shards, shard):
-    require(shards == (3 if decision['tier'] == 'L3' else 1), 'incorrect qualification shard count')
+    require(shards == (runner.L3_SHARDS if decision['tier'] == 'L3' else 1), 'incorrect qualification shard count')
     require(0 <= shard < shards, 'incorrect qualification shard')
     return decision['shards'], decision['shards'][shard]
 

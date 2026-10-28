@@ -18,9 +18,10 @@ from scripts import publication_guard as guard
 GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
-    'a3def8a459217b0fd74a1cada1c9c3113ffd58b199e262adb2d22c46160cf888',
-    'a9ca3342b4b8310dd59d1d31b3efa2519b4bde18b91a8cf7db0801f3afe83845',
-    '7b1c5d4312fb9fd98c3caf3d391e49ef4681b102a7998ecac9400a132b062071',
+    '8c757e1a96535536d17303c799108674cd8c7e476667b83a33358230a88e519f',
+    'fd8276146f1fa164f3a4a45c18b6c50c560ab6eef2630d62ab9993c07c8dee74',
+    '1b804cb25884e947f72c077b784e42fa84b917f558088d57943e0df07c0d6ebe',
+    'a12ea1b7dd96185db3cbb928e378d98fa6aad468eb16e0fda930c8c9616dd8bf',
 )
 
 
@@ -34,20 +35,20 @@ def _synthetic_schedule(public):
 def test_exact_public_partition_and_reviewed_deselections():
     files, deselect = runner.load_classification()
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
-    buckets = runner.balanced_shards(public, 3)
+    buckets = runner.balanced_shards(public, 4)
     flat = sum(buckets, [])
     assert len(flat) == len(set(flat)) == len(public) == 198
     assert set(flat) == set(public)
     assert SYNTHETIC_WITNESS_MODULE in flat
     assert flat.count(GOAT_UNATTENDED_MODULE) == 1
-    assert runner.balanced_shards(list(reversed(public)), 3) == buckets
+    assert runner.balanced_shards(list(reversed(public)), 4) == buckets
     assert runner.balanced_shards(public, 1) == [public]
     assert sum(v['status'] == 'private' for v in files.values()) == 2
     assert sum(v['status'] == 'historical' for v in files.values()) == 7
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == '21c7b7fe0d7fe0d1b5a50dfd66932e7466d99aa245ff5a7322b4ff85712ea75e'
+    assert risk.digest(schedule['module_seconds']) == '0d202f43fc270653843703e86c767540f11eacec2fe1a12caa1ad70ba81d7f13'
     # Original published weights and hosted provenance remain independently pinned.
     assert risk.digest(schedule['published_schedule']['module_seconds']) == (
         '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa')
@@ -56,9 +57,9 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert risk.digest(schedule['supplemental_measurements'][0]) == '7c12a824bacefa730cdcef3ddf20f412f201d306bcf098aecba78bd1ce64f830'
     for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
-    assert [len(b) for b in buckets] == [64, 67, 67]
+    assert [len(b) for b in buckets] == [1, 66, 66, 65]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [3415.3479568, 3415.3471038, 3415.3522105])
+        [2751.51, 2514.6485398, 2514.6471875, 2514.6405438])
     assert schedule['shards'] == runner.measured_shards(schedule['module_seconds'])
     assert max(schedule['variability']['conservative_seconds']) < 4500
     assert max(schedule['variability']['sensitivity_seconds']) < 4500
@@ -131,11 +132,11 @@ def test_missing_classification_refused(tmp_path, monkeypatch):
         runner.load_classification()
 
 
-@pytest.mark.parametrize('case', ['empty', 'duplicate', 'missing', 'extra', 'bad_shards', 'empty_bucket', 'stale', 'tampered', 'weight', 'unknown_weight', 'nan', 'private'])
+@pytest.mark.parametrize('case', ['empty', 'duplicate', 'missing', 'extra', 'bad_shards', 'old_shards', 'empty_bucket', 'stale', 'tampered', 'weight', 'unknown_weight', 'nan', 'private'])
 def test_partition_negative_controls(tmp_path, monkeypatch, case):
-    public = ['tests/test_a.py', 'tests/test_b.py', 'tests/test_c.py']
+    public = ['tests/test_a.py', 'tests/test_b.py', 'tests/test_c.py', 'tests/test_d.py']
     data = _synthetic_schedule(public)
-    shards = 3
+    shards = 4
     if case == 'empty':
         public = []
     elif case == 'duplicate':
@@ -146,6 +147,8 @@ def test_partition_negative_controls(tmp_path, monkeypatch, case):
         data['shards'][0].append('tests/test_excluded.py')
     elif case == 'bad_shards':
         shards = 2
+    elif case == 'old_shards':
+        data['shards'].pop()
     elif case == 'empty_bucket':
         data['shards'][0] = []
     elif case == 'stale':
@@ -173,11 +176,12 @@ def test_partition_never_probes_source_sizes_or_other_drives(monkeypatch):
     def forbidden_stat(*args, **kwargs):
         raise AssertionError('allocation must not probe filesystem sizes')
     monkeypatch.setattr(Path, 'stat', forbidden_stat)
-    assert len(sum(runner.balanced_shards(public, 3), [])) == 198
+    assert len(sum(runner.balanced_shards(public, 4), [])) == 198
 
 
 @pytest.mark.parametrize('args', [['--shard', '-1'], ['--shard', '3'], ['--shards', '0'],
-                                  ['--shards', '2'], ['--timeout-seconds', '0'],
+                                  ['--shards', '2'], ['--shards', '3'], ['--shards', '4', '--shard', '4'],
+                                  ['--shards', '4', '--shard', '-1'], ['--timeout-seconds', '0'],
                                   ['--timeout-seconds', '4501']])
 def test_invalid_cli_refused_before_execution(args, monkeypatch):
     monkeypatch.setattr(runner, 'load_classification', lambda: pytest.fail('must refuse before selection'))
@@ -303,7 +307,7 @@ def test_publication_guard_rejects_missing_inventory_and_symlink(monkeypatch):
 
 def test_workflow_preserves_full_guarded_windows_suite():
     workflow = (runner.REPO / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-    for required in ('contents: read', "python-version: '3.14.4'", 'shard: [0, 1, 2]',
+    for required in ('contents: read', "python-version: '3.14.4'", 'shard: [0, 1, 2, 3]',
                      'needs: guard', 'fail-fast: false', 'publication_guard.py --push-check',
                      'fetch-depth: 0', 'persist-credentials: false', 'timeout-minutes: 90',
                      '--timeout-seconds 4500', 'if: always()', 'git status --porcelain --untracked-files=no',
@@ -322,7 +326,7 @@ def synthetic_repo(tmp_path):
     (repo / 'tests').mkdir()
     for rel in ('scripts/run_public_tests.py', 'scripts/public_test_telemetry.py', 'tests/zero_provider_validation.py'):
         (repo / rel).write_bytes((runner.REPO / rel).read_bytes())
-    public = [runner.DPAPI_NODE.split('::')[0], 'tests/test_b.py', 'tests/test_c.py']
+    public = [runner.DPAPI_NODE.split('::')[0], 'tests/test_b.py', 'tests/test_c.py', 'tests/test_d.py']
     for rel in public[1:]:
         (repo / rel).write_text('def test_one():\n    pass\n', encoding='utf-8')
     for rel in ('tests/test_private.py', 'tests/test_historical.py'):
@@ -413,14 +417,14 @@ def test_reporting_failure(request):
     assert (diagnostics / 'result.json').is_file(), proc.stdout + proc.stderr
     result = runner.read_json(diagnostics / 'result.json')
     manifest = runner.read_json(diagnostics / 'selection.json')
-    assert len(manifest['selected']) == 3
+    assert len(manifest['selected']) == 4
     assert len(manifest['excluded']) == 2
     if mode == 'pass':
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert result['status'] == 'passed' and result['source_unchanged']
         times = runner.read_json(diagnostics / 'timings.json')
         assert times['successful'] and times['outcomes']['setup:skipped'] == 1
-        assert times['collected'] == times['finished'] == 6
+        assert times['collected'] == times['finished'] == 7
         assert 'synthetic-output' not in (diagnostics / 'events.jsonl').read_text(encoding='utf-8')
     else:
         assert proc.returncode != 0
@@ -706,9 +710,16 @@ def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatc
     assert decision['identity']['head'] == 'c' * 40 and decision['identity']['base'] == 'd' * 40
     assert calls == [('diff', '--name-status', '-z', '--find-renames', 'd' * 40, 'a' * 40)]
     assert decision['l4'].startswith('NOT VERIFIED')
-    assert risk.select(decision, 3 if tier == 'L3' else 1, 0)[1]
+    count = 4 if tier == 'L3' else 1
+    assert len(decision['shards']) == count
+    for shard in range(count):
+        assert risk.select(decision, count, shard)[1] == decision['shards'][shard]
     with pytest.raises(ValueError):
-        risk.select(decision, 1 if tier == 'L3' else 3, 0)
+        risk.select(decision, 1 if tier == 'L3' else 4, 0)
+    with pytest.raises(ValueError):
+        risk.select(decision, 3, 0)
+    with pytest.raises(ValueError):
+        risk.select(decision, count, count)
     assert set(risk.SMOKE) <= set(decision['selected'])
     if tier == 'L3':
         assert len(decision['selected']) == 198 and len(decision['deselect']) == 15
@@ -825,9 +836,13 @@ def test_risk_gate_integrated_happy_paths(risk_identity, monkeypatch, tmp_path, 
     live = {'state': 'open', 'number': 7, 'head': {'sha': 'c' * 40}, 'base': {'sha': 'd' * 40}, 'merge_commit_sha': 'a' * 40}
     risk.gate(decision, guard, _risk_jobs(tier), live, evidence)
     # Every required shard must exist; even L1's smoke is mandatory.
-    (evidence / 'public-ci-123-1-0').rename(evidence / 'unexpected-shard')
-    with pytest.raises(ValueError, match='shard evidence'):
-        risk.gate(decision, guard, _risk_jobs(tier), live, evidence)
+    for shard in range(len(decision['shards'])):
+        expected = evidence / f'public-ci-123-1-{shard}'
+        unexpected = evidence / 'unexpected-shard'
+        expected.rename(unexpected)
+        with pytest.raises(ValueError, match='shard evidence'):
+            risk.gate(decision, guard, _risk_jobs(tier), live, evidence)
+        unexpected.rename(expected)
 
 
 @pytest.mark.parametrize('case', ['no_events', 'no_result', 'no_timings', 'no_collection', 'incomplete', 'exit', 'dirty', 'identity',
@@ -899,7 +914,7 @@ def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monk
         if module == dpapi_file:
             body += '\ndef test_real_windows_dpapi_round_trip():\n    assert False\n'
         (repo / module).write_text(body, encoding='utf-8')
-    for name in ('test_b.py', 'test_c.py', 'test_private.py', 'test_historical.py'):
+    for name in ('test_b.py', 'test_c.py', 'test_d.py', 'test_private.py', 'test_historical.py'):
         (repo / 'tests' / name).unlink()
     files = {p: {'status': 'public'} for p in modules}
     runner.write_json(repo / 'tests/public_test_classification.json', {
@@ -949,9 +964,9 @@ def test_risk_real_merge_selected_runner_and_gate(synthetic_repo, tmp_path, monk
     assert decision['changes'] == [_change(changed)]  # Excludes base-only advance.
     evidence = diagnostic_root / 'evidence'
     evidence.mkdir()
-    for shard in range(3 if tier == 'L3' else 1):
+    for shard in range(4 if tier == 'L3' else 1):
         proc = subprocess.run([sys.executable, str(repo / 'scripts/run_public_tests.py'),
-                               '--decision', str(qualification / 'decision.json'), '--shards', '3' if tier == 'L3' else '1',
+                               '--decision', str(qualification / 'decision.json'), '--shards', '4' if tier == 'L3' else '1',
                                '--shard', str(shard), '--diagnostics', str(evidence / f'public-ci-123-1-{shard}')],
                               cwd=repo, env=env, capture_output=True, text=True, timeout=30)
         assert proc.returncode == 0, proc.stdout + proc.stderr

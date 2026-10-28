@@ -216,3 +216,80 @@ real-DPAPI deselection. Syntax, staged diff and publication-inventory checks
 passed. Exact commands and JUnit evidence accompany the local Hermes handoff.
 Both findings are closed within the bounded D1 contract; no D2 workflow or
 semantic approval producer was introduced.
+
+
+## Integration onto merged main
+
+Baseline: `3f41bcb74548c22c6aa747220ffc2ad7ddfc930c`, tree
+`5b4134881c5bdfb5eb52ba9ae7655577677dfbc2`, verified against fetched
+`origin/main` in the existing `D:\NTOSS_AUT2_C_Lineage_Codex` checkout.
+The checkout was clean. Local `main` was older and checked out elsewhere;
+this integration leaves that checkout/ref alone and starts directly at the
+verified merge commit. No new clone or worktree was created.
+
+Branch: `codex/aut2-d1-d11-main-integration`.
+Accepted commits `d7a792c400ea069762bdb2ecbb902cee68ec29f3` and
+`c10f0b9aa13abc133c2b4fc7da560fa64506becf` were cherry-picked as
+`891a710` and `248b5c0`. The original D1 branch remains at `c10f0b9`.
+Only `public_inventory.txt` conflicted: both branches appended entries, and
+all entries were retained. Historical source merged cleanly. The accepted
+publication code/test files are unchanged, and main's historical proof and
+reconciliation sections outside the D1 publication sections are byte-identical.
+
+Merged main requires every test module to be explicitly classified and measured.
+The new synthetic D1 module therefore needs public classification, a local
+measurement in the existing shard schedule, and refreshed exact partition
+assertions. The existing allocation algorithm, timeout, historical timing
+provenance, private/historical classifications and every deselection remain
+unchanged. Current source hashes and retained external JUnit evidence bind the
+new measurements; these are local timing projections, not hosted qualification.
+
+The final focused publication command is:
+
+```powershell
+python tests/zero_provider_validation.py `
+  --basetemp "$env:TEMP/nt-aut2-d1-integration-measured-20261028-a" `
+  --deselect tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip `
+  -- -q tests/test_publication_readiness.py tests/test_build_publication_epub.py `
+  --junitxml="$env:TEMP/nt-aut2-d1-integration-measured-20261028-a.xml" --durations=5
+```
+
+The installed-corpus integration remains an explicit opt-in skip; private novels
+are never opened. A separate 16-case guarded selection covers interrupted audit
+commit tails, relative evidence paths, standalone lineage readers and same-size,
+restored-mtime proof-input tampering. Compilation includes all integrated Python
+files and the modified public-test bookkeeping. No provider, issue, push or
+GitHub Actions operation is performed.
+
+
+Integration validation on Windows Python 3.14.4:
+
+- Publication contracts and existing EPUB suite: **316 passed, 1 skipped**
+  (891.71 seconds). The skip is the unchanged private installed-corpus opt-in.
+- Focused historical cross-integration selection: **16 passed** (478.47 seconds).
+- Changed public classification/partition/source-binding checks: **7 passed**.
+- `python -m py_compile` passed for `historical_reconciliation.py`,
+  `publication_readiness.py`, `publication_regeneration.py`,
+  `tests/test_build_publication_epub.py`, `tests/test_publication_readiness.py`
+  and `tests/test_public_ci_reliability.py`.
+- Local publication inventory validation and `git diff --check` passed.
+
+The measured JUnit case sums are 504.699 seconds for readiness and 386.631 seconds
+for EPUB. The complete suite's measured 0.312-second overhead is conservatively
+included in EACH module weight; earlier weights are never discounted. This
+replaces a provisional arbitrary one-second allowance. The schedule keeps all
+198 public modules, all 15 existing deselections, the same measured-LPT allocator,
+and the 4,500-second deadline. Nominal shard projections are approximately
+3,415 seconds. The existing 30% sensitivity projections are
+`4499.952 / 4499.951 / 4499.958` seconds: very close to the limit, and not hosted
+runtime qualification. No unrelated expensive suite was rerun to improve these
+projections. Timing variability remains an explicit limitation, not a semantic
+publication blocker or evidence that hosted L3 passed.
+
+Total completed local validation: **339 passed, 1 expected skip**. The initial
+publication run was stopped and restarted with JUnit output when main's measured
+schedule requirement was discovered; that partial run is not included in counts.
+The original accepted branch and all main historical reconciliation behavior are
+preserved. No remaining local functional blocker was found. Unsupported source
+layouts/history, J5/J8 and automatic D2 regeneration retain the separate-work
+boundaries stated above.

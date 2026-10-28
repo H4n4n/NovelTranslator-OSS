@@ -711,6 +711,10 @@
    "status": "public",
    "reason": "synthetic/guarded public test"
   },
+  "tests/test_publication_readiness.py": {
+   "status": "public",
+   "reason": "synthetic Chinese/Korean D1/D1.1 freshness and existing-generation contract; guarded zero-provider fixtures only"
+  },
   "tests/test_prospective_strict_qa.py": {
    "status": "public",
    "reason": "synthetic/guarded public test"

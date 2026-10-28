@@ -18,9 +18,9 @@ from scripts import publication_guard as guard
 GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
-    '583019901ff74d5050ee63cd3967d9b12815e7a04cb19deb788dbedbc8eef9bd',
-    '8fcd8a6f9089a5f0b3d580931efb588f42140e98cf127501873e58f9eec28cbd',
-    'befb70dc1796f57ba86aa85a55cf364556267e385b69abbd77d1bdb6caeb7386',
+    'a3def8a459217b0fd74a1cada1c9c3113ffd58b199e262adb2d22c46160cf888',
+    'a9ca3342b4b8310dd59d1d31b3efa2519b4bde18b91a8cf7db0801f3afe83845',
+    '7b1c5d4312fb9fd98c3caf3d391e49ef4681b102a7998ecac9400a132b062071',
 )
 
 
@@ -36,7 +36,7 @@ def test_exact_public_partition_and_reviewed_deselections():
     public = sorted(p for p, meta in files.items() if meta['status'] == 'public')
     buckets = runner.balanced_shards(public, 3)
     flat = sum(buckets, [])
-    assert len(flat) == len(set(flat)) == len(public) == 197
+    assert len(flat) == len(set(flat)) == len(public) == 198
     assert set(flat) == set(public)
     assert SYNTHETIC_WITNESS_MODULE in flat
     assert flat.count(GOAT_UNATTENDED_MODULE) == 1
@@ -47,7 +47,7 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == 'e4395d5152c1439d71a9cb16c9e05ab74832769e0c385c465868d7db90ff77b9'
+    assert risk.digest(schedule['module_seconds']) == '21c7b7fe0d7fe0d1b5a50dfd66932e7466d99aa245ff5a7322b4ff85712ea75e'
     # Original published weights and hosted provenance remain independently pinned.
     assert risk.digest(schedule['published_schedule']['module_seconds']) == (
         '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa')
@@ -56,9 +56,9 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert risk.digest(schedule['supplemental_measurements'][0]) == '7c12a824bacefa730cdcef3ddf20f412f201d306bcf098aecba78bd1ce64f830'
     for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
-    assert [len(b) for b in buckets] == [64, 67, 66]
+    assert [len(b) for b in buckets] == [64, 67, 67]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [3200.201488, 3200.2001272, 3200.1936559])
+        [3415.3479568, 3415.3471038, 3415.3522105])
     assert schedule['shards'] == runner.measured_shards(schedule['module_seconds'])
     assert max(schedule['variability']['conservative_seconds']) < 4500
     assert max(schedule['variability']['sensitivity_seconds']) < 4500
@@ -173,7 +173,7 @@ def test_partition_never_probes_source_sizes_or_other_drives(monkeypatch):
     def forbidden_stat(*args, **kwargs):
         raise AssertionError('allocation must not probe filesystem sizes')
     monkeypatch.setattr(Path, 'stat', forbidden_stat)
-    assert len(sum(runner.balanced_shards(public, 3), [])) == 197
+    assert len(sum(runner.balanced_shards(public, 3), [])) == 198
 
 
 @pytest.mark.parametrize('args', [['--shard', '-1'], ['--shard', '3'], ['--shards', '0'],
@@ -711,7 +711,7 @@ def test_risk_decision_binds_exact_delta_and_selection(risk_identity, monkeypatc
         risk.select(decision, 1 if tier == 'L3' else 3, 0)
     assert set(risk.SMOKE) <= set(decision['selected'])
     if tier == 'L3':
-        assert len(decision['selected']) == 197 and len(decision['deselect']) == 15
+        assert len(decision['selected']) == 198 and len(decision['deselect']) == 15
     elif tier == 'L2':
         assert len(decision['selected']) == 5
 
@@ -1456,7 +1456,8 @@ def test_finalization_repartition_preserves_original_sources_and_cases():
     before_files, after_files = before_classification['files'], after_classification['files']
     assert set(before_files) - set(after_files) == {mapping['original_module']}
     additions = set(mapping['modules']) | {'tests/test_experimental_goat_audit_proof.py',
-                                         'tests/test_goat_batch_standalone_receipts.py'}
+                                         'tests/test_goat_batch_standalone_receipts.py',
+                                         'tests/test_publication_readiness.py'}
     assert set(after_files) - set(before_files) == additions
     assert all(after_files[p]['status'] == 'public' for p in additions)
     assert all(after_files[p] == meta for p, meta in before_files.items()

@@ -476,23 +476,335 @@ def _blocker(exc):
     return {"reason_code": "INVALID_REGENERATION_PREREQUISITE", "error_type": type(exc).__name__}
 
 
+
+# Advisory D2 operations deliberately do not participate in CURRENT authority.
+_DIAGNOSTIC_ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError, AttributeError)
+
+
+def _history_source(project):
+    """Bind the offline history owner to the supported, exact original TXT."""
+    from novel_project import NovelConfig
+    from chapter_library import index_chapter_library
+    require(not project.is_legacy and project.config.source_type == "txt",
+            "REGENERATION_REQUIRES_TXT_IDENTITY_SPINE")
+    require(project.config.source_language in {"zh", "ko"} and project.config.target_language == "en",
+            "UNSUPPORTED_REGENERATION_LANGUAGE")
+    require(NovelConfig.from_dict(read_object(project.config_file)) == project.config, "SELECTED_CONFIG_DRIFT")
+    units = read_value(project.chapters_file)
+    chapter_map = index_chapter_library(units, project.config.final_chapter, project.config.chapter_numbering)
+    numbers = list(range(1, project.config.final_chapter + 1))
+    require(list(chapter_map) == numbers and len(units) == len(numbers), "REPARTITION_REQUIRES_SEPARATE_APPROVAL")
+    source_sha = digest(_bytes(project.source_txt))
+    require(all(u.get("source_document_sha256") == source_sha for u in units), "ORIGINAL_SOURCE_IDENTITY_DRIFT")
+    progress = read_object(project.progress_file)
+    require(all(type(n) is int for n in progress.get("completed", []))
+            and all(type(progress.get(k)) is int for k in ("last_completed", "last_audited_chapter", "next_chapter"))
+            and progress.get("completed") == numbers and progress.get("last_completed") == len(numbers)
+            and progress.get("last_audited_chapter") == len(numbers)
+            and progress.get("next_chapter") == len(numbers) + 1, "INCOMPLETE_COMMITTED_AUDIT_BOUNDARY")
+    require(not any(plain(project.pending_dir).glob("*")), "PENDING_WORK_REQUIRES_RECONCILIATION")
+    # local_module's compatibility JSON loader accepts duplicate keys and
+    # UTF-16/32. Reject those before it can supply ambiguous proof inputs to the
+    # existing report writer. No provider journals or credentials are traversed.
+    files = [project.glossary_file, project.issues_file, project.continuity_file, project.audit_history_file]
+    files += sorted(plain(project.audit_dir).glob("*.json"))
+    files += sorted(plain(project.retroactive_dir / "transactions").glob("*.json"))
+    for path in files:
+        try:
+            read_object(path)
+        except _DIAGNOSTIC_ERRORS as exc:
+            exc.filename = str(path)
+            raise
+
+
+def _standalone_present(project):
+    folder = plain(project.retroactive_dir / "standalone_lineage")
+    return folder.exists() and any(folder.iterdir())
+
+
+def recertify_history(project):
+    """Save only the existing immutable report, under the existing writer lock.
+
+    The persistent lock rendezvous is the only non-report filesystem artifact.
+    Loading local_module installs NO_SEND/runtime-initializer tripwires.
+    A successful local check still needs explicit human publication review.
+    """
+    from goat_periodic_audit_finalize_plan import local_module
+    from historical_reconciliation import save_final_consistency
+    plain(project.root)
+    with production_run_lock(project.root):
+        _history_source(project)
+        report = save_final_consistency(local_module(project))
+        sha = canonical_hash(report)
+        unsupported = _standalone_present(project)
+        return {"status": "BLOCKED" if unsupported else "REVIEW_REQUIRED",
+                "reason_code": "UNSUPPORTED_STANDALONE_REGENERATION" if unsupported else
+                    "HISTORICAL_DEFERRALS_REQUIRE_REVIEW" if report["deferred_chapters"] else
+                    "WHOLE_HISTORY_REPORT_REQUIRES_HUMAN_REVIEW",
+                "report_path": "output/audits/whole_history/" + sha + ".json",
+                "report_sha256": sha, "history_status": report["status"],
+                "examined_chapters": report["examined_chapters"],
+                "deferred_chapters": report["deferred_chapters"],
+                "publication_authority": False, "provider_calls": 0}
+
+
+def publication_preflight(project, whole_history_sha256=None):
+    """Read-only bounded diagnostics. Only current_generation can prove CURRENT.
+
+    Fixed paths, codes and hashes only; never emit raw validator exceptions,
+    plans, anchors, source, prose or the production module's mutable state.
+    No lock is acquired: this operation must not even create a rendezvous file.
+    Unavailable intermediate corpora are explicitly unvalidated, never approved.
+    """
+    diagnostics = {}
+
+    def row(key, status, code, path, **extra):
+        diagnostics[key] = dict(status=status, reason_code=code, path=path, **extra)
+
+    def failure(key, path, exc):
+        code = _blocker(exc)["reason_code"]
+        known = {"ORIGINAL_SOURCE_IDENTITY_DRIFT": project.source_txt,
+                 "SOURCE_INVENTORY_DRIFT": project.chapters_file,
+                 "SELECTED_CONFIG_DRIFT": project.config_file,
+                 "INCOMPLETE_COMMITTED_AUDIT_BOUNDARY": project.progress_file,
+                 "PENDING_WORK_REQUIRES_RECONCILIATION": project.pending_dir,
+                 "UNSUPPORTED_STANDALONE_REGENERATION": project.retroactive_dir / "standalone_lineage"}
+        if code in known:
+            path = known[code].relative_to(project.root).as_posix()
+        cause = exc
+        for _ in range(5):
+            if getattr(cause, "filename", None):
+                candidate = Path(cause.filename).absolute()
+                if candidate.is_relative_to(project.root.absolute()):
+                    relative = candidate.relative_to(project.root.absolute()).as_posix()
+                    if len(relative) <= 512:
+                        path = relative
+                break
+            cause = cause.__cause__
+            if cause is None:
+                break
+        row(key, "BLOCKED", code, path)
+
+    def object_at(key, path):
+        try:
+            target = plain(project.root / path)
+            if not target.exists():
+                row(key, "REVIEW_REQUIRED", "MISSING_PREREQUISITE", path)
+                return None
+            return read_object(target)
+        except _DIAGNOSTIC_ERRORS as exc:
+            failure(key, path, exc)
+            return None
+
+    auth = object_at("authorization", AUTHORIZATION)
+    if auth is not None:
+        valid = (auth.get("revision") == REVISION and auth.get("novel_id") == project.config.id
+                 and auth.get("enabled") is True and auth.get("finalization") == "committed-identity-v1"
+                 and type(auth.get("allow_manual_approved")) is bool)
+        row("authorization", "VERIFIED" if valid else "BLOCKED",
+            "AUTHORIZATION_BINDING_PRESENT" if valid else "REGENERATION_NOT_AUTHORIZED", AUTHORIZATION)
+        if whole_history_sha256 is None:
+            whole_history_sha256 = auth.get("whole_history_sha256")
+    report_path = "output/audits/whole_history"
+    snapshot = None
+    try:
+        _history_source(project)
+        require(not _standalone_present(project), "UNSUPPORTED_STANDALONE_REGENERATION")
+        if whole_history_sha256 is None:
+            row("whole_history", "REVIEW_REQUIRED", "SELECT_WHOLE_HISTORY_REPORT", report_path)
+        else:
+            sha = _sha(whole_history_sha256)
+            report_path += "/" + sha + ".json"
+            saved = object_at("whole_history", report_path)
+            if saved is not None:
+                require(canonical_hash(saved) == sha and saved.get("revision") == "aut2-history-evidence-v1"
+                        and saved.get("novel_id") == project.config.id
+                        and saved.get("scope") == "final_whole_committed_history"
+                        and saved.get("status") in {"CHECKED", "CHECKED_WITH_DEFERRALS"}, "INVALID_WHOLE_HISTORY_REPORT")
+                from goat_periodic_audit_finalize_plan import local_module
+                from historical_reconciliation import final_consistency_report
+                actual = final_consistency_report(local_module(project))
+                # Reject malformed self-hashed reports rather than calling them
+                # stale. This is shape checking only; exact equality with the
+                # existing owner remains necessary for a verified report.
+                require(set(saved) == set(actual)
+                        and all(type(saved[k]) is type(v) for k, v in actual.items()), "INVALID_WHOLE_HISTORY_REPORT")
+                _sha(saved["glossary_revision_sha256"])
+                _sha(saved["source_inventory_sha256"])
+                require(saved["transactions"] and all(isinstance(t, dict)
+                        and set(t) == {"transaction_id", "intent_sha256"} for t in saved["transactions"]),
+                        "INVALID_WHOLE_HISTORY_REPORT")
+                for transaction in saved["transactions"]:
+                    _sha(transaction["transaction_id"])
+                    _sha(transaction["intent_sha256"])
+                require(len({t["transaction_id"] for t in saved["transactions"]}) == len(saved["transactions"]),
+                        "INVALID_WHOLE_HISTORY_REPORT")
+                rows = saved["chapters"]
+                require(saved["audit_boundary"] == saved["examined_chapters"] == len(rows)
+                        and [r["chapter"] for r in rows] == list(range(1, len(rows) + 1)), "INVALID_WHOLE_HISTORY_REPORT")
+                for item in rows:
+                    require(set(item) == {"chapter", "english_sha256", "source_sha256", "decisions"}
+                            and type(item["chapter"]) is int and isinstance(item["decisions"], list), "INVALID_WHOLE_HISTORY_REPORT")
+                    _sha(item["english_sha256"]); _sha(item["source_sha256"])
+                    for decision in item["decisions"]:
+                        _sha(decision["term_id"])
+                        require(decision.get("outcome") in {"already_current", "deferred"}
+                                and isinstance(decision.get("reason_code"), str), "INVALID_WHOLE_HISTORY_REPORT")
+                deferred = sum(any(d["outcome"] == "deferred" for d in r["decisions"]) for r in rows)
+                require(saved["deferred_chapters"] == deferred
+                        and saved["status"] == ("CHECKED_WITH_DEFERRALS" if deferred else "CHECKED")
+                        and saved["already_current_chapters"] == sum(bool(r["decisions"]) and all(d["outcome"] == "already_current" for d in r["decisions"]) for r in rows)
+                        and saved["unchanged_chapters"] == sum(not r["decisions"] for r in rows)
+                        and saved["corrected_chapters"] == saved["provider_calls"] == 0
+                        and saved["semantic_rereview"] == "NOT_PERFORMED"
+                        and saved["publication_status"] == "NOT_VERIFIED", "CONTRADICTORY_WHOLE_HISTORY_REPORT")
+                if saved != actual:
+                    row("whole_history", "STALE", "RECERTIFY_WHOLE_HISTORY", report_path)
+                elif actual["deferred_chapters"]:
+                    row("whole_history", "REVIEW_REQUIRED", "HISTORICAL_DEFERRALS_REQUIRE_REVIEW", report_path,
+                        deferred_chapters=actual["deferred_chapters"])
+                else:
+                    row("whole_history", "VERIFIED", "EXACT_WHOLE_HISTORY_VERIFIED", report_path, sha256=sha)
+                    snapshot = source_snapshot(project, sha)
+    except _DIAGNOSTIC_ERRORS as exc:
+        failure("whole_history", report_path, exc)
+    if snapshot is None:
+        row("source_snapshot", diagnostics["whole_history"]["status"], "WHOLE_HISTORY_PREREQUISITE", AUTHORIZATION)
+    else:
+        snapshot_sha = canonical_hash(snapshot)
+        bound = auth is not None and auth.get("source_snapshot_sha256") == snapshot_sha
+        row("source_snapshot", "VERIFIED" if bound else "REVIEW_REQUIRED",
+            "SOURCE_SNAPSHOT_BOUND" if bound else "SOURCE_APPROVAL_STALE", AUTHORIZATION, sha256=snapshot_sha)
+
+    # File binding diagnostics are independent: report every exact approval path
+    # even when an earlier prerequisite prevents the authoritative input proof.
+    for key, name in APPROVALS.items():
+        approval = object_at(key, name)
+        if approval is None:
+            continue
+        try:
+            # Schema checks belong to the existing stage owners even when the
+            # exact intermediate corpus has not been constructed yet.
+            if key == "normalization_plan":
+                normalization._validate_plan_contract(approval, project.config.id, "prose")
+            elif key == "title_plan":
+                titles._validate_plan_contract(approval, project.config.id)
+            else:
+                manifest, _ = editorial.load_authorization(project.root / name)
+                require(manifest.get("novel") == project.config.id, "FOREIGN_EDITORIAL_AUTHORIZATION")
+                editorial._expected_checkpoint(manifest)
+                editorial._validate_authorized_set(manifest)
+            sha = digest(_bytes(project.root / name))
+        except _DIAGNOSTIC_ERRORS as exc:
+            failure(key, name, exc)
+            continue
+        bound = auth is not None and auth.get(key + "_sha256") == sha
+        upstream = snapshot is not None and diagnostics["source_snapshot"]["status"] == "VERIFIED"
+        row(key, "VERIFIED" if bound and upstream else "REVIEW_REQUIRED",
+            "APPROVAL_BYTES_BOUND_VALIDATION_PENDING" if bound and upstream else "APPROVAL_REVIEW_OR_REISSUANCE_REQUIRED",
+            name, sha256=sha, stage_validation="NOT_PERFORMED")
+
+    # Keep _inputs authoritative. Its failure cannot be replaced by advisory
+    # equality checks above. Stage validators run only against an existing exact
+    # input generation; no temporary corpus, application or regeneration here.
+    inputs = None
+    try:
+        inputs = _inputs(project)
+        row("inputs", "VERIFIED", "AUTHORITATIVE_INPUTS_VERIFIED", AUTHORIZATION)
+    except _DIAGNOSTIC_ERRORS as exc:
+        if any(d["status"] in {"REVIEW_REQUIRED", "STALE"} for d in diagnostics.values()):
+            row("inputs", "REVIEW_REQUIRED", _blocker(exc)["reason_code"], AUTHORIZATION)
+        else:
+            failure("inputs", AUTHORIZATION, exc)
+    if inputs is not None:
+        final = project.root / GENERATIONS / canonical_hash(inputs) / "final"
+        for key, validator, corpus in (
+                ("normalization_plan", lambda: _stage_previews(project, final, inputs), "chapters"),
+                ("title_plan", lambda: _title_preview(project, final, inputs), "normalized_chapters"),
+                ("editorial_authorization", lambda: require(editorial.build_plan_report(PublicationWorkspace(project, final))["ready"],
+                    "EDITORIAL_APPROVAL_NOT_READY"), "publication_chapters")):
+            try:
+                if not plain(final / corpus).is_dir():
+                    diagnostics[key]["stage_validation"] = "INPUT_CORPUS_MISSING"
+                    diagnostics[key]["input_path"] = (final / corpus).relative_to(project.root).as_posix()
+                    continue
+                _plain_tree(final)
+                validator()
+                diagnostics[key]["stage_validation"] = "VERIFIED"
+            except _DIAGNOSTIC_ERRORS as exc:
+                failure(key, APPROVALS[key], exc)
+
+    from publication_readiness import REVIEW
+    object_at("publication_review", REVIEW)
+    if "publication_review" not in diagnostics:
+        row("publication_review", "REVIEW_REQUIRED", "EXACT_GRAPH_REVIEW_REQUIRES_VALIDATION", REVIEW)
+        if inputs is not None and plain(final).is_dir():
+            try:
+                from publication_readiness import require_publication_ready
+                require_publication_ready(PublicationWorkspace(project, final))
+                row("publication_review", "VERIFIED", "EXACT_GRAPH_REVIEW_VERIFIED", REVIEW)
+            except _DIAGNOSTIC_ERRORS as exc:
+                code = _blocker(exc)["reason_code"]
+                status = "REVIEW_REQUIRED" if code in {
+                    "PUBLICATION_REVIEW_STALE_REVERIFY_EXACT_DEPENDENCIES",
+                    "PUBLICATION_REVIEW_REQUIRED_AT_CONFIG_PUBLICATION_READINESS",
+                    "PUBLICATION_SEMANTIC_REVIEW_REQUIRED"} else "BLOCKED"
+                row("publication_review", status, code, REVIEW)
+    current = {}
+    try:
+        _validate_previous_pointer(project)
+        current = current_generation(project)
+        if current["status"] == "CURRENT":
+            row("publication_review", "VERIFIED", "EXACT_GRAPH_REVIEW_VERIFIED", REVIEW)
+            status = "CURRENT"
+        else:
+            reason = current.get("blocker", {}).get("reason_code", "NO_CURRENT_GENERATION")
+            if reason in {"PUBLICATION_REVIEW_STALE_REVERIFY_EXACT_DEPENDENCIES",
+                          "PUBLICATION_REVIEW_REQUIRED_AT_CONFIG_PUBLICATION_READINESS",
+                          "PUBLICATION_SEMANTIC_REVIEW_REQUIRED"}:
+                row("publication_review", "REVIEW_REQUIRED", reason, REVIEW)
+            status = "STALE"
+            if inputs is not None and plain(project.root / POINTER).exists():
+                pointer = read_object(project.root / POINTER)
+                if pointer.get("generation") == canonical_hash(inputs) and not reason.startswith("PUBLICATION_"):
+                    row("generation", "BLOCKED", reason, POINTER)
+        if any(d["status"] == "REVIEW_REQUIRED" for d in diagnostics.values()):
+            status = "REVIEW_REQUIRED"
+        if any(d["status"] == "BLOCKED" for d in diagnostics.values()):
+            status = "BLOCKED"
+    except _DIAGNOSTIC_ERRORS as exc:
+        failure("generation", POINTER, exc)
+        status = "BLOCKED"
+    return {"status": status, "diagnostics": diagnostics,
+            "generation": current.get("generation") if status == "CURRENT" else None,
+            "publication_authority": False, "provider_calls": 0}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--novel", required=True)
-    parser.add_argument("--inspect-whole-history", help="read-only snapshot for an existing whole-history report hash")
+    operations = parser.add_mutually_exclusive_group()
+    operations.add_argument("--report", action="store_true", help="read-only publication preflight")
+    operations.add_argument("--recertify-history", action="store_true", help="save immutable local whole-history evidence only")
+    operations.add_argument("--inspect-whole-history", help="read-only snapshot for an existing whole-history report hash")
     args = parser.parse_args(argv)
     try:
         project = select_project(args.novel)
-        if args.inspect_whole_history:
+        if args.report:
+            result = publication_preflight(project)
+        elif args.recertify_history:
+            result = recertify_history(project)
+        elif args.inspect_whole_history:
             source = source_snapshot(project, args.inspect_whole_history)
             result = {"status": "SNAPSHOT_NOT_AUTHORITY", "source_snapshot_sha256": canonical_hash(source),
                       "source": source, "required_approvals": APPROVALS, "provider_calls": 0}
         else:
             result = regenerate(project)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-        print(json.dumps({"status": "STALE", "blocker": _blocker(exc), "provider_calls": 0}))
+        return 1 if result["status"] == "BLOCKED" else 0
+    except _DIAGNOSTIC_ERRORS as exc:
+        print(json.dumps({"status": "BLOCKED" if args.report or args.recertify_history else "STALE",
+                          "blocker": _blocker(exc), "provider_calls": 0}))
         return 1
 
 

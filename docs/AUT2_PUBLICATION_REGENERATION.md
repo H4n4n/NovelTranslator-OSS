@@ -179,3 +179,160 @@ Set-Location D:\NTOSS_AUT2_CommandCode
 
 No branch was pushed, PR created, hosted CI triggered, private novel mutated or
 real paid request executed as part of this local assignment.
+
+## AUT-2 D2: historical recertification and publication preflight
+
+This is the first D2 increment for Issue #18. Its approved main baseline is
+`a887d0e34110f3adb8a5e74093f0429bd5929b8c`. Development uses the separate
+`codex/aut2-d2-history-preflight` branch. D1/D1.1 publication authority and
+pointer semantics remain owned by their existing validators.
+
+### Local operations
+
+```powershell
+python publication_regeneration.py --novel <id> --report
+python publication_regeneration.py --novel <id> --recertify-history
+```
+
+`--report` reads evidence without creating files, temporary corpora, or even a
+production lock rendezvous. It reports:
+
+| Status | Meaning |
+| --- | --- |
+| CURRENT | The existing CURRENT verifier independently proves the selected generation, EPUB, and exact D1 review. |
+| STALE | A generation or dependency has changed and must be rebuilt/revalidated. |
+| REVIEW_REQUIRED | A historical report, source binding, stage approval, or graph review needs explicit selection, review, or reissuance. |
+| BLOCKED | Evidence is malformed, contradictory, ambiguous, unsupported, or otherwise unprovable. |
+
+BLOCKED takes precedence over review and stale conditions. Diagnostics cover the
+selected hash-named whole-history report, source snapshot authorization,
+normalization plan, title plan, editorial authorization, input proof, and D1
+publication review. Paths are relative to the selected novel. Diagnostics emit
+only bounded codes, paths, hashes, counts, and validation statuses. They never
+serialize source text, chapter bodies, plans, private anchors, or exception text.
+
+`VERIFIED` on a diagnostic is local evidence for that dependency, not permission
+to publish. Approval byte binding and stage validation are reported separately.
+When an intermediate corpus does not exist, its exact path is reported and its
+stage validation remains unperformed. Existing stage owners validate available
+intermediates. `_inputs()` remains the input authority, and `current_generation()`
+remains the only CURRENT authority. Neither diagnostic output nor a hash rebase
+can satisfy the publication gate.
+
+`--recertify-history` calls
+`historical_reconciliation.save_final_consistency()` using
+`goat_periodic_audit_finalize_plan.local_module(project)` under the existing
+novel production lock. It does not initialize production runtime or activate a
+provider. The local loader retains its provider-send and initializer tripwires.
+It requires a complete supported TXT identity spine and exact original source
+hashes; the history owner independently rechecks audit decisions, transactions,
+BEFORE backups, state, and chapter bytes.
+
+The only novel data it may create is the existing deterministic immutable file
+`output/audits/whole_history/<canonical-report-sha256>.json`. The existing empty
+`.production.lock` rendezvous may be created by the lock owner. Exact replay
+preserves report bytes and modification time. It never writes committed chapters,
+glossary, approvals, generations, or CURRENT. The CLI returns the canonical report
+hash, path, bounded history status/counts, zero provider calls, and
+`publication_authority: false`. Even CHECKED reports require human review;
+deferrals always return REVIEW_REQUIRED. This does not perform semantic rereview.
+
+All operations are mutually exclusive with the existing read-only
+`--inspect-whole-history <hash>` snapshot operation. The default regeneration
+command is unchanged. New operations return exit 1 for BLOCKED and exit 0 for a
+completed advisory report or successfully saved history report. Exit 0 does not
+mean publication-ready.
+
+### Review sequence and boundaries
+
+1. Run read-only preflight and preserve its precise prerequisite paths.
+2. Recertify complete historical evidence locally when necessary.
+3. Review the returned report and resolve deferrals through the existing owners.
+4. Explicitly review/reissue source and stage approvals against the exact new
+   bytes; the CLI never copies, rebases, regenerates, or signs approvals.
+5. Existing regeneration, stage owners, and the D1 graph-review gate independently
+   decide whether a generation can be built and promoted.
+
+Standalone lineage may be valid historical evidence while still unsupported by
+regeneration's periodic-only source snapshot. Preflight explicitly blocks that
+route as `UNSUPPORTED_STANDALONE_REGENERATION`. If the existing history owner can
+save a valid standalone report, recertification still reports that publication
+limitation as BLOCKED. Malformed standalone evidence remains unprovable.
+
+Supported publication remains limited to complete Chinese/Korean TXT novels
+with unchanged identity spines. Other source layouts, partial checkpoints,
+standalone certification, J5/J8, and automatic human-approval reissuance remain
+outside this increment. No EPUB builder, stage owner, invalidation schema,
+provider journal, credential policy, pointer protocol, or CI safety rule changes.
+
+### Synthetic validation and handoff
+
+D2 cases extend the existing public `test_publication_readiness.py` module and
+reuse its Chinese/Korean disposable novels. They exercise independently verified
+CURRENT reporting, stale runtime/history bindings, exact missing approval paths,
+a newly discovered identity's correction into earlier prose, immutable report
+creation/replay, historical deferrals, unsupported and malformed evidence,
+source/checkpoint/backup/transaction drift, writer exclusion, prose redaction,
+and whole-novel byte/mtime preservation. No real novel is opened.
+
+The complete changed module must be measured with `tests/zero_provider_validation.py`,
+a fresh external GUID-named basetemp, mandatory real-DPAPI deselection, and retained
+JUnit/source evidence. The existing measured-LPT schedule must receive the exact
+current module source hash and measured duration. Classification, exclusions,
+mandatory deselections, allocator, and execution deadline remain unchanged.
+
+Validation results and exact local HEAD/tree are recorded in the local handoff.
+Independent Hermes review is the next gate. The recommended next implementation
+increment is a bounded approval-reissuance workflow that presents exact changed
+dependencies for human review, then resumes the existing regeneration owners;
+standalone source-snapshot certification requires its own separate proof adapter.
+This increment does not complete Issue #18 or authorize production publication.
+
+The D2 boundary additionally parses mutable state, audit JSON, and transaction
+JSON through the existing strict UTF-8/unique-key reader before loading the
+compatibility module. Boolean progress values, duplicate fields, UTF-16/32 JSON,
+and malformed periodic transaction identities block without a report write.
+This parsing guard does not replace any historical transaction validator.
+
+### Local validation on 2026-10-29
+
+All tests used Python 3.14.4 on Windows through the existing zero-provider
+validation wrapper, mandatory real-DPAPI deselection, and separate GUID-named
+external basetemps. No tests shared a temporary root or ran concurrently.
+
+- Final complete readiness module after strict JSON hardening: **201 passed,
+  zero skips**, 639.08 seconds. This includes all 123 inherited D1/D1.1 cases
+  and 78 D2 cases.
+- The unchanged EPUB module passed **193 tests with one existing private-corpus
+  opt-in skip** in the earlier complete combined publication run (384 passed,
+  one skipped, 1017.15 seconds). The subsequent patch changed only the new D2
+  input boundary and its tests; final readiness re-exercised the real existing
+  EPUB/readiness fixtures against that boundary.
+- Supporting CI, normalization, titles, presentation, historical transactions,
+  lifecycle and import-safety modules: **839 passed, three existing optional
+  installed-corpus skips**, 839.74 seconds. No new exclusion was introduced.
+- Dedicated ambiguity refusals after the final helper correction: **8 passed**.
+- Compilation of all three changed Python files passed.
+
+The final readiness weight is 639.014 seconds (638.790 seconds of JUnit case
+time plus all 0.224 seconds of suite overhead). The EPUB weight retains the
+higher prior 405.854 seconds. All original timing provenance is retained;
+current records append complete, hash-bound local evidence. The same 198 public
+modules, two private classifications, seven historical classifications, 15
+mandatory deselections, four-shard measured-LPT allocator, sensitivity allowance
+and 4500-second execution deadline remain in force. The largest sensitivity
+projection remains 3636.963 seconds. These are local projections, not hosted L3.
+
+Retained local evidence is under
+`C:\Users\User\AppData\Local\Temp\nt-aut2-d2-evidence-2c3c3db1d5bd4819966b8eddf1d60d93`.
+The final module's JUnit, console, runtime/test source hashes and measurement
+summary are in `final-readiness/`. Earlier EPUB/supporting evidence and the
+final CI integrity output are in the parent directory. Exact final HEAD/tree,
+publication guards and the independent-review command are recorded in the
+local `HERMES_HANDOFF.md` after commit. No hosted qualification or new L4
+qualification is claimed.
+
+Final CI integrity revalidation after the last measurement/pin refresh:
+**283 passed, zero skips**, 102.82 seconds. The active projection vector is
+`[2751.51, 2549.1534623, 2549.152223, 2549.1455858]`; all four buckets remain
+below the unchanged deadline with the original sensitivity allowance.

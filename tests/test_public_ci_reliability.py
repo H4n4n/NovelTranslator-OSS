@@ -19,9 +19,9 @@ GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
     '8c757e1a96535536d17303c799108674cd8c7e476667b83a33358230a88e519f',
-    'fd8276146f1fa164f3a4a45c18b6c50c560ab6eef2630d62ab9993c07c8dee74',
-    '1b804cb25884e947f72c077b784e42fa84b917f558088d57943e0df07c0d6ebe',
-    'a12ea1b7dd96185db3cbb928e378d98fa6aad468eb16e0fda930c8c9616dd8bf',
+    '33a4fcb9808b40dd8a6d135f71c1e663f722c0904fdd8316b0535747305ee957',
+    'e3facc3553635c4dd3f40cce9caca1f4b22db3baafc801cc3179f5a5f76ceb36',
+    'fb7d4586740bd0da12fd61ea144122ff10ade22b7ad3280760a8e1938bb43a32',
 )
 
 
@@ -48,7 +48,7 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == '0d202f43fc270653843703e86c767540f11eacec2fe1a12caa1ad70ba81d7f13'
+    assert risk.digest(schedule['module_seconds']) == '82a8ae3b318387bfbcd4b560b27d7bd3e7fbaed2100814f05e8343fe6bd2df3d'
     # Original published weights and hosted provenance remain independently pinned.
     assert risk.digest(schedule['published_schedule']['module_seconds']) == (
         '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa')
@@ -59,7 +59,7 @@ def test_exact_public_partition_and_reviewed_deselections():
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
     assert [len(b) for b in buckets] == [1, 66, 66, 65]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [2751.51, 2514.6485398, 2514.6471875, 2514.6405438])
+        [2751.51, 2549.1534623000002, 2549.152223, 2549.1455858])
     assert schedule['shards'] == runner.measured_shards(schedule['module_seconds'])
     assert max(schedule['variability']['conservative_seconds']) < 4500
     assert max(schedule['variability']['sensitivity_seconds']) < 4500

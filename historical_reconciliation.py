@@ -1043,9 +1043,17 @@ def registered_publication_generations(root):
     # the current pointer was removed. Readers never repair those obligations.
     evidence = list(plain(root / "output/audits").glob("*.finalization.json"))
     evidence += list(plain(root / "output/publication_freshness").glob("*.json"))
-    evidence += list(plain(root / "output/retroactive_fixes/standalone_lineage").glob("*.prepared.json"))
+    standalone = plain(root / "output/retroactive_fixes/standalone_lineage")
+    evidence += list(standalone.glob("*.prepared.json"))
     for path in evidence:
-        captured = read_object(path).get("publication_inputs_before", {})
+        try:
+            value = read_object(path)
+        except ProductionIntegrityError as exc:
+            if path.parent != standalone:
+                raise
+            # Snapshot discovery must preserve the historical ownership contract.
+            raise ProductionIntegrityError("AUT2: HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN") from exc
+        captured = value.get("publication_inputs_before", {})
         require(isinstance(captured, dict), "INVALID_DOWNSTREAM_INVENTORY")
         for target in captured:
             relative = Path(target)

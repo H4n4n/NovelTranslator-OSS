@@ -12,6 +12,19 @@ from build_publication_chapters import framed_corpus_fingerprint
 from novel_project import NovelConfig, NovelProject, load_novel_project
 
 
+@pytest.fixture(autouse=True)
+def isolated_rendering_and_regeneration_contract(request, monkeypatch):
+    """These pre-D1 tests isolate stage rendering/recovery, not readiness.
+
+    New test_publication_readiness tests exercise the real final gate with no
+    readiness mock. Generation tests also retain the real gate, with explicit
+    synthetic review evidence installed by the novel fixture.
+    """
+    import historical_reconciliation
+    if "novel" not in request.fixturenames:
+        monkeypatch.setattr(historical_reconciliation, "require_publication_freshness", lambda project: None)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROGUE_FINGERPRINT = "357bacfb8df185af6cefa69bc44fe362977fd11b27f2be73be1c41f2273f1710"
 
@@ -1135,6 +1148,7 @@ def novel(aut1_engine, monkeypatch, request):
         heading = "Chapter 1. 7. Old Title (1)" if n == 1 else f"# Chapter {n}. Stable"
         raw = (heading + "\r\n\r\nHan walked along the strete. **Hand** — café.\r\n").encode()
         (project.chapter_dir / f"{n:04d}.md").write_bytes(raw)
+        write(project.qa_dir / f"{n:04d}.json", {"synthetic_pre_correction_qa": True})
     # Existing output ownership must survive every downstream operation.
     (root / "final/editorial_chapters").mkdir(parents=True)
     (root / "final/editorial_chapters/0001.md").write_bytes(b"stale but retained")
@@ -1154,6 +1168,26 @@ def novel(aut1_engine, monkeypatch, request):
     assert report["status"] == "CHECKED"
     report_sha = canonical_hash(report)
     install_approvals(project, report_sha)
+    # Existing regeneration contracts provide explicit synthetic review after
+    # non-EPUB stages exist. No production automatic semantic review is added.
+    # D1 gate tests import this fixture but install reviews themselves.
+    if request.node.path.name == "test_build_publication_epub.py":
+        import publication_readiness as readiness
+        original_immutable = regen._immutable_json
+        def synthetic_review(path, value):
+            original_immutable(path, value)
+            if path.name == "source_bound_provenance.json":
+                final_dir = path.parent.parent
+                workspace = regen.PublicationWorkspace(project, final_dir)
+                graph = readiness.dependency_graph(workspace)
+                review = {"revision": readiness.REVISION,
+                    "novel_id": project.config.id, "graph_sha256": canonical_hash(graph),
+                    "reviewer": "synthetic fixture authority",
+                    "reviews": {key: "explicitly_verified" for key in readiness.REQUIRED_REVIEWS}}
+                review_path = project.root / readiness.REVIEW
+                if not review_path.exists() or history.read_object(review_path) != review:
+                    write(review_path, review)
+        monkeypatch.setattr(regen, "_immutable_json", synthetic_review)
     return project, e, report_sha, aut1_engine
 
 
@@ -1216,9 +1250,15 @@ def test_aut2_real_fresh_epub_from_approved_history_and_all_stage_owners(novel):
     project, e, _, h = novel
     before = snapshot(project.root)
     assert history.publication_freshness(project)["status"] == "STALE"
+    assert not (project.root / regen.GENERATIONS).exists()
+    assert not (project.root / regen.POINTER).exists()
     result = regen.regenerate(project)
     assert result["status"] == "CURRENT" and result["content_document_count"] == 3
     output = Path(result["epub"])
+    assert history.read_object(output.parent.parent / "glossary.json") == history.read_object(project.glossary_file)
+    assert history.read_object(project.root / regen.POINTER)["generation"] == result["generation"]
+    current = regen.current_generation(project)
+    assert current["status"] == "CURRENT" and current["generation"] == result["generation"]
     with zipfile.ZipFile(output) as archive:
         body = "\n".join(archive.read(n).decode() for n in archive.namelist() if "unit_" in n)
     assert "Hann walked" in body and "New Title" in body and "street" in body

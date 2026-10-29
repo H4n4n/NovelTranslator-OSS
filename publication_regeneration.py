@@ -313,6 +313,7 @@ def verify_generation_corpus(project, final_dir):
 
 
 def _regenerate_locked(project):
+    from publication_readiness import require_publication_ready
     from build_finalization_corpus import build_identity_finalization_corpus
     import build_publication_epub as epub
     from production_run_lock import held_production_run_lock
@@ -323,6 +324,10 @@ def _regenerate_locked(project):
     generation = plain(project.root / GENERATIONS / identity)
     final_dir = generation / "final"
     workspace = PublicationWorkspace(project, final_dir)
+    # Existing EPUB reuse must fail before any stage/report write. Archive
+    # integrity alone cannot authorize certification or pointer promotion.
+    if plain(epub.publication_paths(workspace)["output"]).exists():
+        require_publication_ready(workspace)
     _plain_tree(generation)
     generation.mkdir(parents=True, exist_ok=True)
     _immutable_json(generation / "intent.json", inputs)
@@ -355,6 +360,7 @@ def _regenerate_locked(project):
         atomic_write_bytes(md, expected_md)
     if not (final_dir / "editorial_chapters").exists():
         editorial.apply_ready_plan(workspace)
+    _immutable_json(final_dir / "glossary.json", read_object(project.glossary_file))
     _immutable_json(reports / "source_bound_provenance.json", inputs)
     verify_generation_corpus(project, final_dir)
     output = epub.publication_paths(workspace)["output"]
@@ -364,6 +370,7 @@ def _regenerate_locked(project):
     require(_inputs(project) == inputs, "SOURCE_CHANGED_DURING_REGENERATION")
     pointer = {"revision": REVISION, "novel_id": project.config.id, "generation": identity,
                "epub_sha256": digest(_bytes(output))}
+    require_publication_ready(workspace)
     # This is the only replaceable publication artifact: old generation bytes stay.
     path = plain(project.root / POINTER)
     if path.exists():
@@ -385,6 +392,7 @@ def regenerate(project):
 
 
 def _verify_epub(workspace):
+    """Archive/report integrity only; never a CURRENT/readiness authority."""
     import build_publication_epub as epub
     paths = epub.publication_paths(workspace)
     corpus = epub.load_publication_corpus(workspace)
@@ -440,6 +448,8 @@ def current_generation(project):
         require(digest(_bytes(output)) == pointer.get("epub_sha256"), "GENERATION_EPUB_DRIFT")
         _verify_epub(workspace)
         require(_inputs(project) == inputs, "SOURCE_CHANGED_DURING_VERIFICATION")
+        from publication_readiness import require_publication_ready
+        require_publication_ready(workspace)
         return {"status": "CURRENT", "generation": identity, "artifact": {
             "path": output.relative_to(project.root).as_posix(), "sha256": pointer["epub_sha256"], "status": "CURRENT"}}
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:

@@ -1019,10 +1019,106 @@ def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):
             "phase": "DISCOVERY_NOT_COMMIT_AUTHORITY", "provider_calls": 0}
 
 
+def registered_publication_generations(root):
+    """Inventory claims/references, not unrelated files or directories.
+
+    An immutable input-hash intent registers even an interrupted generation.
+    Published EPUBs additionally require their matching provenance and archive
+    proof. Historical snapshots and the pointer retain missing-root obligations.
+    No readiness claim, cleanup, registration or evidence repair occurs here.
+    """
+    from publication_regeneration import (
+        GENERATIONS, POINTER, APPROVALS, REVISION as generation_revision, _sha, _plain_tree,
+        PublicationWorkspace, _verify_epub, _validate_previous_pointer,
+    )
+    from novel_project import NovelConfig, NovelProject, repository_root
+    root = plain(root)
+    directory = plain(root / GENERATIONS)
+    _plain_tree(directory)  # Links are refused even in otherwise unrelated residue.
+    references = set()
+    pointer = plain(root / POINTER)
+    if pointer.exists():
+        references.add(_sha(read_object(pointer).get("generation")))
+    # An old captured target must not disappear merely because registration or
+    # the current pointer was removed. Readers never repair those obligations.
+    evidence = list(plain(root / "output/audits").glob("*.finalization.json"))
+    evidence += list(plain(root / "output/publication_freshness").glob("*.json"))
+    standalone = plain(root / "output/retroactive_fixes/standalone_lineage")
+    evidence += list(standalone.glob("*.prepared.json"))
+    for path in evidence:
+        try:
+            value = read_object(path)
+        except ProductionIntegrityError as exc:
+            if path.parent != standalone:
+                raise
+            # Snapshot discovery must preserve the historical ownership contract.
+            raise ProductionIntegrityError("AUT2: HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN") from exc
+        captured = value.get("publication_inputs_before", {})
+        require(isinstance(captured, dict), "INVALID_DOWNSTREAM_INVENTORY")
+        for target in captured:
+            relative = Path(target)
+            parts = relative.parts
+            require(not relative.is_absolute() and not relative.drive and ".." not in parts
+                    and ":" not in target, "INVALID_GENERATION_REFERENCE")
+            if tuple(part.casefold() for part in parts[:2]) == ("output", "publication_generations"):
+                require(len(parts) >= 4 and parts[3] == "final" and ".." not in parts,
+                        "INVALID_GENERATION_REFERENCE")
+                references.add(_sha(parts[2]))
+    candidates = set(references)
+    reserved = {"intent.json", "source_bound_provenance.json", "publication_current.json"}
+    for entry in sorted(directory.iterdir()) if directory.is_dir() else ():
+        if entry.is_dir():
+            claims = (entry / "final").exists() or any(p.name.casefold() in reserved for p in entry.rglob("*"))
+            if claims:
+                candidates.add(_sha(entry.name))
+        else:
+            require(entry.name.casefold() not in reserved and entry.name not in references,
+                    "UNREGISTERED_GENERATION_CLAIM")
+    if not candidates and not pointer.exists():
+        return []
+    config = NovelConfig.from_dict(read_object(root / "novel.json"))
+    project = NovelProject(repository_root(), root, config)
+    result = []
+    for identity in sorted(candidates):
+        generation = plain(directory / identity)
+        require(generation.is_dir(), "MISSING_REFERENCED_GENERATION")
+        original = read_object(generation / "intent.json")
+        require(set(original) == {"revision", "source", "approvals", "authorization_sha256", "runtime"}
+                and original["revision"] == generation_revision and canonical_hash(original) == identity
+                and original["source"]["novel_id"] == config.id
+                and original["source"]["config"]["id"] == config.id,
+                "INVALID_OR_FOREIGN_GENERATION_REGISTRATION")
+        require(isinstance(original["approvals"], dict) and isinstance(original["runtime"], dict)
+                and bool(original["runtime"]) and original["source"].get("revision") == generation_revision
+                and set(APPROVALS) <= set(original["approvals"]) <= set(APPROVALS) | {"normalization_inventory"}
+                and set(original["source"]) == {"revision", "novel_id", "config", "source_inventory_sha256",
+                    "chapters", "evidence", "profile", "whole_history_sha256", "transactions", "novel_policy"},
+                "INVALID_GENERATION_REGISTRATION_SCHEMA")
+        _sha(original["authorization_sha256"])
+        for hashes in (original["approvals"], original["runtime"]):
+            for value in hashes.values():
+                _sha(value)
+        # Partial stage JSON remains unverified, but malformed evidence cannot
+        # hide behind an otherwise valid registration or unrelated residue.
+        for path in generation.rglob("*.json"):
+            read_object(path)
+        proof = plain(generation / "final/reports/source_bound_provenance.json")
+        if proof.exists():
+            require(read_object(proof) == original, "GENERATION_SOURCE_PROVENANCE_STALE")
+        final = generation / "final"
+        if any(plain(final / "epub").glob("*.epub")):
+            require(proof.is_file(), "MISSING_PUBLISHED_GENERATION_PROOF")
+            _verify_epub(PublicationWorkspace(project, final))
+        result.append(generation)
+    if pointer.exists():
+        _validate_previous_pointer(project)  # Exact novel/root/EPUB hash; no CURRENT promotion.
+    return result
+
+
 def publication_input_snapshot(root):
     """Hashes only: inventory known local downstream stages before invalidation."""
     root = plain(root)
-    folders = ("output/epub", "final/chapters", "final/normalized_chapters",
+    folders = ("output/qa", "output/epub", "final/chapters", "final/normalized_chapters",
                "final/titled_chapters", "final/publication_chapters", "final/editorial_chapters",
                "final/reports", "final/epub")
     result = {}
@@ -1030,6 +1126,23 @@ def publication_input_snapshot(root):
         directory = plain(root / name)
         result[name] = {p.name: digest(plain(p).read_bytes()) for p in sorted(directory.glob("*"))
                         if p.is_file() and p.suffix in {".md", ".json", ".epub"}}
+    # New intents capture actual state/QA and generation targets before edits.
+    # Existing immutable snapshots retain their original replay contract.
+    result["data"] = {name: digest(plain(root / "data" / name).read_bytes())
+                      for name in ("continuity.json", "issues.json")
+                      if plain(root / "data" / name).is_file()}
+    for generation in registered_publication_generations(root):
+        for folder in ("chapters", "normalized_chapters", "titled_chapters", "publication_chapters",
+                       "editorial_chapters", "reports", "epub"):
+            directory = plain(generation / "final" / folder)
+            result[directory.relative_to(root).as_posix()] = {
+                p.name: digest(plain(p).read_bytes()) for p in sorted(directory.glob("*")) if p.is_file()}
+        for name in ("manifest.json", "glossary.json"):
+            path = plain(generation / "final" / name)
+            if path.is_file():
+                result[path.relative_to(root).as_posix()] = digest(path.read_bytes())
+    glossary = plain(root / "final/glossary.json")
+    result["final/glossary.json"] = digest(glossary.read_bytes()) if glossary.is_file() else None
     manifest = plain(root / "final/manifest.json")
     result["final/manifest.json"] = digest(manifest.read_bytes()) if manifest.is_file() else None
     return result
@@ -1163,12 +1276,21 @@ def publication_freshness(project):
     dependencies = []
     for revision in revisions:
         for folder, files in revision["publication_inputs_before"].items():
-            if folder == "final/manifest.json":
-                files = {"manifest.json": files} if files else {}
-                folder = "final"
-            require(folder in {"final", "output/epub", "final/chapters", "final/normalized_chapters",
+            parts = Path(folder).parts
+            generated = (len(parts) >= 4 and parts[:2] == ("output", "publication_generations")
+                         and len(parts[2]) == 64 and all(c in "0123456789abcdef" for c in parts[2])
+                         and parts[3] == "final")
+            if folder in {"final/manifest.json", "final/glossary.json"} or (
+                    generated and len(parts) == 5 and parts[4] in {"manifest.json", "glossary.json"}):
+                files = {parts[-1]: files} if files else {}
+                folder = Path(folder).parent.as_posix()
+                parts = Path(folder).parts
+            allowed_generation = generated and (len(parts) == 4 or len(parts) == 5 and parts[4] in {
+                "chapters", "normalized_chapters", "titled_chapters", "publication_chapters",
+                "editorial_chapters", "reports", "epub"})
+            require((allowed_generation or folder in {"final", "data", "output/qa", "output/epub", "final/chapters", "final/normalized_chapters",
                                "final/titled_chapters", "final/publication_chapters", "final/editorial_chapters",
-                               "final/reports", "final/epub"} and isinstance(files, dict), "INVALID_DOWNSTREAM_INVENTORY")
+                               "final/reports", "final/epub"}) and isinstance(files, dict), "INVALID_DOWNSTREAM_INVENTORY")
             for name, before_sha in files.items():
                 require(isinstance(name, str) and Path(name).name == name and "/" not in name and "\\" not in name,
                         "INVALID_DOWNSTREAM_NAME")
@@ -1201,6 +1323,9 @@ def require_publication_freshness(project):
         verify_generation_corpus(project, final_dir)
     else:
         require(not revisions, "PUBLICATION_STALE_REVALIDATE_DOWNSTREAM_PLANS")
+        require(False, "PUBLICATION_MISSING_SOURCE_PROOF_REVALIDATE_DOWNSTREAM")
+    from publication_readiness import require_publication_ready
+    require_publication_ready(project)
 
 
 @proof_traversal

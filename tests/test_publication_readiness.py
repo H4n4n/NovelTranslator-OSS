@@ -492,3 +492,320 @@ def test_d11_windows_case_aliases_are_evidence_claims_not_residue(novel, marker)
     before = snapshot(project.root)
     with pytest.raises(RuntimeError): history.publication_input_snapshot(project.root)
     assert snapshot(project.root) == before
+
+
+# D2 advisory preflight and immutable historical recertification.
+def d2_finish_next_audit(novel, monkeypatch, *, deferred=False):
+    import production_periodic_audit_finalization as finalizer
+    project, engine, _, _ = novel
+    accepted, stats, chunking = d11_next_audit(novel, monkeypatch)
+    # Add an independently source-backed identity discovered in chapter 4.
+    # Its source also occurs in chapter 1, where the correction must reach.
+    # Unlike the inherited D1 helper's forced old-term decision, this candidate
+    # is selected by the real first_chapter window policy during reconstruction.
+    engine.glossary["entries"]["1"] = {"english": "Old Title", "category": "character",
+                                        "status": "provisional", "first_chapter": 4}
+    engine.save_json(engine.GLOSSARY_FILE, engine.glossary)
+    engine.chapters[-1]["text"] += " 1"
+    engine.save_json(engine.CHAPTERS_FILE, engine.chapters)
+    (project.chapter_dir / "0004.md").write_bytes(b"Chapter 4. Stable\n\nHann returned with Old Title.\n")
+    accepted["decisions"] = [{"chinese": "1", "action": "correct", "english": "Hann" if deferred else "New Identity"}]
+    engine.save_json(engine.periodic_audit_checkpoint_path(4, 4), {"synthetic_saved_paid_response": accepted})
+    # Remove the inherited fixture's forced-target adapter for this window.
+    # The real function's globals belong to this synthetic engine; retrieve it
+    # from the inherited closure without substituting an implementation.
+    forced = engine.apply_periodic_audit
+    original = next(cell.cell_contents for cell in forced.__closure__ if callable(cell.cell_contents))
+    monkeypatch.setattr(engine, "apply_periodic_audit", original)
+    with production_run_lock(project.root):
+        finalizer.finalize_periodic_audit(engine, 4, 4, accepted, stats, chunking)
+    return replace(project, config=engine.ACTIVE_NOVEL_CONFIG)
+
+
+def d2_no_prose(result, project):
+    import json
+    serialized = json.dumps(result, ensure_ascii=False)
+    for text in ("Hann walked", "strete", "expected_english", "anchor_text", "preservation_anchors",
+                 "PRIVATE_APPROVAL_ANCHOR", "Hand**", "arrived", "departed"):
+        assert text not in serialized
+    assert all(key not in serialized for key in ("韓", "한민"))
+    assert len(serialized) < 16000
+    assert result["publication_authority"] is False and result["provider_calls"] == 0
+
+
+def test_d2_current_preflight_is_independent_read_only_and_cli_equivalent(novel, monkeypatch, capsys):
+    import json
+    project, _, _, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    before = snapshot(project.root)
+    lock = project.root / ".production.lock"
+    lock_before = (lock.read_bytes(), lock.stat().st_mtime_ns)
+    monkeypatch.setattr(generation, "regenerate", lambda *a: pytest.fail("preflight cannot rebuild"))
+    monkeypatch.setattr(generation, "select_project", lambda *a: project)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "CURRENT"
+    assert all(result["diagnostics"][key]["stage_validation"] == "VERIFIED" for key in generation.APPROVALS)
+    assert generation.main(["--novel", project.config.id, "--report"]) == 0
+    assert json.loads(capsys.readouterr().out) == result
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+    assert (lock.read_bytes(), lock.stat().st_mtime_ns) == lock_before
+
+
+def test_d2_preflight_stale_runtime_is_distinct_from_current(novel):
+    project, _, _, harness = novel
+    workspace = d11_existing_epub(project)
+    previous = d11_previous_generation(project, workspace)
+    write(project.root / generation.POINTER, d11_pointer(project, previous))
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "STALE"
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_correction_names_every_stale_approval_and_report(novel, monkeypatch):
+    project, _, old_report, harness = novel
+    project = d2_finish_next_audit(novel, monkeypatch)
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "REVIEW_REQUIRED"
+    diag = result["diagnostics"]
+    assert diag["whole_history"]["status"] == "STALE"
+    assert diag["whole_history"]["path"] == "output/audits/whole_history/" + old_report + ".json"
+    assert diag["source_snapshot"]["path"] == generation.AUTHORIZATION
+    for key, path in generation.APPROVALS.items():
+        assert diag[key]["status"] == "REVIEW_REQUIRED" and diag[key]["path"] == path
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_recertification_creates_only_immutable_report_and_replays(novel, monkeypatch, capsys):
+    import json
+    from goat_periodic_audit_finalize_plan import local_module
+    project, engine, _, harness = novel
+    project = d2_finish_next_audit(novel, monkeypatch)
+    # The real loader, not the synthetic engine, performs recertification.
+    module = local_module(project)
+    with pytest.raises(RuntimeError, match="tripwire"):
+        module.initialize_production_runtime_state()
+    with pytest.raises(RuntimeError, match="tripwire"):
+        module.client.chat.completions.create()
+    before = snapshot(project.root)
+    result = generation.recertify_history(project)
+    assert result["status"] == "REVIEW_REQUIRED" and result["history_status"] == "CHECKED"
+    assert result["deferred_chapters"] == 0 and result["examined_chapters"] == 4
+    report_path = project.root / result["report_path"]
+    assert canonical_hash(history.read_object(report_path)) == result["report_sha256"]
+    after = snapshot(project.root)
+    assert set(after) - set(before) == {result["report_path"]}
+    assert all(after[p] == value for p, value in before.items())
+    monkeypatch.setattr(generation, "select_project", lambda *a: project)
+    assert generation.main(["--novel", project.config.id, "--recertify-history"]) == 0
+    assert json.loads(capsys.readouterr().out) == result
+    assert generation.recertify_history(project) == result
+    assert snapshot(project.root) == after and harness.calls == []
+    d2_no_prose(result, project)
+    # Merely creating a new report never updates authorization or approvals.
+    assert generation.publication_preflight(project)["status"] == "REVIEW_REQUIRED"
+
+
+def test_d2_historical_deferrals_remain_review_required(novel, monkeypatch):
+    project, _, _, harness = novel
+    project = d2_finish_next_audit(novel, monkeypatch, deferred=True)
+    result = generation.recertify_history(project)
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["history_status"] == "CHECKED_WITH_DEFERRALS" and result["deferred_chapters"] > 0
+    before = snapshot(project.root)
+    preflight = generation.publication_preflight(project, result["report_sha256"])
+    assert preflight["status"] == "REVIEW_REQUIRED"
+    assert preflight["diagnostics"]["whole_history"]["reason_code"] == "HISTORICAL_DEFERRALS_REQUIRE_REVIEW"
+    assert generation.recertify_history(project) == result
+    d2_no_prose(preflight, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("dependency", ["authorization", "whole_history", *generation.APPROVALS])
+def test_d2_missing_dependencies_name_exact_path_without_mutation(novel, dependency):
+    project, _, sha, harness = novel
+    relative = (generation.AUTHORIZATION if dependency == "authorization" else
+                "output/audits/whole_history/" + sha + ".json" if dependency == "whole_history" else
+                generation.APPROVALS[dependency])
+    (project.root / relative).unlink()
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert result["diagnostics"][dependency]["path"] == relative
+    assert result["diagnostics"][dependency]["reason_code"] == "MISSING_PREREQUISITE"
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["duplicate_approval", "bad_report", "bad_receipt", "source", "pending",
+                                     "standalone", "foreign_auth", "unsupported_source", "invalid_pointer"])
+def test_d2_invalid_or_unsupported_evidence_blocks_without_prose_or_writes(novel, damage, monkeypatch):
+    project, _, sha, harness = novel
+    if damage == "duplicate_approval":
+        (project.root / generation.APPROVALS["title_plan"]).write_bytes(b'{"PRIVATE_APPROVAL_ANCHOR":1,"PRIVATE_APPROVAL_ANCHOR":2}')
+    elif damage == "bad_report":
+        (project.audit_dir / "whole_history" / (sha + ".json")).write_bytes(b'{}')
+    elif damage == "bad_receipt":
+        next((project.root / "output/publication_freshness").glob("*.json")).write_bytes(b'{}')
+    elif damage == "source": project.source_txt.write_bytes(b'PRIVATE_APPROVAL_ANCHOR')
+    elif damage == "pending": (project.pending_dir / "0004.md").write_bytes(b'paid pending')
+    elif damage == "standalone":
+        write(project.retroactive_dir / "standalone_lineage/orphan.prepared.json", {})
+    elif damage == "foreign_auth":
+        auth = history.read_object(project.root / generation.AUTHORIZATION)
+        auth["novel_id"] = "foreign"
+        write(project.root / generation.AUTHORIZATION, auth)
+    elif damage == "unsupported_source":
+        project = replace(project, config=replace(project.config, source_type="epub"))
+        write(project.config_file, project.config.to_dict())
+    else: write(project.root / generation.POINTER, {"generation": "../PRIVATE_APPROVAL_ANCHOR"})
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "BLOCKED"
+    if damage == "standalone":
+        assert result["diagnostics"]["whole_history"]["reason_code"] == "UNSUPPORTED_STANDALONE_REGENERATION"
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_recertification_honors_lock_and_blocks_drift_before_writes(novel, monkeypatch, capsys):
+    import json
+    from production_run_lock import ProductionRunLockedError
+    project, _, _, harness = novel
+    before = snapshot(project.root)
+    with production_run_lock(project.root):
+        with pytest.raises(ProductionRunLockedError): generation.recertify_history(project)
+    assert snapshot(project.root) == before
+    project.source_txt.write_bytes(b"changed source")
+    before = snapshot(project.root)
+    monkeypatch.setattr(generation, "select_project", lambda *a: project)
+    assert generation.main(["--novel", project.config.id, "--recertify-history"]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "BLOCKED"
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["report_shape", "report_count", "report_transactions", "stage_anchor", "foreign_review", "corpus"])
+def test_d2_self_hashed_malformed_or_corrupt_current_evidence_is_blocked(novel, damage, monkeypatch):
+    project, _, sha, harness = novel
+    if damage.startswith("report_"):
+        report = history.read_object(project.audit_dir / "whole_history" / (sha + ".json"))
+        if damage == "report_shape": report["chapters"] = "PRIVATE_APPROVAL_ANCHOR"
+        elif damage == "report_transactions": report["transactions"] = [{}]
+        else: report["unchanged_chapters"] += 1
+        sha = canonical_hash(report)
+        write(project.audit_dir / "whole_history" / (sha + ".json"), report)
+        auth = history.read_object(project.root / generation.AUTHORIZATION)
+        auth["whole_history_sha256"] = sha
+        write(project.root / generation.AUTHORIZATION, auth)
+    else:
+        workspace = d11_existing_epub(project)
+        write(project.root / generation.POINTER, d11_pointer(project, workspace))
+        if damage == "stage_anchor":
+            def reject(*a, **k):
+                raise generation.titles.TitleApplicationError("PRIVATE_APPROVAL_ANCHOR expected English prose")
+            monkeypatch.setattr(generation.titles, "prepare_application", reject)
+        elif damage == "foreign_review":
+            review = history.read_object(project.root / readiness.REVIEW)
+            review["novel_id"] = "foreign"
+            write(project.root / readiness.REVIEW, review)
+        else:
+            (workspace.publication_final_dir / "normalized_chapters/0001.md").write_bytes(b"PRIVATE_APPROVAL_ANCHOR")
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "BLOCKED"
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["checkpoint", "backup", "transaction", "progress"])
+def test_d2_recertification_refuses_historical_drift_without_report_writes(novel, damage):
+    project, _, _, harness = novel
+    if damage == "checkpoint":
+        (project.audit_dir / "audit_0001_0003.checkpoint.json").write_bytes(b"{}")
+    elif damage == "backup":
+        next(project.backup_dir.glob("retroactive_*/chapters_before/0001.md")).write_bytes(b"changed backup")
+    elif damage == "transaction":
+        next((project.retroactive_dir / "transactions").glob("*.plan.json")).write_bytes(b"{}")
+    else:
+        progress = history.read_object(project.progress_file)
+        progress["last_audited_chapter"] = 0
+        write(project.progress_file, progress)
+    before = snapshot(project.root)
+    with pytest.raises((RuntimeError, ValueError, KeyError, TypeError)):
+        generation.recertify_history(project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_preflight_does_not_create_a_lock_file(novel):
+    project, _, _, harness = novel
+    lock = project.root / ".production.lock"
+    # Fixture setup has released its lock; use a pristine read-only situation.
+    lock.unlink()
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert not lock.exists() and snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("approval", list(generation.APPROVALS))
+def test_d2_rehashed_empty_stage_approval_is_blocked_before_intermediates_exist(novel, approval):
+    from retroactive_span_planning import digest
+    project, _, _, harness = novel
+    path = project.root / generation.APPROVALS[approval]
+    write(path, {})
+    auth = history.read_object(project.root / generation.AUTHORIZATION)
+    auth[approval + "_sha256"] = digest(path.read_bytes())
+    write(project.root / generation.AUTHORIZATION, auth)
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "BLOCKED"
+    assert result["diagnostics"][approval]["status"] == "BLOCKED"
+    assert result["diagnostics"][approval]["path"] == generation.APPROVALS[approval]
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_missing_original_source_names_precise_path(novel):
+    project, _, _, harness = novel
+    project.source_txt.unlink()
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["status"] == "BLOCKED"
+    assert result["diagnostics"]["whole_history"]["path"] == project.source_txt.relative_to(project.root).as_posix()
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["glossary_duplicates", "transaction_duplicates", "utf16_issues", "boolean_progress"])
+def test_d2_recertification_rejects_ambiguous_json_before_saving(novel, damage, monkeypatch, capsys):
+    import json
+    project, _, sha, harness = novel
+    # A last-value-wins parser would see the same authoritative state despite
+    # contradictory duplicate fields. An absent report makes a mistaken save
+    # observable, rather than merely checking replay against an existing file.
+    (project.audit_dir / "whole_history" / (sha + ".json")).unlink()
+    if damage.endswith("duplicates"):
+        path = (project.glossary_file if damage == "glossary_duplicates" else
+                next((project.retroactive_dir / "transactions").glob("*.plan.json")))
+        value = history.read_object(path)
+        key = next(iter(value))
+        path.write_text("{" + json.dumps(key) + ":null," + json.dumps(value)[1:], encoding="utf-8")
+    elif damage == "utf16_issues":
+        value = history.read_object(project.issues_file)
+        project.issues_file.write_bytes(json.dumps(value).encode("utf-16"))
+    else:
+        value = history.read_object(project.progress_file)
+        value["completed"][0] = True
+        write(project.progress_file, value)
+    before = snapshot(project.root)
+    monkeypatch.setattr(generation, "select_project", lambda *a: project)
+    assert generation.main(["--novel", project.config.id, "--recertify-history"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "BLOCKED" and result["provider_calls"] == 0
+    preflight = generation.publication_preflight(project)
+    assert preflight["status"] == "BLOCKED"
+    d2_no_prose(preflight, project)
+    assert snapshot(project.root) == before and harness.calls == []

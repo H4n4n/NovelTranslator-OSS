@@ -809,3 +809,375 @@ def test_d2_recertification_rejects_ambiguous_json_before_saving(novel, damage, 
     assert preflight["status"] == "BLOCKED"
     d2_no_prose(preflight, project)
     assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.fixture(params=["zh", "ko"])
+def d2_recovery_novel(aut1_engine, monkeypatch, request):
+    """Public initial history with an earlier body occurrence, before any proof."""
+    from types import SimpleNamespace
+    import production_periodic_audit_finalization as finalizer
+    original = finalizer.finalize_periodic_audit
+    def initial_body(engine, start, end, accepted, stats, chunking):
+        if (start, end) == (1, 3):
+            path = Path(engine.OUTPUT_DIR) / "0001.md"
+            path.write_bytes(path.read_bytes().replace(b"Old Title", b"Stable Beginning", 1) + b"The envoy met Old Title.\r\n")
+        return original(engine, start, end, accepted, stats, chunking)
+    with monkeypatch.context() as patch:
+        patch.setattr(finalizer, "finalize_periodic_audit", initial_body)
+        import test_build_publication_epub as inherited
+        fixture = inherited.title_fixture
+        patch.setattr(inherited, "title_fixture", lambda *a, **kw: fixture(*a, current="Stable Beginning", **kw))
+        # Call the existing public fixture's constructor, with its real owners.
+        result = novel.__wrapped__(aut1_engine, monkeypatch,
+            SimpleNamespace(param=request.param, node=request.node))
+    # Explicit initial decisions: canonicalize only the heading, preserve body.
+    project = result[0]
+    from test_apply_title_resolution_plan import _fixture as title_fixture
+    directory = project.root / "explicit_initial_title_review"
+    directory.mkdir()
+    first = (project.chapter_dir / "0001.md").read_bytes()
+    _, title_plan = title_fixture(directory, heading=first.decode().splitlines()[0], current="Stable Beginning")
+    title_plan["corpora"]["normalized_title_base"] = generation.titles.corpus_fingerprint(project.chapter_dir, 3)
+    from retroactive_span_planning import digest
+    title_plan["title_decisions"][0]["application_anchors"][0]["baseline_normalized_chapter_file_sha256"] = digest(first)
+    write(project.root / generation.APPROVALS["title_plan"], title_plan)
+    outputs = []
+    for path in sorted(project.chapter_dir.glob("*.md")):
+        raw = path.read_bytes()
+        if path.stem == "0001":
+            raw = raw.replace(b"Stable Beginning", b"New Title", 1)
+        outputs.append((path.name, generation.cleanup.transform_unit(int(path.stem), path, raw).output_bytes))
+    fp = generation.cleanup.framed_corpus_fingerprint(outputs)
+    manifest = history.read_object(project.root / generation.APPROVALS["editorial_authorization"])
+    manifest["immutable_publication_checkpoint"] = {k: fp[k] for k in ("file_count", "aggregate_byte_count", "aggregate_sha256")}
+    write(project.root / generation.APPROVALS["editorial_authorization"], manifest)
+    from retroactive_span_planning import digest
+    auth = history.read_object(project.root / generation.AUTHORIZATION)
+    auth.update({k + "_sha256": digest((project.root / p).read_bytes()) for k, p in generation.APPROVALS.items()})
+    write(project.root / generation.AUTHORIZATION, auth)
+    return result
+
+
+def d2_synthetic_reissue(project, report_sha):
+    """Explicit test-only decisions; never an operator approval generator.
+
+    Review: preserve the historical correction in body/title; normalization
+    introduces no edits, titles retain the corrected name, editorial fixes only
+    the witnessed chapter-3 typo and keeps the chapter-2 heading.
+    """
+    from retroactive_span_planning import digest
+    from test_apply_title_resolution_plan import _fixture as title_fixture
+    normal = generation.normalization
+    cleanup = generation.cleanup
+    raw = (project.chapter_dir / "0001.md").read_bytes()
+    assert b"The envoy met New Identity." in raw and b"Old Title" not in raw
+    fp = normal.corpus_fingerprint(project.chapter_dir)
+    prior = history.read_object(project.root / generation.APPROVALS["normalization_plan"])
+    normal_plan = {"schema_version": 3, "plan_revision": "2.1",
+        "corpus": {"project_id": project.config.id, "inventory_recorded_final_sha256": fp["aggregate_sha256"],
+                   "verified_final_fingerprint": fp},
+        "safety": prior["safety"], "application_policy": prior["application_policy"],
+        "text_decisions": [], "pronoun_decisions": [], "summary_counts": prior["summary_counts"]}
+    directory = project.root / "explicit_synthetic_title_review"
+    directory.mkdir()
+    _, title_plan = title_fixture(directory, heading=raw.decode().splitlines()[0],
+        body="The envoy met New Identity.", current="Stable Beginning", decision="ALREADY_CONSISTENT",
+        canonical_english_title_text="Stable Beginning")
+    title_plan["corpora"]["normalized_title_base"] = generation.titles.corpus_fingerprint(project.chapter_dir, 4)
+    outputs = [(p.name, cleanup.transform_unit(int(p.stem), p, p.read_bytes()).output_bytes)
+               for p in sorted(project.chapter_dir.glob("*.md"))]
+    fp = cleanup.framed_corpus_fingerprint(outputs)
+    source = project.source_txt.read_bytes()
+    text = source.decode().splitlines()[2]
+    manifest = {"schema_version": 1, "revision": "explicit-synthetic-recovery-review-v1", "novel": project.config.id,
+        "immutable_publication_checkpoint": {k: fp[k] for k in ("file_count", "aggregate_byte_count", "aggregate_sha256")},
+        "korean_source": {"byte_count": len(source), "sha256": digest(source), "preservation_anchors": []},
+        "authorized_set": {"operation_count": 1, "heading_operation_count": 0, "prose_operation_count": 1, "affected_units": [3]},
+        "edits": [{"edit_id": "reviewed-chapter-three-typo", "unit": 3, "edit_category": "PROSE_TYPO", "scope": "prose",
+            "expected_english": "strete", "replacement": "street", "source_evidence": [{"anchor_text": text,
+                "anchor_sha256": digest(text.encode()), "source_locator": {"line_number_hint": 3}}]}],
+        "preservation_guards": [{"guard_id": "reviewed-keep-title", "units": [2],
+                                 "expected_heading_lines": {"2": ["Chapter 2. Stable", ""]}}]}
+    for key, value in (("normalization_plan", normal_plan), ("title_plan", title_plan), ("editorial_authorization", manifest)):
+        write(project.root / generation.APPROVALS[key], value)
+    authorization = {"revision": generation.REVISION, "novel_id": project.config.id, "enabled": True,
+        "finalization": "committed-identity-v1", "allow_manual_approved": False, "whole_history_sha256": report_sha,
+        "source_snapshot_sha256": canonical_hash(generation.source_snapshot(project, report_sha))}
+    authorization.update({k + "_sha256": digest((project.root / p).read_bytes()) for k, p in generation.APPROVALS.items()})
+    write(project.root / generation.AUTHORIZATION, authorization)
+
+
+def d2_current_then_correct(novel, monkeypatch):
+    project, engine, _, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    assert generation.current_generation(project)["status"] == "CURRENT"
+    preserved = snapshot(workspace.publication_final_dir.parent)
+    pointer = (project.root / generation.POINTER).read_bytes()
+    project = d2_finish_next_audit(novel, monkeypatch)
+    assert b"The envoy met New Identity." in (project.chapter_dir / "0001.md").read_bytes()
+    assert generation.current_generation(project)["status"] == "STALE"
+    assert snapshot(workspace.publication_final_dir.parent) == preserved
+    assert (project.root / generation.POINTER).read_bytes() == pointer
+    return project, workspace, preserved, pointer
+
+
+def test_d2_approval_handoff_complete_recovery_to_corrected_epub(d2_recovery_novel, monkeypatch):
+    import zipfile
+    from retroactive_span_planning import digest
+    project, old, preserved, pointer = d2_current_then_correct(d2_recovery_novel, monkeypatch)
+    before = snapshot(project.root)
+    unavailable = generation.publication_preflight(project)
+    assert unavailable["approval_review"]["source_changes"]["reason_code"] == "CURRENT_SOURCE_EVIDENCE_UNAVAILABLE"
+    assert snapshot(project.root) == before
+    recertified = generation.recertify_history(project)
+    assert recertified["history_status"] == "CHECKED"
+    before = snapshot(project.root)
+    packet = generation.publication_preflight(project, recertified["report_sha256"])
+    changes = packet["approval_review"]["source_changes"]
+    assert changes["status"] == "AVAILABLE", changes
+    assert changes["changed_chapters"] == [1, 4]
+    assert "data/glossary.json" in changes["changed_evidence_paths"]
+    assert packet["diagnostics"]["normalization_plan"]["decision_reissuance_required"] is True
+    assert all(packet["diagnostics"][k]["approval_bytes_valid"] is True for k in generation.APPROVALS)
+    actions = packet["approval_review"]["required_operator_actions"]
+    assert [a["order"] for a in actions] == list(range(1, len(actions) + 1))
+    assert {generation.AUTHORIZATION, readiness.REVIEW, *generation.APPROVALS.values()} <= {a["path"] for a in actions}
+    d2_no_prose(packet, project)
+    assert snapshot(project.root) == before
+    old_review = (project.root / readiness.REVIEW).read_bytes()
+    d2_synthetic_reissue(project, recertified["report_sha256"])
+    # An actual interruption at a real owner boundary retains recoverable output.
+    publish_titles = generation.titles.publish_titled_corpus
+    with monkeypatch.context() as patch:
+        def interrupt_titles(*args, **kwargs):
+            publish_titles(*args, **kwargs)
+            raise InterruptedError("synthetic after title publication")
+        patch.setattr(generation.titles, "publish_titled_corpus", interrupt_titles)
+        with pytest.raises(InterruptedError, match="synthetic after title"):
+            generation.regenerate(project)
+    assert (project.root / generation.POINTER).read_bytes() == pointer
+    assert snapshot(old.publication_final_dir.parent) == preserved
+    # Resume the same engine; complete candidate exists before deriving its graph.
+    with pytest.raises(RuntimeError, match="PUBLICATION_REVIEW_STALE"):
+        generation.regenerate(project)
+    inputs = generation._inputs(project)
+    candidate = generation.PublicationWorkspace(project, project.root / generation.GENERATIONS / canonical_hash(inputs) / "final")
+    generation.verify_generation_corpus(project, candidate.publication_final_dir)
+    assert (candidate.publication_final_dir / "editorial_chapters/0001.md").is_file()
+    assert (project.root / readiness.REVIEW).read_bytes() == old_review
+    with pytest.raises(RuntimeError, match="PUBLICATION_REVIEW_STALE"):
+        readiness.require_publication_ready(candidate)
+    with pytest.raises(RuntimeError, match="PUBLICATION_REVIEW_REQUIRED"):
+        with monkeypatch.context() as patch:
+            patch.setattr(readiness, "REVIEW", "config/synthetic_missing_review.json")
+            readiness.require_publication_ready(candidate)
+    graph = explicit_synthetic_review(candidate)
+    assert graph == readiness.require_publication_ready(candidate)
+    result = generation.regenerate(project)
+    assert result["status"] == generation.current_generation(project)["status"] == "CURRENT"
+    assert result["generation"] != old.publication_final_dir.parent.name
+    with zipfile.ZipFile(result["epub"]) as archive:
+        chapter = [n for n in archive.namelist() if "unit_0001" in n and n.endswith(".xhtml")]
+        assert len(chapter) == 1
+        text = archive.read(chapter[0]).decode()
+        assert "The envoy met New Identity." in text and "Old Title" not in text
+    new_pointer = history.read_object(project.root / generation.POINTER)
+    assert new_pointer["generation"] == result["generation"]
+    assert new_pointer["epub_sha256"] == digest(Path(result["epub"]).read_bytes())
+    assert snapshot(old.publication_final_dir.parent) == preserved
+    assert generation.regenerate(project) == result
+    assert d2_recovery_novel[3].calls == []
+    # Retained, public-only evidence for independent archive inspection.
+    write(project.root / "synthetic_recovery_proof.json", {
+        "old_generation": old.publication_final_dir.parent.name, "new_generation": result["generation"],
+        "epub": result["epub"], "epub_sha256": new_pointer["epub_sha256"],
+        "old_generation_bytes_and_mtimes_unchanged": True,
+        "old_inventory_sha256": canonical_hash({p: digest(value[0]) for p, value in preserved.items()}),
+        "corrected_chapter": 1, "archive_content_verified": True, "provider_calls": 0,
+        "candidate_graph_sha256": canonical_hash(graph), "status": "CURRENT"})
+    write(project.root / "synthetic_approval_handoff.json", packet)
+
+
+@pytest.mark.parametrize("damage", ["rehash_old_decisions", "authorization_hashes_only", "wrong_normalization_corpus", "wrong_title_corpus", "rebased_title_inventory"])
+def test_d2_recovery_refuses_invalid_decisions_preserving_current(d2_recovery_novel, monkeypatch, damage):
+    from retroactive_span_planning import digest
+    project, old, preserved, pointer = d2_current_then_correct(d2_recovery_novel, monkeypatch)
+    report = generation.recertify_history(project)
+    auth = history.read_object(project.root / generation.AUTHORIZATION)
+    auth.update(whole_history_sha256=report["report_sha256"],
+                source_snapshot_sha256=canonical_hash(generation.source_snapshot(project, report["report_sha256"])))
+    old_title = history.read_object(project.root / generation.APPROVALS["title_plan"])
+    if damage.startswith("wrong_") or damage == "rebased_title_inventory":
+        d2_synthetic_reissue(project, report["report_sha256"])
+        auth = history.read_object(project.root / generation.AUTHORIZATION)
+        key = "normalization_plan" if damage == "wrong_normalization_corpus" else "title_plan"
+        path = project.root / generation.APPROVALS[key]
+        plan = history.read_object(path)
+        corpus = plan["corpus"]["verified_final_fingerprint"] if key == "normalization_plan" else plan["corpora"]["normalized_title_base"]
+        if damage == "rebased_title_inventory":
+            # Full new corpus inventory still cannot repair old exact title
+            # anchors or turn the old semantic choice into a fresh decision.
+            old_title["corpora"] = plan["corpora"]
+            plan = old_title
+        else:
+            corpus["aggregate_sha256"] = "0" * 64
+        write(path, plan)
+    elif damage == "rehash_old_decisions":
+        for key, path in generation.APPROVALS.items():
+            target = project.root / path
+            target.write_bytes(target.read_bytes() + b"\n")
+    auth.update({k + "_sha256": digest((project.root / p).read_bytes()) for k, p in generation.APPROVALS.items()})
+    write(project.root / generation.AUTHORIZATION, auth)
+    with pytest.raises((RuntimeError, ValueError)):
+        generation.regenerate(project)
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    key = "title_plan" if damage in {"wrong_title_corpus", "rebased_title_inventory"} else "normalization_plan"
+    assert result["diagnostics"][key]["decision_binding"] == "INVALID"
+    assert result["diagnostics"][key]["decision_reissuance_required"] is True
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before
+    assert (project.root / generation.POINTER).read_bytes() == pointer
+    assert snapshot(old.publication_final_dir.parent) == preserved
+    assert d2_recovery_novel[3].calls == []
+
+
+def test_d2_approval_handoff_history_only_reuses_independently_valid_decisions(novel):
+    project, _, _, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    # Evidence-only drift in a node that no stage approval embeds.
+    write(project.continuity_file, {"summary": "synthetic independently reviewed continuity"})
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    assert result["approval_review"]["source_changes"]["changed_chapters"] == []
+    assert result["approval_review"]["source_changes"]["changed_evidence_paths"] == ["data/continuity.json"]
+    for key in generation.APPROVALS:
+        row = result["diagnostics"][key]
+        assert row["approval_bytes_valid"] is True and row["decision_binding"] == "VALID"
+        assert row["decision_reissuance_required"] is False
+        assert row["semantic_review"] == "NOT_PERFORMED"
+    assert not any(a["path"] in generation.APPROVALS.values()
+                   for a in result["approval_review"]["required_operator_actions"])
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["malformed_intent", "malformed_source", "corrupt_corpus_fingerprint", "missing_pointer", "unsafe_evidence_path"])
+def test_d2_approval_handoff_unavailable_prior_evidence_is_read_only(novel, damage):
+    project, _, _, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    if damage == "missing_pointer":
+        (project.root / generation.POINTER).unlink()
+    elif damage == "malformed_intent":
+        (workspace.publication_final_dir.parent / "intent.json").write_bytes(b'{"source":')
+    else:
+        original = history.read_object(workspace.publication_final_dir.parent / "intent.json")
+        if damage == "malformed_source":
+            original["source"]["chapters"] = {"file_count": True}
+        elif damage == "corrupt_corpus_fingerprint":
+            original["source"]["chapters"]["aggregate_sha256"] = "0" * 64
+        else:
+            original["source"]["evidence"]["PRIVATE_APPROVAL_ANCHOR"] = "1" * 64
+        # Keep hashes mutually consistent so comparison must inspect structure.
+        import shutil
+        target = project.root / generation.GENERATIONS / canonical_hash(original) / "final"
+        shutil.copytree(workspace.publication_final_dir, target)
+        write(target.parent / "intent.json", original)
+        write(target / "reports/source_bound_provenance.json", original)
+        previous = generation.PublicationWorkspace(project, target)
+        paths = epub.publication_paths(previous)
+        corpus = epub.load_publication_corpus(previous)
+        validation = epub.verify_epub_archive(paths["output"], corpus)
+        report = epub.build_epub_report(corpus, paths["output"], paths["output"].read_bytes(), validation, corpus.fingerprint)
+        write(paths["report_json"], report)
+        paths["report_md"].write_bytes(epub.render_markdown_report(report).encode())
+        write(project.root / generation.POINTER, d11_pointer(project, previous))
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    changes = result["approval_review"]["source_changes"]
+    assert changes["status"] == "UNAVAILABLE"
+    assert changes["changed_chapters"] is None and changes["changed_evidence_paths"] is None
+    assert changes["reason_code"] == ("NO_PREVIOUS_GENERATION" if damage == "missing_pointer" else "PREVIOUS_GENERATION_EVIDENCE_INVALID")
+    if damage in {"malformed_intent", "malformed_source", "corrupt_corpus_fingerprint"}:
+        assert result["status"] == "BLOCKED"
+        with pytest.raises((RuntimeError, ValueError, KeyError)):
+            generation.regenerate(project)
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("damage", ["standalone", "malformed_prior", "missing_review", "stale_review"])
+def test_d2_handoff_refusal_preserves_selected_generation_and_pointer(novel, damage):
+    project, _, _, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    assert generation.current_generation(project)["status"] == "CURRENT"
+    if damage == "standalone":
+        write(project.retroactive_dir / "standalone_lineage/orphan.prepared.json", {})
+    elif damage == "malformed_prior":
+        (workspace.publication_final_dir.parent / "intent.json").write_bytes(b'{"source":')
+    elif damage == "missing_review":
+        (project.root / readiness.REVIEW).unlink()
+    else:
+        review = history.read_object(project.root / readiness.REVIEW)
+        review["graph_sha256"] = "0" * 64
+        write(project.root / readiness.REVIEW, review)
+    before = snapshot(project.root)
+    with pytest.raises((RuntimeError, ValueError)):
+        generation.regenerate(project)
+    result = generation.publication_preflight(project)
+    assert result["status"] in {"BLOCKED", "REVIEW_REQUIRED"}
+    if damage == "standalone":
+        assert result["diagnostics"]["whole_history"]["reason_code"] == "UNSUPPORTED_STANDALONE_REGENERATION"
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+def test_d2_evidence_only_drift_never_preserves_invalid_embedded_binding(novel):
+    from retroactive_span_planning import digest
+    project, _, report, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    write(project.continuity_file, {"summary": "synthetic changed evidence"})
+    path = project.root / generation.APPROVALS["title_plan"]
+    plan = history.read_object(path)
+    plan["corpora"]["normalized_title_base"]["aggregate_sha256"] = "0" * 64
+    write(path, plan)
+    auth = history.read_object(project.root / generation.AUTHORIZATION)
+    auth["source_snapshot_sha256"] = canonical_hash(generation.source_snapshot(project, report))
+    auth["title_plan_sha256"] = digest(path.read_bytes())
+    write(project.root / generation.AUTHORIZATION, auth)
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project)
+    row = result["diagnostics"]["title_plan"]
+    assert row["approval_bytes_valid"] is True
+    assert row["decision_binding"] == "INVALID" and row["decision_reissuance_required"] is True
+    downstream = result["diagnostics"]["editorial_authorization"]
+    assert downstream["decision_binding"] == "NOT_VERIFIED" and downstream["decision_reissuance_required"] is None
+    assert downstream["binding_reason_code"] == "UPSTREAM_STAGE_INPUT_UNAVAILABLE"
+    assert any(a["path"] == generation.AUTHORIZATION for a in result["approval_review"]["required_operator_actions"])
+    assert result["approval_review"]["source_changes"]["changed_chapters"] == []
+    assert snapshot(project.root) == before and harness.calls == []
+
+
+@pytest.mark.parametrize("missing", ["title_plan", "authorization"])
+def test_d2_handoff_missing_dependency_does_not_invalidate_unrelated_decisions(novel, missing):
+    project, _, report, harness = novel
+    workspace = d11_existing_epub(project)
+    write(project.root / generation.POINTER, d11_pointer(project, workspace))
+    path = generation.AUTHORIZATION if missing == "authorization" else generation.APPROVALS[missing]
+    (project.root / path).unlink()
+    before = snapshot(project.root)
+    result = generation.publication_preflight(project, report)
+    row = result["diagnostics"]["normalization_plan"]
+    if missing == "title_plan":
+        assert row["approval_bytes_valid"] is True
+        assert row["decision_binding"] == "VALID" and row["decision_reissuance_required"] is False
+        assert result["diagnostics"]["editorial_authorization"]["decision_binding"] == "NOT_VERIFIED"
+    else:
+        assert row["decision_binding"] == "NOT_VERIFIED" and row["decision_reissuance_required"] is None
+        assert row["binding_reason_code"] == "REGENERATION_AUTHORIZATION_UNAVAILABLE"
+    d2_no_prose(result, project)
+    assert snapshot(project.root) == before and harness.calls == []

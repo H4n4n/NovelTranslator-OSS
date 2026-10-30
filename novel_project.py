@@ -6,10 +6,12 @@ mutable production path; repository-level Python files remain shared.
 
 from dataclasses import dataclass
 import json
+import os
 import re
 from pathlib import Path
 
 
+NOVELS_ROOT_ENV = "NOVELTRANSLATOR_NOVELS_ROOT"
 DEFAULT_FINAL_CHAPTER = 1406
 DEFAULT_AUDIT_INTERVAL = 25
 CHAPTER_NUMBERING_GLOBAL = "global"
@@ -449,6 +451,12 @@ def repository_root():
     return Path(__file__).resolve().parent
 
 
+def novels_root_for(repo_root):
+    """Novel data location: NOVELTRANSLATOR_NOVELS_ROOT, else <repo>/novels."""
+    configured = os.environ.get(NOVELS_ROOT_ENV)
+    return Path(configured).resolve() if configured else (Path(repo_root) / "novels").resolve()
+
+
 def load_novel_config(path):
     path = Path(path)
     with path.open("r", encoding="utf-8") as handle:
@@ -458,10 +466,10 @@ def load_novel_config(path):
 def load_novel_project(novel_id, repo_root=None):
     novel_id = validate_novel_id(novel_id)
     repo_root = Path(repo_root or repository_root()).resolve()
-    novels_root = (repo_root / "novels").resolve()
+    novels_root = novels_root_for(repo_root)
     project_root = (novels_root / novel_id).resolve()
     if project_root.parent != novels_root:
-        raise ValueError("novel path escapes the repository novels directory")
+        raise ValueError("novel path escapes the novels directory")
     config_file = project_root / "novel.json"
     if not config_file.is_file():
         raise FileNotFoundError(f"novel project does not exist: {config_file}")

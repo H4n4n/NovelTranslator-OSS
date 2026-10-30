@@ -415,6 +415,7 @@ tests/test_multi_novel.py
 tests/test_multilingual_source_prompt.py
 tests/test_normalization_inventory.py
 tests/test_novel_management.py
+tests/test_novels_root.py
 tests/test_observability.py
 tests/test_operator_preflight.py
 tests/test_pending_provider_completion_gate.py

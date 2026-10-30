@@ -5,7 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from novel_project import NOVEL_ID_RE, load_novel_project
+from novel_project import NOVEL_ID_RE, load_novel_project, novels_root_for
 from production_accounting import (
     TOTAL_FIELDS, PROVIDER_COMMAND_CODE, MIGRATION_REVISION, MIGRATION_POLICY_SHA256,
     canonical_sha256, migrate_direct_progress, validate_progress_accounting,
@@ -102,8 +102,8 @@ def build_goat_accounting_migration_plan(novel_id, *, repo_root):
     if not isinstance(novel_id, str) or not NOVEL_ID_RE.fullmatch(novel_id):
         raise ValueError("invalid novel ID")
     repo = Path(repo_root).resolve()
-    root = repo / "novels" / novel_id
-    require_local_path(root, repo)
+    root = novels_root_for(repo) / novel_id
+    require_local_path(root, root.parent)
     config_path = require_local_path(root / "novel.json", root)
     progress_path = require_local_path(root / "data/progress.json", root)
     config_bytes, before = config_path.read_bytes(), progress_path.read_bytes()

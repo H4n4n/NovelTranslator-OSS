@@ -16,6 +16,7 @@ from novel_project import (
     SOURCE_TYPE_EPUB,
     SOURCE_TYPES,
     load_novel_config,
+    novels_root_for,
     repository_root,
     validate_novel_id,
 )
@@ -143,7 +144,7 @@ def create_novel_project(config, repo_root=None, source_path=None):
     # Profile validation is intentionally the first filesystem-dependent step.
     load_translation_profile(config.profile, repo_root)
 
-    novels_root = (repo_root / "novels").resolve()
+    novels_root = novels_root_for(repo_root)
     target_root = (novels_root / config.id).resolve()
     if target_root.parent != novels_root:
         raise NovelCreationError("novel target escapes the novels directory")

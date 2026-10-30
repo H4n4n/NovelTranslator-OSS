@@ -241,6 +241,7 @@ profiles/xianxia_xuanhuan/profile.json
 profiles/xianxia_xuanhuan/translation_instructions.txt
 proven_stage_cleanup.py
 provider_model_identity_runtime.py
+provider_retry_policy.py
 public_inventory.txt
 publication_readiness.py
 publication_regeneration.py
@@ -455,6 +456,7 @@ tests/test_production_translation_request.py
 tests/test_prospective_strict_qa.py
 tests/test_proven_stage_cleanup.py
 tests/test_provider_model_identity_runtime.py
+tests/test_provider_retry_policy.py
 tests/test_publication_guard.py
 tests/test_publication_readiness.py
 tests/test_pytest_configuration.py

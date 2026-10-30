@@ -37,7 +37,7 @@ production state independently.
 6. NEVER convert the workflow to parallel workers unless the user explicitly asks. Current production is intentionally single-worker and sequential for glossary consistency.
 7. NEVER change translation terminology philosophy without explicit instruction.
 8. NEVER remove the pending-translation recovery mechanism.
-9. NEVER remove API failure handling, JSON repair handling, off-peak scheduling, manual pause support, glossary auditing, or checkpoint backup behavior unless explicitly instructed. Paid production retries must go through the durable request journal: definite provider errors retry with backoff, and an ambiguous timeout or dropped connection gets one recorded resend within the novel's budget. Every attempt stays visible in the journal and in cost.
+9. NEVER remove API failure handling, JSON repair handling, off-peak scheduling, manual pause support, glossary auditing, or checkpoint backup behavior unless explicitly instructed. Paid production retries must go through the durable request journal: definite provider errors retry with backoff, and an ambiguous timeout or dropped connection gets one recorded resend within the novel's budget. Every retry and resend is logged.
 10. After modifying Python code, always run a syntax check:
    `python -m py_compile <scriptname.py>`
 11. Prefer the smallest safe code change that solves the issue.

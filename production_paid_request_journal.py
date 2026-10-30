@@ -21,6 +21,7 @@ import copy
 from contextlib import nullcontext
 import hashlib
 import json
+import os
 import re
 import stat
 from dataclasses import dataclass
@@ -327,7 +328,7 @@ def _persist(
             return
         allowed = proposed["status"] in {
             "planned": {"started"},
-            "started": {"response_recorded", "uncertain"},
+            "started": {"response_recorded", "uncertain", "planned"},
         }.get(current["status"], set())
     if not allowed:
         raise PaidRequestJournalError(f"paid request journal transition blocked: {path}")
@@ -440,17 +441,23 @@ def run_journaled_paid_request(
             )
             _persist(path, record, save_json, expected_identity=expected)
         except BaseException as exc:
+            definite = getattr(exc, "definite_no_response", False) is True
             try:
-                uncertain = _updated_record(
-                    record,
-                    status="uncertain",
-                    response={},
-                    response_sha256="",
-                    error={
-                        "type": type(exc).__name__,
-                        "message": str(exc)[:1000],
-                    },
-                )
+                if definite:
+                    # Nothing was billed, so a later run may send this slot again.
+                    uncertain = _updated_record(record, status="planned", attempt_context={},
+                                                response={}, response_sha256="", error={})
+                else:
+                    uncertain = _updated_record(
+                        record,
+                        status="uncertain",
+                        response={},
+                        response_sha256="",
+                        error={
+                            "type": type(exc).__name__,
+                            "message": str(exc)[:1000],
+                        },
+                    )
                 _persist(path, uncertain, save_json, expected_identity=expected)
             except Exception as journal_exc:
                 exc.add_note(f"Paid journal evidence retained; uncertainty update refused or failed: {journal_exc}")
@@ -464,6 +471,60 @@ def run_journaled_paid_request(
         "replayed": False,
         "journal_path": path,
     }
+
+
+def resend_log_path(journal_dir: Path | str) -> Path:
+    return Path(journal_dir).parent / "provider_resends.jsonl"
+
+
+def _resend_counts(journal_dir: Path | str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    try:
+        lines = resend_log_path(journal_dir).read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return counts
+    for line in lines:
+        operation_id = json.loads(line)["operation_id"]
+        counts[operation_id] = counts.get(operation_id, 0) + 1
+    return counts
+
+
+def release_ambiguous_requests(
+    journal_dir: Path | str,
+    *,
+    next_chapter: int,
+    save_json: Callable[[Path, Mapping[str, Any]], None],
+    max_resends: int,
+) -> dict[str, list[str]]:
+    """Make unanswered requests for unfinished chapters sendable, up to a limit.
+
+    A crash or timeout can leave a request without a recorded answer. Resending
+    risks at most one duplicate charge, which beats stopping a long run. Earlier
+    chapters are skipped: they already committed, so nothing depends on them.
+    The caller holds the novel's writer lock.
+    """
+    directory = Path(journal_dir)
+    released: list[str] = []
+    blocked: list[str] = []
+    if not directory.is_dir():
+        return {"released": released, "blocked": blocked}
+    counts = _resend_counts(directory)
+    for path in sorted(directory.glob("*.json")):
+        record = _validate_common_record(_load_json_object(path), path=path)
+        if record["status"] not in {"started", "uncertain"} or record.get("chapter", 0) < next_chapter:
+            continue
+        if counts.get(record["operation_id"], 0) >= max_resends:
+            blocked.append(path.name)
+            continue
+        with resend_log_path(directory).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"operation_id": record["operation_id"], "file": path.name,
+                                     "from_status": record["status"], "utc": _timestamp()}) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        save_json(path, _updated_record(record, status="planned", attempt_context={},
+                                        response={}, response_sha256="", error={}))
+        released.append(path.name)
+    return {"released": released, "blocked": blocked}
 
 
 def inspect_paid_request_journals(journal_dir: Path | str) -> dict[str, Any]:

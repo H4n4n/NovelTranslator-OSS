@@ -253,15 +253,14 @@ Preserve this architecture unless the user asks to change it.
 
 When asked to modify the translator:
 
-1. Read `AGENTS.md`.
-2. Read `README.md`.
-3. Read `README.md`.
-4. Inspect the current script actually present in the repository.
-5. Inspect `<project>/data/progress.json`.
-6. Check `<project>/output/pending/`.
-7. Understand the current checkpoint before editing.
-8. Make the smallest safe change.
-9. Run syntax validation.
-10. Explain exactly what changed and what command the user should run next.
+1. Read `AGENTS.md`, `README.md`, and the relevant `docs/` guidance.
+2. Inspect the current implementation in the intended repository and identify the affected contracts.
+3. Distinguish public engine development from an explicitly authorized private production operation.
+4. For **public engine development**, use synthetic fixtures only. Never inspect, copy, stage, or upload real novels, translations, editorial mappings, credentials, pending files, or private benchmark evidence.
+5. For a **separately authorized private production operation**, inspect only the selected novel's progress, pending files, and checkpoints in the protected local installation. Keep this private state out of the public development checkout and GitHub.
+6. Make the smallest safe change on a feature branch; run relevant syntax checks, reviewed zero-provider tests, and the publication guard.
+7. Update `public_inventory.txt` in the same commit for added, removed, or renamed tracked paths; classify any new test module in `tests/public_test_classification.json`.
+8. Review the proposed diff for private information before any public push or GitHub API write. Remember that CI cannot prevent a secret from becoming public.
+9. Explain the change, tests performed, and next action. Never deploy to production or make paid provider calls without separate authorization.
 
 ---

@@ -37,11 +37,12 @@ production state independently.
 6. NEVER convert the workflow to parallel workers unless the user explicitly asks. Current production is intentionally single-worker and sequential for glossary consistency.
 7. NEVER change translation terminology philosophy without explicit instruction.
 8. NEVER remove the pending-translation recovery mechanism.
-9. NEVER remove API failure handling, JSON repair handling, off-peak scheduling, manual pause support, glossary auditing, or checkpoint backup behavior unless explicitly instructed. For paid production requests, retry policy must remain compatible with durable request journaling: ambiguous remote outcomes must fail closed rather than being silently reissued.
+9. NEVER remove API failure handling, JSON repair handling, off-peak scheduling, manual pause support, glossary auditing, or checkpoint backup behavior unless explicitly instructed. Paid production retries must go through the durable request journal: definite provider errors retry with backoff, and an ambiguous timeout or dropped connection gets one recorded resend within the novel's budget. Every attempt stays visible in the journal and in cost.
 10. After modifying Python code, always run a syntax check:
    `python -m py_compile <scriptname.py>`
 11. Prefer the smallest safe code change that solves the issue.
 12. Before major refactors, create or recommend a Git commit / backup point.
+13. A safeguard may stop a run only if it prevents lost translated work, a corrupted novel, or unbounded spending. Anything else should be flagged for review while the run continues. Do not add proof frameworks.
 
 ---
 
@@ -253,15 +254,11 @@ Preserve this architecture unless the user asks to change it.
 
 When asked to modify the translator:
 
-1. Read `AGENTS.md`.
-2. Read `README.md`.
-3. Read `README.md`.
-4. Inspect the current script actually present in the repository.
-5. Inspect `<project>/data/progress.json`.
-6. Check `<project>/output/pending/`.
-7. Understand the current checkpoint before editing.
-8. Make the smallest safe change.
-9. Run syntax validation.
-10. Explain exactly what changed and what command the user should run next.
+1. Read `AGENTS.md` and `README.md`.
+2. Inspect the current script actually present in the repository.
+3. For work on a real novel, inspect its `data/progress.json` and `output/pending/` first.
+4. Make the smallest safe change.
+5. Run syntax validation and focused tests.
+6. Explain exactly what changed and what command the user should run next.
 
 ---

@@ -19,9 +19,9 @@ GOAT_UNATTENDED_MODULE = 'tests/test_goat_unattended.py'
 SYNTHETIC_WITNESS_MODULE = 'tests/test_synthetic_goat_batch_witness.py'
 MEASURED_PARTITIONS = (
     '8c757e1a96535536d17303c799108674cd8c7e476667b83a33358230a88e519f',
-    '33a4fcb9808b40dd8a6d135f71c1e663f722c0904fdd8316b0535747305ee957',
-    'e3facc3553635c4dd3f40cce9caca1f4b22db3baafc801cc3179f5a5f76ceb36',
-    'fb7d4586740bd0da12fd61ea144122ff10ade22b7ad3280760a8e1938bb43a32',
+    'ffd14c60515f967e3a2e8f3881c9b9a11d4d6114d19ad65f53f3a692c7e64507',
+    'ccf089c24b22625895ef61a201a40db92abd03cc980e110bea29367733ac405d',
+    '115e6f8be33f34573929bef401bc68b05a9602fbab8c3de2d6724a0bb53820fc',
 )
 
 
@@ -48,7 +48,7 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert not set(flat) & {p for p, v in files.items() if v['status'] != 'public'}
     schedule = runner.read_json(runner.SCHEDULE)
     assert schedule['measurement_source'] == runner.TIMING_SOURCE
-    assert risk.digest(schedule['module_seconds']) == '82a8ae3b318387bfbcd4b560b27d7bd3e7fbaed2100814f05e8343fe6bd2df3d'
+    assert risk.digest(schedule['module_seconds']) == '431c2420c5b4fa0216e8e3eb7c53e7e4a1d0a29e34084ec86a672bf5c4f59e01'
     # Original published weights and hosted provenance remain independently pinned.
     assert risk.digest(schedule['published_schedule']['module_seconds']) == (
         '51c7190fc112d8dcbea59d8b45b316a01d140565abf86d0bd7c0a1211e02d8aa')
@@ -57,9 +57,9 @@ def test_exact_public_partition_and_reviewed_deselections():
     assert risk.digest(schedule['supplemental_measurements'][0]) == '7c12a824bacefa730cdcef3ddf20f412f201d306bcf098aecba78bd1ce64f830'
     for bucket, expected in zip(buckets, MEASURED_PARTITIONS, strict=True):
         assert hashlib.sha256('\n'.join(bucket).encode()).hexdigest() == expected
-    assert [len(b) for b in buckets] == [1, 66, 66, 65]
+    assert [len(b) for b in buckets] == [1, 66, 65, 66]
     assert [sum(schedule['module_seconds'][p] for p in b) for b in buckets] == pytest.approx(
-        [2751.51, 2549.1534623000002, 2549.152223, 2549.1455858])
+        [2751.51, 2661.3419081, 2661.3433232, 2661.3460397999997])
     assert schedule['shards'] == runner.measured_shards(schedule['module_seconds'])
     assert max(schedule['variability']['conservative_seconds']) < 4500
     assert max(schedule['variability']['sensitivity_seconds']) < 4500

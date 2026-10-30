@@ -418,6 +418,7 @@ def _validate_previous_pointer(project):
     require(canonical_hash(original) == identity and original["source"]["novel_id"] == project.config.id
             and read_object(final_dir / "reports/source_bound_provenance.json") == original,
             "CONTRADICTORY_PREVIOUS_GENERATION")
+    _validated_previous_source(project, original, final_dir)
     workspace = PublicationWorkspace(project, final_dir)
     import build_publication_epub as epub
     output = epub.publication_paths(workspace)["output"]
@@ -546,6 +547,217 @@ def recertify_history(project):
                 "examined_chapters": report["examined_chapters"],
                 "deferred_chapters": report["deferred_chapters"],
                 "publication_authority": False, "provider_calls": 0}
+
+
+
+def _validated_previous_source(project, original, final_dir):
+    """A stale pointer must still identify well-formed, byte-consistent evidence."""
+    source = original["source"]
+    require(set(original) == {"revision", "source", "approvals", "authorization_sha256", "runtime"}
+            and original["revision"] == REVISION
+            and set(source) == {"revision", "novel_id", "config", "source_inventory_sha256",
+                "chapters", "evidence", "profile", "whole_history_sha256", "transactions", "novel_policy"}
+            and source.get("revision") == REVISION, "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    from novel_project import NovelConfig
+    prior_config = NovelConfig.from_dict(source["config"])
+    require(prior_config.id == project.config.id and prior_config.source_type == "txt"
+            and prior_config.final_chapter == source["chapters"]["file_count"],
+            "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    _sha(source["source_inventory_sha256"]); _sha(source["whole_history_sha256"])
+    require(isinstance(source["transactions"], list) and source["transactions"],
+            "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    for transaction in source["transactions"]:
+        require(set(transaction) == {"transaction_id", "intent_sha256"}, "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+        _sha(transaction["transaction_id"]); _sha(transaction["intent_sha256"])
+    require(isinstance(original["runtime"], dict) and isinstance(source["profile"], dict)
+            and set(source["novel_policy"]) == {"translation_addendum.txt", "source_overrides.json"},
+            "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    for sha in [*original["runtime"].values(), *source["profile"].values(),
+                *(v for v in source["novel_policy"].values() if v is not None)]:
+        _sha(sha)
+    require(isinstance(source["evidence"], dict) and source["novel_id"] == project.config.id
+            and set(original["approvals"]) in (set(APPROVALS), set(APPROVALS) | {"normalization_inventory"}),
+            "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    for sha in [*source["evidence"].values(), *original["approvals"].values(), original["authorization_sha256"]]:
+        _sha(sha)
+    count = source["chapters"]["file_count"]
+    require(type(count) is int and 0 < count <= 9999,
+            "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    require(canonical_hash(source["chapters"]) == canonical_hash(cleanup.framed_corpus_fingerprint(
+        _payloads(final_dir / "chapters", count))), "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+    return source
+
+
+def _review_handoff(project, diagnostics, snapshot, inputs):
+    """Enrich the existing advisory rows; never write or issue decisions.
+
+    A prior pointer is only a comparison witness after its immutable intent,
+    provenance, archive and committed inventory independently agree. No old
+    source bytes are read from today's mutable source paths to prove that past.
+    """
+    import re
+    from publication_readiness import REVIEW
+    previous = None
+    previous_final = None
+    comparison = {"status": "UNAVAILABLE", "reason_code": "NO_PREVIOUS_GENERATION",
+                  "changed_evidence_paths": None, "changed_chapters": None}
+    try:
+        if plain(project.root / POINTER).exists():
+            _validate_previous_pointer(project)
+            pointer = read_object(project.root / POINTER)
+            previous_final = project.root / GENERATIONS / _sha(pointer["generation"]) / "final"
+            previous = read_object(previous_final.parent / "intent.json")
+            source = _validated_previous_source(project, previous, previous_final)
+            # Only owner-defined filenames may enter the packet. Unknown names
+            # make the comparison unavailable, never a prose-bearing path list.
+            fixed = {"novel.json", "data/chapters.json", "source/novel.txt",
+                     "data/progress.json", "data/glossary.json", "data/issues.json",
+                     "data/continuity.json", "data/audit_history.json"}
+            patterns = (
+                r"output/audits/audit_[0-9]{4}_[0-9]{4}(?:\.checkpoint|\.finalization)?\.json",
+                r"output/audits/whole_history/[0-9a-f]{64}\.json",
+                r"output/publication_freshness/[0-9a-f]{64}\.json",
+                r"output/retroactive_fixes/transactions/[0-9a-f]{64}\.(?:plan|state|result|reconcile\.[0-9a-f]{64})\.json",
+                r"backup/retroactive_[0-9a-f]{64}/chapters_before/[0-9]{4}\.md",
+            )
+            def evidence(value):
+                require(isinstance(value, dict), "INVALID_PREVIOUS_SOURCE_EVIDENCE")
+                for path, sha in value.items():
+                    require(path in fixed or any(re.fullmatch(pattern, path) for pattern in patterns),
+                            "UNSUPPORTED_COMPARISON_EVIDENCE_PATH")
+                    _sha(sha)
+                return value
+            old = evidence(source["evidence"])
+            for key in APPROVALS:
+                _sha(previous["approvals"][key])
+            _sha(previous["authorization_sha256"])
+            comparison["reason_code"] = "CURRENT_SOURCE_EVIDENCE_UNAVAILABLE"
+            if snapshot is not None:
+                new = evidence(snapshot["evidence"])
+                paths = [path for path in sorted(old.keys() | new.keys()) if old.get(path) != new.get(path)]
+                before = {r["unit"]: r["sha256"] for r in source["chapters"]["files"]}
+                after = {r["unit"]: r["sha256"] for r in snapshot["chapters"]["files"]}
+                chapters = [n for n in sorted(before.keys() | after.keys()) if before.get(n) != after.get(n)]
+                comparison = {"status": "AVAILABLE", "reason_code": "VALIDATED_SOURCE_EVIDENCE_COMPARISON",
+                    "changed_evidence_paths": paths[:256], "changed_chapters": chapters[:256],
+                    "changed_evidence_count": len(paths), "changed_chapter_count": len(chapters),
+                    "truncated": len(paths) > 256 or len(chapters) > 256}
+    except _DIAGNOSTIC_ERRORS:
+        previous = previous_final = None
+        comparison = {"status": "UNAVAILABLE", "reason_code": "PREVIOUS_GENERATION_EVIDENCE_INVALID",
+                      "changed_evidence_paths": None, "changed_chapters": None}
+
+    try:
+        auth = read_object(project.root / AUTHORIZATION)
+    except _DIAGNOSTIC_ERRORS:
+        auth = {}
+    candidate = project.root / GENERATIONS / canonical_hash(inputs) / "final" if inputs else None
+    same_corpus = (snapshot is not None and previous is not None
+                   and snapshot["chapters"] == previous["source"]["chapters"])
+    for key, path in {**APPROVALS, "authorization": AUTHORIZATION, "publication_review": REVIEW}.items():
+        row = diagnostics[key]
+        row.update(authorized_sha256=None, previously_authorized_sha256=None, sha256=None, approval_bytes_valid=None,
+                   decision_binding="NOT_VERIFIED", decision_reissuance_required=None,
+                   semantic_review="NOT_PERFORMED")
+        try:
+            sha = digest(_bytes(project.root / path))
+            row["sha256"] = sha
+            if previous and key in APPROVALS:
+                row["previously_authorized_sha256"] = previous["approvals"][key]
+            elif previous and key == "authorization":
+                row["previously_authorized_sha256"] = previous["authorization_sha256"]
+            authorized = (auth.get(key + "_sha256") if key in APPROVALS else
+                          previous.get("authorization_sha256") if previous and key == "authorization" else None)
+            row["authorized_sha256"] = _sha(authorized) if authorized is not None else None
+            row["approval_bytes_valid"] = sha == authorized if authorized is not None else None
+            if key in APPROVALS:
+                if row["status"] == "BLOCKED":
+                    row.update(decision_binding="INVALID", decision_reissuance_required=True)
+                    continue
+                if diagnostics["authorization"]["status"] != "VERIFIED":
+                    row["binding_reason_code"] = "REGENERATION_AUTHORIZATION_UNAVAILABLE"
+                    continue
+                # No temporary corpus or predicted downstream pipeline. Reuse
+                # the current candidate, or an identical previously proven input.
+                stage_final = candidate
+                if stage_final is None or not (stage_final / {"normalization_plan": "chapters",
+                        "title_plan": "normalized_chapters", "editorial_authorization": "publication_chapters"}[key]).is_dir():
+                    stage_final = previous_final if same_corpus else None
+                stage_inputs = {"approvals": {k: diagnostics[k].get("sha256") for k in APPROVALS}}
+                if stage_final == previous_final and stage_final != candidate and key != "normalization_plan":
+                    # Retained intermediates are today's input only if current
+                    # upstream decisions independently reproduce them. Failure
+                    # here leaves this downstream decision unproved, not invalid.
+                    try:
+                        normal = _stage_previews(project, stage_final, stage_inputs)
+                        normalization.verify_existing_application(normal,
+                            output_dir=stage_final / "normalized_chapters",
+                            report_json_path=stage_final / "reports/normalization_application.json")
+                        if key == "editorial_authorization":
+                            title = _title_preview(project, stage_final, stage_inputs)
+                            titles.verify_existing_application(title, stage_final / "titled_chapters",
+                                stage_final / "reports/title_application.json")
+                            presentation = cleanup.build_plan(stage_final / "titled_chapters", project.config.final_chapter)
+                            require(_payloads(stage_final / "publication_chapters", project.config.final_chapter) ==
+                                    [(u.source_path.name, u.output_bytes) for u in presentation.units],
+                                    "PUBLICATION_CORPUS_DRIFT")
+                    except _DIAGNOSTIC_ERRORS:
+                        row["binding_reason_code"] = "UPSTREAM_STAGE_INPUT_UNAVAILABLE"
+                        continue
+                if key == "normalization_plan" and snapshot is not None:
+                    _stage_previews(project, project.chapter_dir.parent, stage_inputs)
+                elif stage_final is not None and snapshot is not None:
+                    _plain_tree(stage_final)
+                    if key == "title_plan":
+                        # Prior normalized bytes are usable only after current
+                        # normalization independently reconstructs that corpus.
+                        normal = _stage_previews(project, stage_final, stage_inputs)
+                        normalization.verify_existing_application(normal,
+                            output_dir=stage_final / "normalized_chapters",
+                            report_json_path=stage_final / "reports/normalization_application.json")
+                        _title_preview(project, stage_final, stage_inputs)
+                    else:
+                        require(editorial.build_plan_report(PublicationWorkspace(project, stage_final))["ready"],
+                                "EDITORIAL_APPROVAL_NOT_READY")
+                else:
+                    row["binding_reason_code"] = "EXACT_STAGE_INPUT_UNAVAILABLE"
+                    continue
+                row.update(decision_binding="VALID", decision_reissuance_required=False,
+                           binding_reason_code="EXISTING_STAGE_OWNER_VERIFIED")
+            elif key == "publication_review":
+                if row["status"] == "VERIFIED":
+                    row.update(decision_binding="VALID", decision_reissuance_required=False)
+                elif row["reason_code"] in {"PUBLICATION_REVIEW_STALE_REVERIFY_EXACT_DEPENDENCIES",
+                        "PUBLICATION_SEMANTIC_REVIEW_REQUIRED", "MISSING_PREREQUISITE"}:
+                    row.update(decision_binding="INVALID", decision_reissuance_required=True)
+            elif diagnostics["source_snapshot"]["status"] == "VERIFIED" and row["status"] == "VERIFIED":
+                row.update(decision_binding="VALID", decision_reissuance_required=False)
+            elif snapshot is not None:
+                row.update(decision_binding="INVALID", decision_reissuance_required=True)
+        except _DIAGNOSTIC_ERRORS:
+            row.update(decision_binding="INVALID", decision_reissuance_required=True,
+                       binding_reason_code="APPROVAL_OR_INPUT_BINDING_INVALID")
+
+    actions = []
+    def action(code, path):
+        actions.append({"order": len(actions) + 1, "action": code, "path": path})
+    if diagnostics["whole_history"]["status"] != "VERIFIED":
+        action("RECERTIFY_AND_REVIEW_WHOLE_HISTORY", diagnostics["whole_history"]["path"])
+    for key, path in APPROVALS.items():
+        row = diagnostics[key]
+        if row["decision_binding"] != "VALID":
+            action("EXPLICITLY_REVIEW_OR_REISSUE_STAGE_DECISION", path)
+        elif row["approval_bytes_valid"] is not True:
+            action("EXPLICITLY_AUTHORIZE_REVIEWED_APPROVAL_BYTES", path)
+    if (diagnostics["authorization"]["decision_binding"] != "VALID"
+            or any(diagnostics[key]["decision_binding"] == "INVALID"
+                   or diagnostics[key]["approval_bytes_valid"] is False for key in APPROVALS)):
+        action("EXPLICITLY_REISSUE_SOURCE_AND_APPROVAL_AUTHORIZATION", AUTHORIZATION)
+    if diagnostics["publication_review"]["decision_binding"] != "VALID":
+        action("REGENERATE_CANDIDATE_THROUGH_EXISTING_STAGE_OWNERS", AUTHORIZATION)
+        action("REVIEW_ACTUAL_COMPLETED_DEPENDENCY_GRAPH_AND_REISSUE", REVIEW)
+        action("RESUME_REGENERATION_FOR_PUBLICATION_CERTIFICATION", POINTER)
+    return {"source_changes": comparison, "required_operator_actions": actions}
 
 
 def publication_preflight(project, whole_history_sha256=None):
@@ -775,7 +987,8 @@ def publication_preflight(project, whole_history_sha256=None):
     except _DIAGNOSTIC_ERRORS as exc:
         failure("generation", POINTER, exc)
         status = "BLOCKED"
-    return {"status": status, "diagnostics": diagnostics,
+    handoff = _review_handoff(project, diagnostics, snapshot, inputs)
+    return {"status": status, "diagnostics": diagnostics, "approval_review": handoff,
             "generation": current.get("generation") if status == "CURRENT" else None,
             "publication_authority": False, "provider_calls": 0}
 

@@ -336,3 +336,151 @@ Final CI integrity revalidation after the last measurement/pin refresh:
 **283 passed, zero skips**, 102.82 seconds. The active projection vector is
 `[2751.51, 2549.1534623, 2549.152223, 2549.1455858]`; all four buckets remain
 below the unchanged deadline with the original sensitivity allowance.
+
+
+## D2 Increment 2: bounded approval-review handoff
+
+The existing `--report` output now enriches its dependency diagnostics with
+`authorized_sha256`, `previously_authorized_sha256`, current `sha256`,
+`approval_bytes_valid`, `decision_binding`, `decision_reissuance_required` and
+`semantic_review`. A null value means unavailable or not independently proved;
+it never means approval. `VALID` means the existing stage owner verified the
+binding, with semantic review still `NOT_PERFORMED` by this advisory command.
+The stage row's original status/reason and `stage_validation` remain available.
+The CURRENT, STALE, REVIEW_REQUIRED and BLOCKED authorities are unchanged.
+
+`approval_review.source_changes` compares the current verified source snapshot
+with the pointer-selected generation's immutable source evidence only after
+checking the prior pointer, intent identity, matching source provenance, EPUB
+archive/reports and recorded committed corpus fingerprint. It emits bounded
+owner-defined project-relative paths and chapter numbers, counts and an explicit
+truncation flag (at most 256 paths and 256 chapters). An unavailable comparison
+has null change lists and one of `NO_PREVIOUS_GENERATION`,
+`CURRENT_SOURCE_EVIDENCE_UNAVAILABLE` or `PREVIOUS_GENERATION_EVIDENCE_INVALID`.
+Unknown historical path formats are unprovable by this comparison. The report
+never serializes approval contents, private anchors, source/prose or validator
+exception text. Even error paths create no lock, report, corpus or approval.
+
+Approval-byte equality is independent of embedded decision validity. In
+particular, an unchanged normalization plan may still fail against corrected
+committed prose. Title/editorial decisions require their own exact intermediate
+inputs: when those inputs are unavailable, the report requires explicit review
+and leaves reissuance unproved until their owner can validate the actual corpus.
+If committed bytes are unchanged, the real stage validators can independently
+prove existing approvals against retained intermediates despite unrelated source
+evidence drift. Such a valid binding does not demand new approval bytes merely
+because another hash changed; the source authorization and D1 graph review still
+need their own checks. No tool rebases fingerprints or makes human decisions.
+
+### Practical operator sequence
+
+1. **Preflight — deterministic verification.** Run
+   `python publication_regeneration.py --novel <id> --report`. Read every bounded
+   reason and the dependency-ordered `required_operator_actions`. Preserve the
+   selected pointer and old generation. A report exit code of zero is advisory
+   and does not authorize publication.
+2. **History recertification — immutable local evidence creation.** Run
+   `python publication_regeneration.py --novel <id> --recertify-history` when
+   required. The existing history writer creates its hash-named report. Resolve
+   deferrals through the existing owners, and rerun preflight with the selected
+   current history report using the Python `publication_preflight(project,
+   report_sha256)` interface, or after explicit selection in the authorization.
+   CHECKED is deterministic evidence, not human semantic approval.
+3. **Explicit human decisions — semantic review.** Review the correction and
+   current history, continuity, issues and final glossary. Review normalization,
+   titles and editorial choices against their exact input corpora. Decide which
+   decisions to preserve and which to reissue. An unknown downstream input
+   requires review once it exists; it is not evidence that an old decision fits.
+4. **Approval reissuance — human-authored authorization.** As applicable, reissue
+   `config/publication_regeneration/normalization_plan.json`,
+   `config/publication_regeneration/title_plan.json`, `config/final_editorial.json`
+   and `config/publication_regeneration.json` using their existing formats.
+   Update complete source/corpus/anchor requirements following explicit review.
+   Merely updating authorization hashes or aggregate fingerprints cannot repair
+   invalid per-file or anchor bindings. No automatic approval command exists.
+5. **Regeneration — existing stage owners.** Run
+   `python publication_regeneration.py --novel <id>`. A fresh candidate may stop
+   at the D1 readiness gate after its downstream corpora and evidence exist.
+   Keep that candidate for resume. Resolve any earlier stage binding failure
+   through its owner; do not overwrite or remove unproven residue.
+6. **New dependency-graph review — human semantic review.** Use
+   `publication_readiness.dependency_graph(PublicationWorkspace(project,
+   actual_candidate_final_dir))` on the actual completed candidate. Do not
+   predict its graph before its stage reports and corpora exist. Review the
+   exact returned graph and explicitly reissue `config/publication_readiness.json`
+   with its graph hash, reviewer and all existing required semantic decisions.
+   The old readiness review cannot authorize this changed graph.
+7. **Resume and certify — publication certification.** Run the same regeneration
+   command. The existing engine revalidates completed stages, D1 readiness and
+   the EPUB before atomically updating CURRENT. Verify with `--report`; use the
+   pointer-selected EPUB. The previous generation and EPUB remain immutable.
+
+The synthetic tests are the only place that simulate human decisions. They use
+real historical, normalization, title, presentation, editorial, EPUB and D1
+validators, and inspect the resulting XHTML for the corrected Chapter 1 body.
+They also interrupt after actual title publication and resume without replacing
+the prior CURRENT pointer until certification succeeds. This adds no standalone
+lineage adapter, J5/J8 support, EPUB-origin novels, partial spine, paid workflow,
+or new publication authority. Hosted L3 and L4 remain independent qualification
+gates; the PR #21 L4 exception does not apply to this increment.
+
+
+The prior-pointer verifier now shares the handoff's well-formed-source and
+retained-corpus check. This closes a specific defect: a self-hashed intent and
+matching provenance could previously describe an incorrect committed-corpus
+fingerprint while the archived editorial EPUB still passed its own integrity
+checks. Such contradictory prior source evidence now blocks regeneration before
+any generation write or pointer promotion. Focused public cases use self-hashed
+malformed source metadata and a well-shaped but incorrect corpus hash, and
+verify pointer and generation byte/mtime preservation. The pointer schema,
+publication gate, writer ownership and promotion order are unchanged.
+
+
+### Increment 2 local validation and handoff
+
+The complete final readiness module passed **239 tests**, zero skips, in
+941.16 seconds, with all final runtime hardening present. The original test file
+prefix is byte-identical to verified main; all 37 original functions/helpers
+have identical ASTs. The 38 added cases use public disposable Chinese/Korean
+fixtures. UTF-8 assertions and documentation are preserved explicitly.
+
+The final source-bound measurement is **941.069 seconds** (JUnit case time plus
+all suite overhead). The active weight remains the higher prior **975.594
+seconds**, without a speed discount. Original timing provenance remains intact;
+the new complete record binds the exact current test bytes and captured runtime.
+Four independent numeric-type probes also proved that malformed boolean/float
+corpus metadata accepted by Python mapping equality is refused by canonical JSON
+identity, without changing any project evidence.
+
+Both qualified synthetic EPUBs were independently reopened with the standard
+library. Corrected Chapter 1 body content, old archive wording, new pointer/archive
+hashes and the complete old generation inventory all passed. The existing engine
+resumed after an actual title-owner interruption and required fresh explicit D1
+review of the completed candidate graph before publishing CURRENT.
+
+Other focused results: **99 EPUB cases passed** (95 cases outside the selected
+AUT-2 focus), **609 stage-owner tests passed with three existing optional corpus
+skips**, and **284 final CI integrity tests passed** in 106.17 seconds. No new skip
+or exclusion was added. Each suite used a fresh external GUID-named basetemp,
+the zero-provider wrapper and mandatory real-DPAPI deselection. Captured sources
+remained unchanged throughout each run. All changed Python files compile.
+
+The same 198 public, two private and seven historical module classifications,
+15 mandatory deselections, four-shard measured-LPT allocator, 25%/30% allowances
+and 4,500-second execution deadline remain. The largest sensitivity projection
+is **3,636.963 seconds**. Mechanical CI assertions pin the exact measured weights
+and resulting partitions; none of their validation logic was removed. No hosted
+L3 or L4 qualification is claimed, and PR #21's L4 exception does not extend here.
+
+Hermes evidence is retained at
+`C:\Users\User\AppData\Local\Temp\nt-aut2-d2i2-evidence-3513096913b048fcbda212605bbcfe8e`.
+Use `validation-summary.json`, `measurement-summary.json`,
+`measured-readiness-utf8-final/`, `focused-epub/`, `stage-owners/`,
+`qualified-ci-integrity/`, `original-test-preservation.json`,
+`numeric-type-probe-before.json` / `numeric-type-probe-after.json`,
+`independent-qualified-epub-verification.json`, and `synthetic-recovery-qualified/`.
+Earlier exploratory, interrupted and pre-restoration runs are retained as history;
+they are not the final qualification evidence. The local `HERMES_HANDOFF.md`
+records the final commit/tree/parent, guards, exact commands and review boundaries.
+No push, PR, merge, paid call, private novel access or frozen GOAT evidence change
+is authorized by this local increment.

@@ -132,6 +132,8 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
     evidence = {}
     originals = {}
     intent = load_intent(module, start, end, _inputs=_inputs)
+    request = tx.with_span_policy(request, read_json(path) if path.exists()
+                                  else intent["transaction_plan"] if intent else None)
     current_cache = {}
     def current_bytes(number):
         if number not in current_cache:

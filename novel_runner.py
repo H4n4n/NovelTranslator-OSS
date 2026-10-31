@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 
+from build_checkpoint_epub import rebuild_reader_epub
 from chapter_glossary_review import CHAPTER_REVIEW_RECOVERY_KEY
 from noveltranslator_core import atomic_write_json
 from novel_project import load_novel_project
@@ -180,6 +181,7 @@ def run_novel(novel_id, *, repo_root=None, budget_usd=None):
     project = load_novel_project(novel_id, repo_root=repo_root)
     result = _run_until_stopped(project, novel_id, repo_root, budget_usd)
     progress = _progress(project)
+    result["reader_epub"] = rebuild_reader_epub(project, take_lock=True).get("status")
     result.update(novel_id=novel_id, last_completed=progress["last_completed"], next_chapter=progress["next_chapter"],
                   final_chapter=project.config.final_chapter, finished_utc=datetime.now(timezone.utc).isoformat())
     atomic_write_json(project.data_dir / "last_run.json", result)

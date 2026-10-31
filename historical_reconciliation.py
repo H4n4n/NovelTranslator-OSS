@@ -12,7 +12,7 @@ from pathlib import Path
 
 from noveltranslator_core import atomic_write_json, strict_term_valid_targets
 from production_failure_classification import ProductionIntegrityError
-from retroactive_span_planning import canonical_hash, digest, target_spans, ownership_policy, plan_chapter, normalized_rules
+from retroactive_span_planning import canonical_hash, digest, target_spans, ownership_policy, plan_chapter, normalized_rules, span_policy_of
 import retroactive_transactions as tx
 from contextlib import contextmanager
 from functools import wraps
@@ -728,7 +728,7 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
     _reserve_policy(reserved, reservations)
     for item in plan["chapters"]:
         edits, _ = plan_chapter(module.chapter_map[item["chapter"]]["text"], originals[item["chapter"]],
-                               request["rules"], reserved, request["safe_categories"])
+                               request["rules"], reserved, request["safe_categories"], span_policy_of(request))
         # A reservation is a veto, never a replacement plan or new source anchor.
         require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
     known_plans = [plan]
@@ -992,7 +992,8 @@ def impact_report(plan, chapter_map, staged_glossary, chapter_bytes=None):
                     require(digest(raw) == item["before_sha256"], "DISCOVERY_BEFORE_DRIFT")
                     reverse = {**rule, "old_english": rule["new_english"], "new_english": rule["old_english"]}
                     owned, _ = plan_chapter(chapter_map[item["chapter"]]["text"], raw, [reverse],
-                                            plan["request"]["ownership_policy"], plan["request"]["safe_categories"])
+                                            plan["request"]["ownership_policy"], plan["request"]["safe_categories"],
+                                            span_policy_of(plan["request"]))
                     if owned:
                         outcome = "already_current"
             else:

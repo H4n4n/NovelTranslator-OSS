@@ -161,6 +161,23 @@ def test_provider_stop_during_review_is_not_treated_as_bad_review(tmp_path, monk
     assert (1, "glossary_review") not in flagged(project)
 
 
+def test_run_end_leaves_a_current_reader_epub(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=3)
+    result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)
+    assert result["status"] == novel_runner.COMPLETE, result
+    # The final audit already rebuilt it, so the run end finds it current.
+    assert result["reader_epub"] == "SKIPPED"
+    assert (project.epub_dir / "fixture_latest.epub").is_file()
+
+
+def test_failed_reader_epub_never_changes_the_run_result(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=3)
+    monkeypatch.setattr(novel_runner, "rebuild_reader_epub", lambda *a, **k: {"status": "ERROR"})
+    result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert result["reader_epub"] == "ERROR"
+
+
 def test_soften_leaves_hard_blockers_alone():
     hard = {"commit_allowed": False, "commit_blockers": [{"type": "catastrophic_completeness"}]}
     assert review_queue.soften_commit_blockers(hard) == hard

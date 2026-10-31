@@ -3258,6 +3258,17 @@ def run_periodic_audit(
         elapsed_seconds=time.perf_counter() - audit_started,
         **stats_event_fields(audit_stats),
     )
+    rebuild_reader_epub_after_audit()
+
+
+def rebuild_reader_epub_after_audit():
+    """The reader's EPUB follows each audit, and a failure here never affects translation."""
+    from build_checkpoint_epub import rebuild_reader_epub
+    from novel_project import NovelProject
+    if ACTIVE_NOVEL_CONFIG is None:
+        return
+    report = rebuild_reader_epub(NovelProject(ENGINE_ROOT, GLOSSARY_FILE.resolve().parent.parent, ACTIVE_NOVEL_CONFIG))
+    log_event("reader_epub", stage=report.get("status"))
 
 
 def describe_api_error(exc):

@@ -26,7 +26,7 @@ SOURCE_TYPES = frozenset((SOURCE_TYPE_EPUB, SOURCE_TYPE_TXT))
 NOVEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 DEFAULT_RESIDUAL_CJK_MICRO_REPAIR_LIMITS = {
-    "enabled": False,
+    "enabled": True,
     "max_total_cjk_chars": 12,
     "max_fragments": 3,
     "max_affected_lines": 3,
@@ -34,8 +34,8 @@ DEFAULT_RESIDUAL_CJK_MICRO_REPAIR_LIMITS = {
 }
 
 DEFAULT_GLOSSARY_CANDIDATE_AUTO_RESOLUTION = {
-    "enabled": False,
-    "allow_model_adjudication": False,
+    "enabled": True,
+    "allow_model_adjudication": True,
     "max_model_requests_per_chapter": 1,
     "category_normalizations": {},
 }
@@ -49,10 +49,10 @@ def _normalized_category(value, label):
 
 @dataclass(frozen=True)
 class GlossaryCandidateAutoResolutionConfig:
-    """Per-novel opt-in policy for selection-only candidate adjudication."""
+    """Per-novel policy for selection-only candidate adjudication. On unless opted out."""
 
-    enabled: bool = False
-    allow_model_adjudication: bool = False
+    enabled: bool = True
+    allow_model_adjudication: bool = True
     max_model_requests_per_chapter: int = 1
     category_normalizations: tuple = ()
 
@@ -73,6 +73,8 @@ class GlossaryCandidateAutoResolutionConfig:
                 "unsupported fields: " + ", ".join(unknown)
             )
         merged = {**DEFAULT_GLOSSARY_CANDIDATE_AUTO_RESOLUTION, **value}
+        if "allow_model_adjudication" not in value:
+            merged["allow_model_adjudication"] = merged["enabled"]
         for key in ("enabled", "allow_model_adjudication"):
             if not isinstance(merged[key], bool):
                 raise ValueError(
@@ -150,9 +152,9 @@ class GlossaryCandidateAutoResolutionConfig:
 
 @dataclass(frozen=True)
 class ResidualCJKMicroRepairConfig:
-    """Per-novel opt-in limits for one bounded paid repair request."""
+    """Per-novel limits for one bounded paid repair request. On unless opted out."""
 
-    enabled: bool = False
+    enabled: bool = True
     max_total_cjk_chars: int = 12
     max_fragments: int = 3
     max_affected_lines: int = 3
@@ -306,11 +308,11 @@ class NovelConfig:
         # migration and newly serialized EPUB projects retain their old shape.
         if self.source_type != SOURCE_TYPE_EPUB:
             result["source_type"] = self.source_type
-        if self.residual_cjk_micro_repair.enabled:
+        if self.residual_cjk_micro_repair != ResidualCJKMicroRepairConfig():
             result["residual_cjk_micro_repair"] = (
                 self.residual_cjk_micro_repair.to_dict()
             )
-        if self.glossary_candidate_auto_resolution.enabled:
+        if self.glossary_candidate_auto_resolution != GlossaryCandidateAutoResolutionConfig():
             result["glossary_candidate_auto_resolution"] = (
                 self.glossary_candidate_auto_resolution.to_dict()
             )

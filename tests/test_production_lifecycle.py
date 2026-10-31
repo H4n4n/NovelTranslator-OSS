@@ -732,10 +732,58 @@ def test_aut1_unrepairable_reader_flaw_commits_and_is_flagged(aut1_engine, failu
         translation = "The wrong organization opened its gate."
     h.queue.extend([h.response(translation), h.response(json.dumps(
         {"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    if failure == "cjk":
+        # Too much for a repair, so one fresh translation comes first.
+        h.queue.insert(0, h.response(translation))
+        assert h.engine.process_chapter(1) is False
     assert h.engine.process_chapter(1) is True
     assert not h.queue and h.engine.progress["completed"] == [1]
     assert (h.engine.OUTPUT_DIR / "0001.md").read_text(encoding="utf-8") == translation
-    assert [item["kind"] for item in read_items(h.engine.GLOSSARY_FILE.parent)] == ["commit_qa"]
+    kinds = [item["kind"] for item in read_items(h.engine.GLOSSARY_FILE.parent)]
+    assert kinds == (["fresh_translation", "commit_qa"] if failure == "cjk" else ["commit_qa"])
+
+
+def test_aut1_heavy_leftovers_get_one_fresh_translation_and_keep_the_cost(aut1_engine):
+    h = aut1_engine
+    h.queue.extend([h.response("The Azure Cloud Sect disciple spoke 未知陌生文字從未出現在來源文字中。"),
+                    h.response("The Azure Cloud Sect disciple returned home."), h.response(json.dumps(
+                        {"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    assert h.engine.process_chapter(1) is False
+    assert not (h.engine.PENDING_DIR / "0001.md").exists()
+    saved = list((h.engine.BACKUP_DIR / "superseded_translations").rglob("0001.md"))
+    assert len(saved) == 1
+    cost_of_first = h.engine.progress["rate_correct_cost_usd"]
+    assert cost_of_first > 0
+    assert h.engine.process_chapter(1) is True
+    assert len(h.calls) == 3 and not h.queue
+    assert (h.engine.OUTPUT_DIR / "0001.md").read_text(encoding="utf-8") == "The Azure Cloud Sect disciple returned home."
+    assert h.engine.progress["rate_correct_cost_usd"] > cost_of_first
+
+
+@pytest.mark.parametrize("outcome", ["resolution_failed", "identity_failed", "unresolved"])
+def test_aut1_candidate_conflict_commits_without_review_and_is_flagged(aut1_engine, monkeypatch, outcome):
+    from review_queue import read_items
+    h = aut1_engine
+    monkeypatch.setattr(h.engine, "run_candidate_preparation_checkpoint",
+                        lambda **kwargs: {"status": outcome, "error": RuntimeError("synthetic conflict")})
+    h.queue.extend([h.response("The Azure Cloud Sect disciple returned home."), h.response(json.dumps(
+        {"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    assert h.engine.process_chapter(1) is True
+    assert h.engine.progress["completed"] == [1]
+    assert [item["kind"] for item in read_items(h.engine.GLOSSARY_FILE.parent)] == ["glossary_review"]
+
+
+def test_opting_out_of_automatic_repair_survives_a_round_trip():
+    from novel_project import NovelConfig
+    base = dict(id="x", title="X", source_language="zh", target_language="en", profile="p", final_chapter=1)
+    assert NovelConfig.from_dict(base).residual_cjk_micro_repair.enabled is True
+    assert NovelConfig.from_dict(base).glossary_candidate_auto_resolution.allow_model_adjudication is True
+    config = NovelConfig.from_dict({**base, "residual_cjk_micro_repair": {"enabled": False},
+                                    "glossary_candidate_auto_resolution": {"enabled": False}})
+    again = NovelConfig.from_dict(config.to_dict())
+    assert again.residual_cjk_micro_repair.enabled is False
+    assert again.glossary_candidate_auto_resolution.enabled is False
+    assert "residual_cjk_micro_repair" not in NovelConfig.from_dict(base).to_dict()
 
 
 @pytest.mark.parametrize("drift", [False, True])

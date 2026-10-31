@@ -796,10 +796,12 @@ def test_stale_v2_fails_closed_and_still_selects_exact_existing_fingerprint(tmp_
     )
 
 
-def test_config_defaults_safe_and_paid_tier_requires_explicit_enablement():
+def test_config_defaults_on_and_opting_out_turns_off_paid_tier():
     defaults = GlossaryCandidateAutoResolutionConfig.from_dict(None)
-    assert defaults.enabled is False
-    assert defaults.allow_model_adjudication is False
+    assert defaults.enabled is True
+    assert defaults.allow_model_adjudication is True
+    opted_out = GlossaryCandidateAutoResolutionConfig.from_dict({"enabled": False})
+    assert opted_out.allow_model_adjudication is False
     with pytest.raises(ValueError):
         GlossaryCandidateAutoResolutionConfig.from_dict({
             "enabled": False,

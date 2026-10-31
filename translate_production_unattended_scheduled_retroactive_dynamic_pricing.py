@@ -73,7 +73,7 @@ from glossary_audit import (
     run_chunked_audit_skipping_failures,
 )
 from provider_retry_policy import is_run_level_stop
-from review_queue import add_item as add_review_item, soften_commit_blockers
+from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
     build_source_integrity_audit_plan,
@@ -3831,6 +3831,29 @@ def flag_for_review(chapter_number, kind, detail):
     print(f"Flagged Chapter {chapter_number} for review ({kind}) and continuing.")
 
 
+def set_aside_for_fresh_translation(chapter_number, qa, meta, pending_file, pending_meta_file):
+    """Too much source text for a repair: translate once more on the next start.
+
+    The first version moves to backup, its cost stays counted, and the review
+    list records the attempt so that it happens only once per chapter.
+    """
+    limits = ACTIVE_NOVEL_CONFIG.residual_cjk_micro_repair
+    if not limits.enabled or qa.get("remaining_chinese_characters", 0) <= limits.max_total_cjk_chars:
+        return False
+    data_dir = GLOSSARY_FILE.parent
+    if any(item["chapter"] == chapter_number and item["kind"] == "fresh_translation"
+           for item in read_review_items(data_dir)):
+        return False
+    account_residual_cjk_micro_repair(f"superseded_translation:{chapter_number}", meta.get("translation_stats") or zero_stats())
+    flag_for_review(chapter_number, "fresh_translation", f"{qa['remaining_chinese_characters']} source characters left")
+    destination = BACKUP_DIR / "superseded_translations" / f"{chapter_number:04d}_{int(time.time())}"
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in [*PAID_REQUEST_JOURNAL_DIR.glob(f"{chapter_number:04d}.*"), pending_file, pending_meta_file]:
+        path.replace(destination / path.name)
+    print(f"Chapter {chapter_number}: too much source text left to repair. It will be translated again on restart.")
+    return True
+
+
 def continue_without_state(chapter_number, meta, pending_meta_file, identity, error):
     """Keep the paid translation moving when its state update is unusable.
 
@@ -4083,6 +4106,8 @@ def process_chapter(chapter_number):
     qa = qa_checkpoint["qa"]
     meta = qa_checkpoint["meta"]
     if qa.get("flagged_blockers"):
+        if set_aside_for_fresh_translation(chapter_number, qa, meta, pending_file, pending_meta_file):
+            return False
         flag_for_review(chapter_number, "commit_qa", json.dumps(qa["flagged_blockers"], ensure_ascii=False))
     if not qa_checkpoint["commit_allowed"]:
         # Any downstream pending work belongs to the failed text and must not be

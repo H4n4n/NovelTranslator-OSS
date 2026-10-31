@@ -90,6 +90,24 @@ def test_residual_cjk_commits_and_flags(tmp_path, monkeypatch):
     assert qa["commit_allowed"] is True and qa["flagged_blockers"]
 
 
+def test_heavy_leftovers_translate_once_more_through_the_runner(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=3)
+    seen = []
+
+    def heavy_once(chapter, kind):
+        if chapter == 2 and kind == "chapter_translation":
+            seen.append(chapter)
+            if len(seen) == 1:
+                return response(content="Jia entered the Great Hall. " * 40 + "大厅" * 10)
+    result = run(project, tmp_path, monkeypatch, heavy_once)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert len(seen) == 2 and finished(project, 3)
+    assert (2, "fresh_translation") in flagged(project)
+    assert (2, "commit_qa") not in flagged(project)
+    assert "大厅" not in (project.chapter_dir / "0002.md").read_text(encoding="utf-8")
+    assert list((project.backup_dir / "superseded_translations").rglob("0002.md"))
+
+
 def test_truncated_translation_is_still_a_hard_stop(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
 

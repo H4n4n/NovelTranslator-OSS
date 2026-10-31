@@ -184,6 +184,21 @@ def test_filtered_prompt_metadata_is_not_autonomous_promotion():
     assert "high-priority" in profile_state_instructions(profile)
 
 
+def test_a_chapter_using_part_of_a_full_name_still_gets_the_entry():
+    entries = {
+        "도윤 카렐": {"english": "Doyun Karel", "category": "character", "status": "provisional"},
+        "하든 남작": {"english": "Baron Harden", "category": "character", "status": "provisional"},
+        "安.雷石": {"english": "An Leishi", "category": "character", "status": "provisional"},
+        "달빛 탑": {"english": "Moon Tower", "category": "magic", "status": "provisional"},
+    }
+    chosen = lambda text: [item["english"] for item in core.relevant_glossary_entries(text, entries)]
+    assert chosen("도윤이 웃었다.") == ["Doyun Karel"]
+    assert chosen("카렐 경이 왔다.") == ["Doyun Karel"]
+    assert chosen("雷石走了。") == ["An Leishi"]
+    assert chosen("다른 남작이 왔다. 달빛이 흘렀다.") == []
+    assert chosen("하든이 왔다.") == ["Baron Harden"]
+
+
 def test_reporting_separates_overlap_acceptance_and_repair():
     entries = youxi(strict_qa=True, accepted_inflections=["Youxi clansman"], auto_repair=False)
     entries.update({

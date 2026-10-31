@@ -132,6 +132,7 @@ docs/private_inputs.md
 docs/provider_capabilities/command_code_deepseek_v4_1_flash_2026_10_11.json
 docs/publication_guard.md
 docs/retroactive_edit_safety.md
+epub_validate.py
 experimental_goat.py
 experimental_goat_accounting.py
 experimental_goat_audit_proof.py
@@ -176,6 +177,8 @@ inspect_chapter.py
 list_novels.py
 migrate_single_novel.py
 model_candidate_ids.py
+novel_intake.py
+novel_profile_advisor.py
 novel_project.py
 novel_runner.py
 noveltranslator_core.py
@@ -418,7 +421,9 @@ tests/test_model_candidate_ids.py
 tests/test_multi_novel.py
 tests/test_multilingual_source_prompt.py
 tests/test_normalization_inventory.py
+tests/test_novel_intake.py
 tests/test_novel_management.py
+tests/test_novel_profile_advisor.py
 tests/test_novel_runner.py
 tests/test_novels_root.py
 tests/test_observability.py
@@ -467,6 +472,7 @@ tests/test_pytest_configuration.py
 tests/test_qa_provenance_backfill_execute.py
 tests/test_qa_provenance_backfill_plan.py
 tests/test_qa_runtime_wrapper_reinstallation.py
+tests/test_reader_epub.py
 tests/test_real_core_pending_provenance.py
 tests/test_retroactive_transactions.py
 tests/test_rogue_first_prince_source.py

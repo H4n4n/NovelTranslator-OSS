@@ -18,9 +18,17 @@ from noveltranslator_core import (
 )
 
 POLICY_VERSION = "owned-single-span-v1"
+COUNT_MATCH_POLICY_VERSION = "owned-count-match-v2"
+SPAN_POLICIES = (POLICY_VERSION, COUNT_MATCH_POLICY_VERSION)
+OVER_COUNT_REASON = "more_target_spans_than_source_anchors"
 SCHEMA_VERSION = 1
 TARGET_FIELDS = ("english", "approved_renderings", "accepted_inflections",
                  "repair_aliases", "aliases")
+
+
+def span_policy_of(request):
+    """Requests made before count matching have no field and stay on the first rule."""
+    return request.get("span_policy", POLICY_VERSION)
 
 
 def digest(content):
@@ -133,13 +141,19 @@ def rule_eligibility(rule, policy, safe_categories):
     return ""
 
 
-def plan_chapter(source, before, rules, policy, safe_categories):
+def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POLICY_VERSION):
     """Return disjoint authorized edits and per-rule decisions, without guessing.
 
     Longest source ownership uses the mature core claiming machinery across ALL
     glossary keys. Equal/overlapping target claims are rejected, never resolved
-    by lexical tie-breaking or source-derived target capacities.
+    by lexical tie-breaking.
+
+    Count matching edits every English occurrence when the chapter has at least
+    as many owned source occurrences. English can have fewer, because a term can
+    be referred to by pronoun. More English than source means something else
+    may be using the rendering, so that chapter is skipped.
     """
+    count_match = span_policy == COUNT_MATCH_POLICY_VERSION
     text = before.decode("utf-8")  # Preserve BOM, CRLF, Markdown and all other bytes.
     source_claims = _claim_longest_non_overlapping_occurrences(
         source, [(key, item["source_forms"]) for key, item in policy.items()]
@@ -168,18 +182,19 @@ def plan_chapter(source, before, rules, policy, safe_categories):
             reason = "source_absent_or_owned_by_longer_identity"
         if not reason and not any(anchor["phrase"] == rule["chinese"] for anchor in anchors):
             reason = "exact_source_identity_not_owned"
-        if not reason and (len(anchors) != 1 or len(spans) != 1):
-            reason = "cardinality_requires_manual_review"
         if not reason:
-            anchor = anchors[0]
+            if count_match and len(spans) > len(anchors):
+                reason = OVER_COUNT_REASON
+            elif not spans or (not count_match and (len(anchors) != 1 or len(spans) != 1)):
+                reason = "cardinality_requires_manual_review"
+        if not reason:
             if any(other["owner"] != rule["chinese"] and
                    overlaps((anchor["start"], anchor["end"]), (other["start"], other["end"])) and
                    not (anchor["start"] <= other["start"] and other["end"] <= anchor["end"] and
                         other["end"] - other["start"] < anchor["end"] - anchor["start"])
-                   for other in raw_source_claims):
+                   for anchor in anchors for other in raw_source_claims):
                 reason = "competing_source_ownership"
         if not reason:
-            span = spans[0]
             # Reserve case variants as well, to reject competing same-string
             # identities even when their canonical target has different casing.
             competing = [key for key, item in policy.items() if key != rule["chinese"]
@@ -187,20 +202,21 @@ def plan_chapter(source, before, rules, policy, safe_categories):
                                  for target in item["targets"])]
             if competing or any(overlaps(span, other) and
                                 (owner != rule["chinese"] or other != span)
-                                for owner, _target, other in families):
+                                for span in spans for owner, _target, other in families):
                 reason = "competing_or_nested_target_ownership"
         if reason:
             decision["skip_reason"] = reason
         else:
-            start, end = spans[0]
             old, new = rule["old_english"].encode("utf-8"), rule["new_english"].encode("utf-8")
-            edits.append({"rule_index": index, "source_identity": rule["chinese"],
-                          "start": len(text[:start].encode("utf-8")),
-                          "end": len(text[:end].encode("utf-8")),
-                          "old_text": rule["old_english"], "old_sha256": digest(old),
-                          "replacement": rule["new_english"], "replacement_sha256": digest(new),
-                          "source_span": {key: anchors[0][key] for key in ("start", "end")},
-                          "ownership": "one_owned_source_one_unique_bounded_target"})
+            for (start, end), anchor in zip(spans, anchors):
+                edits.append({"rule_index": index, "source_identity": rule["chinese"],
+                              "start": len(text[:start].encode("utf-8")),
+                              "end": len(text[:end].encode("utf-8")),
+                              "old_text": rule["old_english"], "old_sha256": digest(old),
+                              "replacement": rule["new_english"], "replacement_sha256": digest(new),
+                              "source_span": {key: anchor[key] for key in ("start", "end")},
+                              "ownership": ("owned_source_count_covers_bounded_targets" if count_match
+                                            else "one_owned_source_one_unique_bounded_target")})
             decision["status"] = "planned"
         decisions.append(decision)
     conflicts = {edit["rule_index"] for edit in edits for other in edits

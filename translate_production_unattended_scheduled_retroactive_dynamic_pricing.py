@@ -73,6 +73,7 @@ from glossary_audit import (
     run_chunked_audit_skipping_failures,
 )
 from provider_retry_policy import is_run_level_stop
+from retroactive_span_planning import OVER_COUNT_REASON
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
@@ -585,6 +586,7 @@ def apply_retroactive_replacements(
         output_dir=OUTPUT_DIR, retroactive_dir=RETROACTIVE_DIR, backup_dir=BACKUP_DIR,
         writer_context=SimpleNamespace(**globals()),
     )
+    flag_skipped_corrections(result)
     print(f"Retroactive {audit_label}: rules={result['replacement_rules_considered']}, "
           f"category eligible={result['rules_eligible_by_category']}, "
           f"planned/applied spans={result['replacement_count']}, "
@@ -593,6 +595,18 @@ def apply_retroactive_replacements(
           f"already applied={result['already_applied_edits_reconciled']}; "
           f"transaction={result['transaction_id']}")
     return result
+
+
+CORRECTION_REVIEW_REASONS = {OVER_COUNT_REASON, "competing_source_ownership", "competing_or_nested_target_ownership"}
+
+
+def flag_skipped_corrections(result):
+    """A correction that found the old rendering but couldn't attribute it needs a look."""
+    for rule in result.get("details", []):
+        for decision in rule.get("decisions", []):
+            if decision.get("skip_reason") in CORRECTION_REVIEW_REASONS and decision.get("target_candidate_count"):
+                flag_for_review(decision["chapter"], f"correction_skipped:{rule['chinese']}",
+                                f"{rule['old_english']} -> {rule['new_english']}: {decision['skip_reason']}")
 
 
 def _prepare_known_glossary_fixes(glossary_data, *, profile, ming_compatibility):

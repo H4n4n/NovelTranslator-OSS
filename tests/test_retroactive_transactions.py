@@ -11,7 +11,7 @@ import retroactive_transactions as tx
 from noveltranslator_core import RETROACTIVE_SAFE_CATEGORIES, source_anchored_replacement
 from production_failure_classification import ProductionIntegrityError
 from retroactive_span_planning import (
-    canonical_hash, digest, normalized_rules, ownership_policy, plan_chapter, transform_bytes,
+    COUNT_MATCH_POLICY_VERSION, OVER_COUNT_REASON, POLICY_VERSION, canonical_hash, digest, normalized_rules, ownership_policy, plan_chapter, transform_bytes,
 )
 
 
@@ -115,6 +115,67 @@ def test_category_alone_and_compatibility_helper_cannot_authorize():
                                        glossary=glossary()) == ("Hand Hann.", 1)
     assert not plan_chapter("韓", b"Han", normalized_rules([rule()]),
                            ownership_policy(glossary()), set())[0]
+
+
+def count_plan(source, text, rules=None, data=None):
+    return plan_chapter(source, text.encode("utf-8"), normalized_rules(rules or [rule()]),
+                        ownership_policy(data or glossary()), RETROACTIVE_SAFE_CATEGORIES,
+                        COUNT_MATCH_POLICY_VERSION)
+
+
+def test_count_match_edits_every_repeated_name_and_only_those_bytes():
+    text = "Han left. His Hand shook. Han ran. \u97d3 Hans. Han."
+    edits, decisions = count_plan("\u97d3\u8d70\u3002\u97d3\u8dd1\u3002\u97d3", text)
+    assert decisions[0]["status"] == "planned" and len(edits) == 3
+    assert transform_bytes(text.encode("utf-8"), edits).decode("utf-8") == (
+        "Hann left. His Hand shook. Hann ran. \u97d3 Hans. Hann.")
+
+
+def test_count_match_allows_fewer_english_than_source():
+    edits, _ = count_plan("\u97d3\u8d70\u3002\u97d3\u8dd1\u3002", "Han left. He ran.")
+    assert len(edits) == 1
+
+
+def test_count_match_skips_more_english_than_source():
+    edits, decisions = count_plan("\u97d3", "Han spoke to Han.")
+    assert not edits and decisions[0]["skip_reason"] == OVER_COUNT_REASON
+
+
+@pytest.mark.parametrize("data,text,reason", [
+    (glossary(**{"\u97d3": {"english": "Han"}, "\u6f22": {"english": "Han"}}), "Han. Han.", "competing_or_nested_target_ownership"),
+    (glossary(**{"\u97d3": {"english": "Han"}, "\u97d3\u5b89": {"english": "Han An"}}), "Han met Han An.", "competing_or_nested_target_ownership"),
+    (glossary(**{"\u97d3": {"english": "Han", "status": "contextual"}}), "Han. Han.", "contextual_identity_requires_manual_review"),
+])
+def test_count_match_still_refuses_competing_identities(data, text, reason):
+    edits, decisions = count_plan("\u97d3\u3002\u97d3\u3002", text, data=data)
+    assert not edits and decisions[0]["skip_reason"] == reason
+
+
+def test_count_match_longer_source_identity_keeps_its_own_occurrence():
+    data = glossary(**{"\u97d3": {"english": "Han"}, "\u97d3\u5b89": {"english": "Hanan"}})
+    edits, decisions = count_plan("\u97d3\u5b89\u3002\u97d3\u3002", "Han spoke. Han left.", data=data)
+    assert not edits and decisions[0]["skip_reason"] == OVER_COUNT_REASON
+
+
+def test_first_rule_is_unchanged_without_the_new_policy():
+    edits, decisions = plan("\u97d3\u97d3", "Han. Han.")
+    assert not edits and decisions[0]["skip_reason"] == "cardinality_requires_manual_review"
+
+
+def test_plans_made_under_the_first_rule_stay_valid():
+    chapter_map = {1: {"text": "\u97d3"}}
+    request = dict(novel_id="x", audit_label="a", through_chapter=1, rules=normalized_rules([rule()]),
+                   ownership_policy=ownership_policy(glossary()), safe_categories=sorted(RETROACTIVE_SAFE_CATEGORIES),
+                   committed_chapters=[1])
+    old = tx.build_plan(request, {1: b"Han."}, chapter_map)
+    assert old["policy_version"] == POLICY_VERSION and "span_policy" not in old["request"]
+    tx.validate_plan(old, tx.with_span_policy(request, old), chapter_map)
+    new = tx.build_plan(tx.with_span_policy(request), {1: b"Han."}, chapter_map)
+    assert new["policy_version"] == COUNT_MATCH_POLICY_VERSION
+    tx.validate_plan(new, tx.with_span_policy(request, new), chapter_map)
+    assert old["transaction_id"] != new["transaction_id"]
+    with pytest.raises(tx.RetroactiveBlocked):
+        tx.validate_plan(new, request, chapter_map)
 
 
 def _authoritative_fixture(root, data, chapter_map, last, novel="synthetic"):

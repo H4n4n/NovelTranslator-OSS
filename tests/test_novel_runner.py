@@ -138,12 +138,21 @@ def test_second_ambiguous_failure_blocks_with_message(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     fake_runtime(project, monkeypatch, tmp_path)
 
-    def always_cut_off(call):
-        raise KeyboardInterrupt
-    wrap_create(monkeypatch, always_cut_off)
+    network_is_bad = [True]
+
+    def cut_off(call):
+        if network_is_bad:
+            raise KeyboardInterrupt
+    wrap_create(monkeypatch, cut_off)
     result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)
     assert result["status"] == novel_runner.STOPPED
     assert result["reason"] == "ambiguous_request_blocked"
+    assert novel_runner.run_novel("fixture", repo_root=tmp_path)["reason"] == "ambiguous_request_blocked"
+
+    assert novel_runner.allow_resend(project)
+    assert novel_runner.allow_resend(project) == []
+    network_is_bad.clear()
+    assert novel_runner.run_novel("fixture", repo_root=tmp_path)["status"] == novel_runner.COMPLETE
 
 
 def test_crash_after_paid_translation_replays_without_resending(tmp_path, monkeypatch):

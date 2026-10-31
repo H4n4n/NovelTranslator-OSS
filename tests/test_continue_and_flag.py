@@ -161,6 +161,43 @@ def test_provider_stop_during_review_is_not_treated_as_bad_review(tmp_path, monk
     assert (1, "glossary_review") not in flagged(project)
 
 
+def test_flagged_leftover_is_repaired_at_the_next_audit(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=52)  # A second audit must accept the edit made after the first.
+    repairs = []
+
+    def leftover_then_fixed(chapter, kind):
+        if chapter == 2 and kind == "chapter_translation":
+            return response(content="Jia entered the Great Hall. " * 40 + "\n\nThen the \u5927\u5385 stood quiet and very still.")
+        if chapter == 2 and kind == "residual_cjk_micro_repair":
+            repairs.append(kind)
+            if len(repairs) == 1:
+                return response(content='{"repairs": []}')
+            return response(content=json.dumps({"repairs": [{"old_text": "the \u5927\u5385 stood", "new_text": "the hall stood"}]}))
+    result = run(project, tmp_path, monkeypatch, leftover_then_fixed)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert len(repairs) == 2
+    text = (project.chapter_dir / "0002.md").read_text(encoding="utf-8")
+    assert "\u5927\u5385" not in text and "the hall stood" in text
+    assert "\u5927\u5385" in (project.backup_dir / "flag_retry" / "0002_before.md").read_text(encoding="utf-8")
+    assert review_queue.open_items(project.data_dir) == []
+
+
+def test_flag_stays_open_when_the_retry_also_fails_and_is_tried_only_once(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=26)
+    repairs = []
+
+    def never_fixed(chapter, kind):
+        if chapter == 2 and kind == "chapter_translation":
+            return response(content="Jia entered the Great Hall. " * 40 + "\n\nThen the \u5927\u5385 stood quiet and very still.")
+        if chapter == 2 and kind == "residual_cjk_micro_repair":
+            repairs.append(kind)
+            return response(content='{"repairs": []}')
+    result = run(project, tmp_path, monkeypatch, never_fixed)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert len(repairs) == 2  # At the commit, then once at the first audit. The final audit doesn't retry.
+    assert [item["kind"] for item in review_queue.open_items(project.data_dir)] == ["commit_qa"]
+
+
 def test_run_end_leaves_a_current_reader_epub(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)

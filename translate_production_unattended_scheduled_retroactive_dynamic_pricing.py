@@ -74,6 +74,7 @@ from glossary_audit import (
 )
 from provider_retry_policy import is_run_level_stop
 from retroactive_span_planning import OVER_COUNT_REASON
+from noveltranslator_core import atomic_write_bytes
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
@@ -3181,6 +3182,9 @@ def run_periodic_audit(
 
     from production_periodic_audit_finalization import load_intent
     from types import SimpleNamespace
+    # Before the audit records this history, and never inside an audit already under way.
+    if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
+        retry_flagged_chapters(end_chapter)
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
@@ -3259,6 +3263,66 @@ def run_periodic_audit(
         **stats_event_fields(audit_stats),
     )
     rebuild_reader_epub_after_audit()
+
+
+def retry_flagged_chapters(through_chapter):
+    """Before each audit, fix what chapters since the last one were flagged for.
+
+    A flag an earlier correction already cleared just closes. Otherwise each
+    chapter gets one more paid repair, with the original kept in backup.
+    """
+    data_dir = GLOSSARY_FILE.parent
+    items = read_review_items(data_dir)
+    retried = {item["chapter"] for item in items if item["kind"] == "flag_retried"}
+    resolved = {item["chapter"] for item in items if item["kind"] == "flag_resolved"}
+    flagged = sorted({item["chapter"] for item in items if item["kind"] == "commit_qa"} - resolved)
+    for chapter_number in flagged:
+        final_file = OUTPUT_DIR / f"{chapter_number:04d}.md"
+        if chapter_number > through_chapter or not final_file.is_file():
+            continue
+        source, text = chapter_map[chapter_number]["text"], final_file.read_text(encoding="utf-8")
+        if not (chapter_number in retried or local_qa(chapter_number, source, text, "stop")["commit_allowed"]):
+            add_review_item(data_dir, chapter=chapter_number, kind="flag_retried")
+            try:
+                repaired = repair_committed_chapter(chapter_number, source, text)
+            except Exception as exc:
+                if is_run_level_stop(exc):
+                    raise
+                log_error(exc, chapter=chapter_number, stage="flag_retry")
+                continue
+            if repaired != text:
+                write_repaired_chapter(chapter_number, final_file, repaired)
+                text = repaired
+        if local_qa(chapter_number, source, text, "stop")["commit_allowed"]:
+            add_review_item(data_dir, chapter=chapter_number, kind="flag_resolved", detail="commit_qa")
+            log_event("flag_resolved", chapter=chapter_number, stage="flag_retry")
+
+
+def write_repaired_chapter(chapter_number, final_file, repaired):
+    before = final_file.read_bytes()
+    after = repaired.encode("utf-8")
+    if b"\r\n" in before:
+        after = after.replace(b"\n", b"\r\n")
+    backup = BACKUP_DIR / "flag_retry" / f"{chapter_number:04d}_before.md"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(backup, before)
+    atomic_write_bytes(final_file, after)
+
+
+def repair_committed_chapter(chapter_number, source, text):
+    """Run the normal repairs on a working copy, in fresh journal slots."""
+    workspace = BACKUP_DIR / "flag_retry" / f"{chapter_number:04d}_work"
+    workspace.mkdir(parents=True, exist_ok=True)
+    for path in PAID_REQUEST_JOURNAL_DIR.glob(f"{chapter_number:04d}.*repair*"):
+        path.replace(workspace / path.name)
+    work_file, work_meta = workspace / f"{chapter_number:04d}.md", workspace / f"{chapter_number:04d}.json"
+    atomic_write_text(work_file, text)
+    meta = {"chapter": chapter_number, "stage": "translated", "finish_reason": "stop"}
+    save_json(work_meta, meta)
+    terminology = maybe_repair_strict_terminology(chapter_number, source, text, meta, work_file, work_meta, "stop")
+    residual = maybe_repair_residual_cjk(chapter_number, source, terminology["translation"], terminology["meta"],
+                                         work_file, work_meta, "stop")
+    return residual["translation"]
 
 
 def rebuild_reader_epub_after_audit():

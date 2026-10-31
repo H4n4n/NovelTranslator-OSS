@@ -3207,7 +3207,7 @@ def run_periodic_audit(
     if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
         retry_flagged_chapters(end_chapter)
         # The last audit looks at every term again, so it promotes nothing.
-        last_audit = end_chapter >= FINAL_CHAPTER
+        last_audit = FINAL_CHAPTER is not None and end_chapter >= FINAL_CHAPTER
         claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter,
                                     promotions=() if last_audit else terms_due_for_promotion(), second_look=last_audit)
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)

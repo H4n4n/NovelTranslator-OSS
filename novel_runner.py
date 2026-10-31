@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 
+from build_checkpoint_epub import rebuild_reader_epub
 from chapter_glossary_review import CHAPTER_REVIEW_RECOVERY_KEY
 from noveltranslator_core import atomic_write_json
 from novel_project import load_novel_project
@@ -25,6 +26,7 @@ COMPLETE = "COMPLETE"
 BUDGET_REACHED = "BUDGET_REACHED"
 PAUSED = "PAUSED"
 STOPPED = "STOPPED"
+TRIAL_FINISHED = "TRIAL_FINISHED"
 
 STOP_MESSAGES = {
     "provider_key_or_credit": ("The provider rejected the API key or the account is out of credit.",
@@ -176,14 +178,27 @@ def _run_production(project, novel_id, repo_root, allowance):
         return execute_authorized_goat(plan, repo_root=project.repository_root, recovery=False)
 
 
-def run_novel(novel_id, *, repo_root=None, budget_usd=None):
+def run_novel(novel_id, *, repo_root=None, budget_usd=None, trial_chapters=None):
+    """With trial_chapters, translate only that many more, then stop so you can read them."""
     project = load_novel_project(novel_id, repo_root=repo_root)
-    result = _run_until_stopped(project, novel_id, repo_root, budget_usd)
+    trial_path = project.data_dir / "trial_stop.json"
+    if trial_chapters is not None:
+        atomic_write_json(trial_path, {"after_chapter": _progress(project)["last_completed"] + trial_chapters})
+    try:
+        result = _run_until_stopped(project, novel_id, repo_root, budget_usd)
+    finally:
+        trial_path.unlink(missing_ok=True)
     progress = _progress(project)
+    result["reader_epub"] = rebuild_reader_epub(project, take_lock=True).get("status")
     result.update(novel_id=novel_id, last_completed=progress["last_completed"], next_chapter=progress["next_chapter"],
                   final_chapter=project.config.final_chapter, finished_utc=datetime.now(timezone.utc).isoformat())
     atomic_write_json(project.data_dir / "last_run.json", result)
     return result
+
+
+def _trial_is_finished(project):
+    path = project.data_dir / "trial_stop.json"
+    return path.is_file() and _progress(project)["last_completed"] >= json.loads(path.read_text(encoding="utf-8"))["after_chapter"]
 
 
 def _run_until_stopped(project, novel_id, repo_root, budget_usd):
@@ -236,6 +251,9 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
         if outcome.get("status") == "ALLOWANCE_EXHAUSTED":
             return dict(status=BUDGET_REACHED, message="The rest of the budget is too small for the next request.",
                         action="Add budget to continue.")
+        if _trial_is_finished(project):
+            return dict(status=TRIAL_FINISHED, message="The trial chapters are ready to read.",
+                        action="Start again to continue the novel.")
         progress = _progress(project)
         state = (progress["last_completed"], progress.get("last_audited_chapter", 0))
         runs_without_progress = runs_without_progress + 1 if state == last_state else 0

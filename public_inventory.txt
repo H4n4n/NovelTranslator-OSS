@@ -6,6 +6,7 @@
 .github/workflows/ci.yml
 .gitignore
 AGENTS.md
+NovelTranslator.bat
 README.md
 apply_final_editorial_chapters.py
 apply_normalization_plan.py
@@ -253,6 +254,7 @@ pyproject.toml
 pytest.ini
 qa_provenance_backfill_execute.py
 qa_provenance_backfill_plan.py
+requested_corrections.py
 residual_cjk_micro_repair.py
 resolve_glossary_candidate_conflict.py
 retroactive_span_planning.py
@@ -493,6 +495,7 @@ tests/test_translation_completeness.py
 tests/test_translation_model_config.py
 tests/test_translation_model_runtime.py
 tests/test_translation_profiles.py
+tests/test_ui_api.py
 tests/test_uncertain_request_disposition.py
 tests/zero_provider_validation.py
 translate.py
@@ -514,6 +517,14 @@ translation_completeness.py
 translation_model_config.py
 translation_model_runtime.py
 translation_profile.py
+ui/__init__.py
+ui/api.py
+ui/demo.py
+ui/server.py
+ui/static/app.css
+ui/static/app.js
+ui/static/index.html
+ui/worker.py
 uncertain_request_disposition_execute.py
 uncertain_request_disposition_plan.py
 upgrade_glossary.py

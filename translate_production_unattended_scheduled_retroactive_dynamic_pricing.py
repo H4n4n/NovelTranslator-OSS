@@ -73,6 +73,10 @@ from glossary_audit import (
     run_chunked_audit_skipping_failures,
 )
 from provider_retry_policy import is_run_level_stop
+from retroactive_span_planning import OVER_COUNT_REASON
+from noveltranslator_core import atomic_write_bytes
+from requested_corrections import (claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit,
+                                   is_second_look as audit_is_second_look)
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
@@ -585,6 +589,7 @@ def apply_retroactive_replacements(
         output_dir=OUTPUT_DIR, retroactive_dir=RETROACTIVE_DIR, backup_dir=BACKUP_DIR,
         writer_context=SimpleNamespace(**globals()),
     )
+    flag_skipped_corrections(result)
     print(f"Retroactive {audit_label}: rules={result['replacement_rules_considered']}, "
           f"category eligible={result['rules_eligible_by_category']}, "
           f"planned/applied spans={result['replacement_count']}, "
@@ -593,6 +598,18 @@ def apply_retroactive_replacements(
           f"already applied={result['already_applied_edits_reconciled']}; "
           f"transaction={result['transaction_id']}")
     return result
+
+
+CORRECTION_REVIEW_REASONS = {OVER_COUNT_REASON, "competing_source_ownership", "competing_or_nested_target_ownership"}
+
+
+def flag_skipped_corrections(result):
+    """A correction that found the old rendering but couldn't attribute it needs a look."""
+    for rule in result.get("details", []):
+        for decision in rule.get("decisions", []):
+            if decision.get("skip_reason") in CORRECTION_REVIEW_REASONS and decision.get("target_candidate_count"):
+                flag_for_review(decision["chapter"], f"correction_skipped:{rule['chinese']}",
+                                f"{rule['old_english']} -> {rule['new_english']}: {decision['skip_reason']}")
 
 
 def _prepare_known_glossary_fixes(glossary_data, *, profile, ming_compatibility):
@@ -2524,13 +2541,15 @@ def audit_targets(
     return_integrity=False,
 ):
     glossary_data = glossary if glossary_data is None else glossary_data
+    whole_novel = audit_is_second_look(GLOSSARY_FILE.parent, start_chapter, end_chapter)
     plan = build_source_integrity_audit_plan(
         glossary_data["entries"],
         chapters,
         start_chapter,
         end_chapter,
-        max_contexts=MAX_TERM_CONTEXTS,
+        max_contexts=2 * MAX_TERM_CONTEXTS if whole_novel else MAX_TERM_CONTEXTS,
         context_radius=TERM_CONTEXT_RADIUS,
+        whole_novel=whole_novel,
     )
     integrity = {
         "counts": plan["counts"],
@@ -2862,7 +2881,8 @@ def apply_periodic_audit(
 
         if entry.get(
             "status"
-        ) == "locked":
+        ) == "locked" and not (entry.get("promoted_by_audit")
+                               and audit_is_second_look(GLOSSARY_FILE.parent, start_chapter, end_chapter)):
             continue
 
         decision = decisions.get(
@@ -3121,6 +3141,22 @@ def apply_periodic_audit(
             chinese
         )
 
+    for request in requested_corrections_for_audit(GLOSSARY_FILE.parent, start_chapter, end_chapter):
+        entry = entries.get(request.get("chinese"))
+        if entry is not None and request.get("promote"):
+            if entry.get("status") == "provisional":
+                entry.update(status="locked", promoted_by_audit=True)
+            continue
+        if entry is None or entry.get("english") == request.get("new_english"):
+            continue
+        old_english = entry.get("english", "")
+        entry["english"] = request["new_english"]
+        corrected.append(f"{request['chinese']}: {old_english} → {request['new_english']}")
+        retroactive_replacements.append({
+            "chinese": request["chinese"], "old_english": old_english, "new_english": request["new_english"],
+            "category": entry.get("category", ""), "reason": "Correction you requested.",
+        })
+
     return {
         "kept": kept,
         "corrected": corrected,
@@ -3167,6 +3203,13 @@ def run_periodic_audit(
 
     from production_periodic_audit_finalization import load_intent
     from types import SimpleNamespace
+    # Before the audit records this history, and never inside an audit already under way.
+    if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
+        retry_flagged_chapters(end_chapter)
+        # The last audit looks at every term again, so it promotes nothing.
+        last_audit = end_chapter >= FINAL_CHAPTER
+        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter,
+                                    promotions=() if last_audit else terms_due_for_promotion(), second_look=last_audit)
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
@@ -3244,6 +3287,93 @@ def run_periodic_audit(
         elapsed_seconds=time.perf_counter() - audit_started,
         **stats_event_fields(audit_stats),
     )
+    rebuild_reader_epub_after_audit()
+
+
+PROMOTE_AFTER_CHAPTERS = 5
+
+
+def terms_due_for_promotion():
+    """Provisional terms an earlier audit kept, now seen in enough finished chapters.
+
+    An audit reviews a term once, in the range where it first appears, so a
+    second keep never comes. Continued use without trouble is the evidence.
+    """
+    kept = {term for audit in audit_history.get("audits", []) for term in audit.get("changes", {}).get("kept", [])}
+    sources = [chapter_map[number]["text"] for number in progress["completed"] if number in chapter_map]
+    return sorted(term for term in kept
+                  if glossary["entries"].get(term, {}).get("status") == "provisional"
+                  and sum(term in text for text in sources) >= PROMOTE_AFTER_CHAPTERS)
+
+
+def retry_flagged_chapters(through_chapter):
+    """Before each audit, fix what chapters since the last one were flagged for.
+
+    A flag an earlier correction already cleared just closes. Otherwise each
+    chapter gets one more paid repair, with the original kept in backup.
+    """
+    data_dir = GLOSSARY_FILE.parent
+    items = read_review_items(data_dir)
+    retried = {item["chapter"] for item in items if item["kind"] == "flag_retried"}
+    resolved = {item["chapter"] for item in items if item["kind"] == "flag_resolved"}
+    flagged = sorted({item["chapter"] for item in items if item["kind"] == "commit_qa"} - resolved)
+    for chapter_number in flagged:
+        final_file = OUTPUT_DIR / f"{chapter_number:04d}.md"
+        if chapter_number > through_chapter or not final_file.is_file():
+            continue
+        source, text = chapter_map[chapter_number]["text"], final_file.read_text(encoding="utf-8")
+        if not (chapter_number in retried or local_qa(chapter_number, source, text, "stop")["commit_allowed"]):
+            add_review_item(data_dir, chapter=chapter_number, kind="flag_retried")
+            try:
+                repaired = repair_committed_chapter(chapter_number, source, text)
+            except Exception as exc:
+                if is_run_level_stop(exc):
+                    raise
+                log_error(exc, chapter=chapter_number, stage="flag_retry")
+                continue
+            if repaired != text:
+                write_repaired_chapter(chapter_number, final_file, repaired)
+                text = repaired
+        if local_qa(chapter_number, source, text, "stop")["commit_allowed"]:
+            add_review_item(data_dir, chapter=chapter_number, kind="flag_resolved", detail="commit_qa")
+            log_event("flag_resolved", chapter=chapter_number, stage="flag_retry")
+
+
+def write_repaired_chapter(chapter_number, final_file, repaired):
+    before = final_file.read_bytes()
+    after = repaired.encode("utf-8")
+    if b"\r\n" in before:
+        after = after.replace(b"\n", b"\r\n")
+    backup = BACKUP_DIR / "flag_retry" / f"{chapter_number:04d}_before.md"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(backup, before)
+    atomic_write_bytes(final_file, after)
+
+
+def repair_committed_chapter(chapter_number, source, text):
+    """Run the normal repairs on a working copy, in fresh journal slots."""
+    workspace = BACKUP_DIR / "flag_retry" / f"{chapter_number:04d}_work"
+    workspace.mkdir(parents=True, exist_ok=True)
+    for path in PAID_REQUEST_JOURNAL_DIR.glob(f"{chapter_number:04d}.*repair*"):
+        path.replace(workspace / path.name)
+    work_file, work_meta = workspace / f"{chapter_number:04d}.md", workspace / f"{chapter_number:04d}.json"
+    atomic_write_text(work_file, text)
+    meta = {"chapter": chapter_number, "stage": "translated", "finish_reason": "stop"}
+    save_json(work_meta, meta)
+    terminology = maybe_repair_strict_terminology(chapter_number, source, text, meta, work_file, work_meta, "stop")
+    residual = maybe_repair_residual_cjk(chapter_number, source, terminology["translation"], terminology["meta"],
+                                         work_file, work_meta, "stop")
+    return residual["translation"]
+
+
+def rebuild_reader_epub_after_audit():
+    """The reader's EPUB follows each audit, and a failure here never affects translation."""
+    from build_checkpoint_epub import rebuild_reader_epub
+    from novel_project import NovelProject
+    if ACTIVE_NOVEL_CONFIG is None:
+        return
+    report = rebuild_reader_epub(NovelProject(ENGINE_ROOT, GLOSSARY_FILE.resolve().parent.parent, ACTIVE_NOVEL_CONFIG))
+    log_event("reader_epub", stage=report.get("status"))
 
 
 def describe_api_error(exc):
@@ -4548,6 +4678,12 @@ def run_whole_history_consistency():
     return save_final_consistency(SimpleNamespace(**globals()))
 
 
+def trial_finished(chapter_number):
+    """A trial stops the run here so you can read the first chapters before going on."""
+    path = GLOSSARY_FILE.parent / "trial_stop.json"
+    return path.is_file() and chapter_number >= json.loads(path.read_text(encoding="utf-8"))["after_chapter"]
+
+
 def run_unattended_production(*, target_chapter=None):
     """Compatibility callable backed by shared lifecycle sequencing."""
 
@@ -4588,6 +4724,7 @@ def run_unattended_production(*, target_chapter=None):
         local_error_types=(NonProviderProductionError,),
         print_fn=print,
         target_chapter=target_chapter,
+        stop_after_chapter=trial_finished,
         run_whole_history_consistency=(run_whole_history_consistency if target_chapter is None else None),
     )
 

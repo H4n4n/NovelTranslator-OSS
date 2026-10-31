@@ -12,8 +12,8 @@ from noveltranslator_core import atomic_write_bytes, atomic_write_json
 from production_failure_classification import ProductionIntegrityError, LocalPersistenceError
 from production_run_lock import production_run_lock
 from retroactive_span_planning import (
-    POLICY_VERSION, SCHEMA_VERSION, canonical_hash, digest, normalized_rules,
-    ownership_policy, plan_chapter, transform_bytes,
+    COUNT_MATCH_POLICY_VERSION, POLICY_VERSION, SCHEMA_VERSION, SPAN_POLICIES, canonical_hash, digest, normalized_rules,
+    ownership_policy, plan_chapter, span_policy_of, transform_bytes,
 )
 
 
@@ -146,6 +146,13 @@ def verify_audit_recovery_baseline(project_root, baseline, novel_id, audit_label
     return True
 
 
+def with_span_policy(request, existing_plan=None):
+    """An existing plan keeps the rule it was made under; a new plan uses the current one."""
+    policy = (COUNT_MATCH_POLICY_VERSION if existing_plan is None
+              else existing_plan["request"].get("span_policy"))
+    return {**request, "span_policy": policy} if policy else dict(request)
+
+
 def build_plan(request, chapters, chapter_map):
     """Pure immutable plan; chapters maps committed numbers to exact bytes."""
     items = []
@@ -154,12 +161,13 @@ def build_plan(request, chapters, chapter_map):
         if not isinstance(source, str):
             raise RetroactiveBlocked(f"missing source for committed Chapter {number}")
         edits, decisions = plan_chapter(source, before, request["rules"],
-                                       request["ownership_policy"], request["safe_categories"])
+                                       request["ownership_policy"], request["safe_categories"],
+                                       span_policy_of(request))
         items.append({"chapter": number, "source_sha256": digest(source.encode("utf-8")),
                       "before_sha256": digest(before),
                       "after_sha256": digest(transform_bytes(before, edits)),
                       "edits": edits, "decisions": decisions})
-    plan = {"schema_version": SCHEMA_VERSION, "policy_version": POLICY_VERSION,
+    plan = {"schema_version": SCHEMA_VERSION, "policy_version": span_policy_of(request),
             "request": request, "chapters": items}
     plan["transaction_id"] = canonical_hash(plan)
     return plan
@@ -168,7 +176,8 @@ def build_plan(request, chapters, chapter_map):
 def validate_plan(plan, request, chapter_map):
     identity = {key: value for key, value in plan.items() if key != "transaction_id"}
     if (plan.get("schema_version") != SCHEMA_VERSION or
-            plan.get("policy_version") != POLICY_VERSION or
+            plan.get("policy_version") not in SPAN_POLICIES or
+            plan.get("policy_version") != span_policy_of(request) or
             canonical_hash(identity) != plan.get("transaction_id") or
             plan.get("request") != request):
         raise RetroactiveBlocked("immutable retroactive plan/input identity mismatch")
@@ -195,7 +204,7 @@ def _summary(plan, outcomes, resumed):
     rejected = sum(decision["status"] == "skipped" for item in plan["chapters"]
                    for decision in item["decisions"])
     return {"transaction_id": plan["transaction_id"], "schema_version": SCHEMA_VERSION,
-            "policy_version": POLICY_VERSION, "state": "FINALIZED",
+            "policy_version": plan["policy_version"], "state": "FINALIZED",
             "audit_label": plan["request"]["audit_label"],
             "through_chapter": plan["request"]["through_chapter"],
             "replacement_rules_considered": len(rules),
@@ -252,6 +261,8 @@ def execute_retroactive_transaction(*, novel_id, audit_label, through_chapter,
         safe_categories=sorted(safe_categories), committed_chapters=numbers)
     slot = canonical_hash({k: request[k] for k in ("novel_id", "audit_label", "through_chapter")})
     path = plain(directory / f"{slot}.plan.json")
+    request = with_span_policy(request, read_object(path) if path.exists()
+                               else intent["transaction_plan"] if intent else None)
     if path.exists():
         planned = read_object(path)
         validate_plan(planned, request, chapter_map)
@@ -297,6 +308,7 @@ def _execute(novel_id, audit_label, through, replacements, glossary, staged, cat
     request = {"novel_id": novel_id, "audit_label": audit_label, "through_chapter": through,
                "rules": normalized_rules(replacements), "ownership_policy": ownership_policy(glossary, staged),
                "safe_categories": sorted(categories), "committed_chapters": numbers}
+    request = with_span_policy(request, authorized_plan)
     # This slot must NOT depend on mutable chapter bytes or glossary inputs:
     # changes under the same audit operation must find and block the old plan.
     slot = canonical_hash({"novel_id": novel_id, "audit_label": audit_label, "through_chapter": through})

@@ -16,7 +16,9 @@ def add_item(data_dir, *, chapter, kind, detail=""):
     entry = {"chapter": chapter, "kind": kind, "detail": str(detail)[:500],
              "utc": datetime.now(timezone.utc).isoformat()}
     try:
-        if any(item["chapter"] == chapter and item["kind"] == kind for item in read_items(data_dir)):
+        # A chapter can close more than one flag, so a closing entry also compares its detail.
+        if any(item["chapter"] == chapter and item["kind"] == kind
+               and (kind != "flag_resolved" or item["detail"] == entry["detail"]) for item in read_items(data_dir)):
             return
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -35,6 +37,14 @@ def read_items(data_dir):
         except ValueError:
             continue
     return items
+
+
+def open_items(data_dir):
+    """Flags that still need attention. A later flag_resolved item closes a chapter's flag."""
+    items = read_items(data_dir)
+    resolved = {(item["chapter"], item["detail"]) for item in items if item["kind"] == "flag_resolved"}
+    return [item for item in items if item["kind"] not in ("flag_resolved", "flag_retried")
+            and (item["chapter"], item["kind"]) not in resolved]
 
 
 def soften_commit_blockers(qa):

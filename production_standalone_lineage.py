@@ -9,7 +9,7 @@ from functools import wraps
 from pathlib import Path
 
 import retroactive_transactions as tx
-from retroactive_span_planning import canonical_hash, digest, ownership_policy, normalized_rules, plan_chapter
+from retroactive_span_planning import span_policy_of, canonical_hash, digest, ownership_policy, normalized_rules, plan_chapter
 from noveltranslator_core import atomic_write_json
 from production_failure_classification import ProductionIntegrityError
 
@@ -271,7 +271,8 @@ def prove_gap(module, values, after_audit, history, blobs, latest, policy, linea
         _reserve_policy(reserved, policy)
         for item in plan["chapters"]:
             edits, _ = plan_chapter(module.chapter_map[item["chapter"]]["text"], before[item["chapter"]],
-                                    request["rules"], reserved, request["safe_categories"])
+                                    request["rules"], reserved, request["safe_categories"],
+                                    span_policy_of(request))
             require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
         proof = dict(revision=WRITER_AUTHORIZATION_REVISION, plan_sha256=canonical_hash(plan),
             accepted_change_sha256=canonical_hash({"standalone_exact_policy": request["ownership_policy"]}),
@@ -306,6 +307,7 @@ def apply_known_fix(module, staged, rules):
     request = dict(novel_id=inventory["novel_id"], audit_label="startup", through_chapter=through,
         rules=normalized_rules(rules), ownership_policy=ownership_policy(module.glossary, staged),
         safe_categories=sorted(module.ACTIVE_PROFILE.retroactive_safe_categories), committed_chapters=inventory["committed"])
+    request = tx.with_span_policy(request)
     before = {n: (module.OUTPUT_DIR / f"{n:04d}.md").read_bytes() for n in inventory["committed"]}
     plan = tx.build_plan(request, before, module.chapter_map)
     authorization = writer_authorization(module, plan)

@@ -242,6 +242,20 @@ def test_term_is_not_locked_by_the_audit_that_first_keeps_it(tmp_path, monkeypat
     assert json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]["\u5927\u5385"]["status"] == "provisional"
 
 
+def test_trial_stops_after_its_chapters_and_the_next_start_finishes(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=6)
+    fake_runtime(project, monkeypatch, tmp_path)
+    override_responses(project, monkeypatch, lambda chapter, kind: None)
+    result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10, trial_chapters=3)
+    assert result["status"] == novel_runner.TRIAL_FINISHED, result
+    assert finished(project, 3)
+    assert not (project.data_dir / "trial_stop.json").exists()
+    assert (project.epub_dir / "fixture_latest.epub").is_file()
+    result = novel_runner.run_novel("fixture", repo_root=tmp_path)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert finished(project, 6)
+
+
 def test_run_end_leaves_a_current_reader_epub(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)

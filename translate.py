@@ -46,6 +46,8 @@ def build_parser():
                         help="Run this novel until it finishes, is paused, or the budget ends")
     parser.add_argument("--budget-usd", type=float,
                         help="With --start: allow this much credit-equivalent spending from now on")
+    parser.add_argument("--trial", type=int, metavar="CHAPTERS",
+                        help="With --start: translate only this many chapters, then stop so you can read them")
     parser.add_argument("--correct-term", nargs=2, metavar=("SOURCE_TERM", "NEW_ENGLISH"),
                         help="Change a glossary term and its past uses at the next audit")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
@@ -116,7 +118,7 @@ def main(argv=None):
         return 0
     if args.start:
         from novel_runner import STOPPED, run_novel
-        result = run_novel(args.novel, repo_root=args.repo_root, budget_usd=args.budget_usd)
+        result = run_novel(args.novel, repo_root=args.repo_root, budget_usd=args.budget_usd, trial_chapters=args.trial)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 2 if result["status"] == STOPPED else 0
     backend = provider_identity(args.provider, args.model)

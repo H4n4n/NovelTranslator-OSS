@@ -4678,6 +4678,12 @@ def run_whole_history_consistency():
     return save_final_consistency(SimpleNamespace(**globals()))
 
 
+def trial_finished(chapter_number):
+    """A trial stops the run here so you can read the first chapters before going on."""
+    path = GLOSSARY_FILE.parent / "trial_stop.json"
+    return path.is_file() and chapter_number >= json.loads(path.read_text(encoding="utf-8"))["after_chapter"]
+
+
 def run_unattended_production(*, target_chapter=None):
     """Compatibility callable backed by shared lifecycle sequencing."""
 
@@ -4718,6 +4724,7 @@ def run_unattended_production(*, target_chapter=None):
         local_error_types=(NonProviderProductionError,),
         print_fn=print,
         target_chapter=target_chapter,
+        stop_after_chapter=trial_finished,
         run_whole_history_consistency=(run_whole_history_consistency if target_chapter is None else None),
     )
 

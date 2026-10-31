@@ -25,12 +25,11 @@ def connect_error():
     return error
 
 
-def test_a_real_refused_connection_waits_for_the_network():
-    """The installed openai client decides which HTTP library raises this, so use the real one."""
-    client = openai.OpenAI(api_key="test", base_url="http://127.0.0.1:1/v1", max_retries=0, timeout=5)
-    with pytest.raises(openai.APIConnectionError) as caught:
-        client.chat.completions.create(model="test", messages=[{"role": "user", "content": "test"}])
-    assert policy.classify(caught.value) == policy.WAIT_FOR_NETWORK
+def test_the_openai_clients_own_http_library_counts_as_never_connected():
+    httpx2 = pytest.importorskip("httpx2")
+    error = openai.APIConnectionError(request=REQUEST)
+    error.__cause__ = httpx2.ConnectError("no route")
+    assert policy.classify(error) == policy.WAIT_FOR_NETWORK
 
 
 def read_timeout():

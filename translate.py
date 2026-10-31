@@ -48,6 +48,8 @@ def build_parser():
                         help="With --start: allow this much credit-equivalent spending from now on")
     parser.add_argument("--trial", type=int, metavar="CHAPTERS",
                         help="With --start: translate only this many chapters, then stop so you can read them")
+    parser.add_argument("--allow-resend", action="store_true",
+                        help="After checking your usage, send once more a request that failed twice with no answer")
     parser.add_argument("--correct-term", nargs=2, metavar=("SOURCE_TERM", "NEW_ENGLISH"),
                         help="Change a glossary term and its past uses at the next audit")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
@@ -115,6 +117,11 @@ def main(argv=None):
             return 2
         add_request(project.data_dir, chinese=args.correct_term[0], new_english=args.correct_term[1])
         print("Queued. The next audit changes the term and corrects past chapters.")
+        return 0
+    if args.allow_resend:
+        from novel_runner import allow_resend
+        allowed = allow_resend(load_novel_project(args.novel, repo_root=args.repo_root))
+        print(f"Allowed {len(allowed)} more resend(s). Start the novel to continue." if allowed else "No request is waiting for this.")
         return 0
     if args.start:
         from novel_runner import STOPPED, run_novel

@@ -12,12 +12,13 @@ from build_checkpoint_epub import rebuild_reader_epub
 from chapter_glossary_review import CHAPTER_REVIEW_RECOVERY_KEY
 from noveltranslator_core import atomic_write_json
 from novel_project import load_novel_project
-from production_paid_request_journal import release_ambiguous_requests
+from production_paid_request_journal import allow_another_resend, release_ambiguous_requests
 from production_provider_contract import PROVIDER_COMMAND_CODE
 from production_run_lock import production_run_lock
 from provider_retry_policy import MAX_AMBIGUOUS_RESENDS
 
 MODEL = "v41-flash"
+REQUEST_SET_ASIDE_USD = 1.50  # A request with no output limit, priced for its whole context at peak rates.
 PHYSICAL_CALL_LIMIT = 1_000_000  # The budget is the real limit. This only satisfies the planner.
 MAX_NO_PROGRESS_RUNS = 2
 MAX_STEPS = 10_000
@@ -99,6 +100,13 @@ def describe_stop(project, reason=None):
     detail = f"{error.get('error_type')} during {error.get('stage')}" if error else "no error was logged"
     return dict(reason=reason or "unexpected_stop", message=f"The run stopped: {detail}.",
                 action="See the latest file in this novel's logs folder.")
+
+
+def allow_resend(project):
+    """Let a request that failed twice with no answer be sent once more."""
+    with production_run_lock(project.root):
+        return allow_another_resend(project.data_dir / "provider_request_journal",
+                                    next_chapter=_progress(project)["next_chapter"], max_resends=MAX_AMBIGUOUS_RESENDS)
 
 
 def _release_ambiguous(project, next_chapter):
@@ -250,7 +258,8 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
             return dict(status=STOPPED, **describe_stop(project, "writer_busy"))
         if outcome.get("status") == "ALLOWANCE_EXHAUSTED":
             return dict(status=BUDGET_REACHED, message="The rest of the budget is too small for the next request.",
-                        action="Add budget to continue.")
+                        action=f"Add budget to continue. A run keeps up to ${REQUEST_SET_ASIDE_USD:.2f} aside for each request. "
+                               "Most of it isn't spent.")
         if _trial_is_finished(project):
             return dict(status=TRIAL_FINISHED, message="The trial chapters are ready to read.",
                         action="Start again to continue the novel.")

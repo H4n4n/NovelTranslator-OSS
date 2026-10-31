@@ -451,6 +451,22 @@ def extract_txt_text(text, source_sha256, overrides=None, source_file="novel.txt
     excluded_lines = set()
     for item in excluded:
         excluded_lines.update(range(item["line_start"], item["line_end"] + 1))
+    # A heading with nothing under it is a closing line that looks like a heading,
+    # such as "337화. <title> 끝". It stays in the report, so the analysis can show it.
+    end_of_text = afterword_start or len(lines) + 1
+    kept = []
+    for index, heading in enumerate(headings, 1):
+        next_line = headings[index].line if index < len(headings) else end_of_text
+        if any(lines[number - 1].strip() for number in range(heading.end_line + 1, next_line)
+               if number not in excluded_lines):
+            kept.append(heading)
+            continue
+        for item in excluded:
+            if item["classification"] == "heading" and item["line_start"] == heading.line:
+                item["classification"] = "empty_heading"
+    headings = kept
+    if not headings:
+        raise TXTExtractionError("TXT source contains no recognized production headings")
     units = []
     candidate_visible = 0
     extracted_visible = 0

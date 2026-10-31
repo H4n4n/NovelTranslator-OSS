@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the test module paths for one CI shard (greedy by file size)."""
+"""Print the test module paths for one CI shard (greedy by file size, weighted for slow modules)."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 EXCLUSIONS = REPO / "tests" / "ci_exclusions.json"
+# File size badly underestimates these, and two landing together exceed the job time limit.
+SLOW_MODULES = {f"tests/test_goat_periodic_audit_finalization_part_{n}.py" for n in (1, 2, 3, 4)} | {
+    "tests/test_publication_readiness.py", "tests/test_retroactive_transactions.py"}
+SLOW_MODULE_WEIGHT = 5
 
 
 def load_exclusions(repo=REPO):
@@ -25,11 +29,13 @@ def shards(shard_count, repo=REPO):
     repo = Path(repo)
     buckets = [[] for _ in range(shard_count)]
     loads = [0] * shard_count
-    # Largest first, ties by name; each file goes to the lightest shard.
-    for path in sorted(selected_modules(repo), key=lambda m: (-(repo / m).stat().st_size, m)):
+    def weight(module):
+        return (repo / module).stat().st_size * (SLOW_MODULE_WEIGHT if module in SLOW_MODULES else 1)
+    # Heaviest first, ties by name; each file goes to the lightest shard.
+    for path in sorted(selected_modules(repo), key=lambda m: (-weight(m), m)):
         i = loads.index(min(loads))
         buckets[i].append(path)
-        loads[i] += (repo / path).stat().st_size
+        loads[i] += weight(path)
     return [sorted(b) for b in buckets]
 
 

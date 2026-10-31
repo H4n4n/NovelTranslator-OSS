@@ -90,6 +90,25 @@ def test_generic_heading_forms_preserve_prose_dialogue_blanks_and_scene_breaks()
     assert result["report"]["narrative_coverage"] == 1.0
 
 
+def test_a_closing_line_that_looks_like_a_heading_is_not_a_chapter():
+    text = """1화. 시작
+
+본문입니다.
+
+1화. 시작 끝
+
+제 2화
+
+둘째
+
+본문입니다.
+"""
+    result = extract_txt.extract_txt_text(text, digest(text.encode("utf-8")), source_file="novel.txt")
+    assert [chapter["source_number"] for chapter in result["chapters"]] == [1, 2]
+    assert "끝" not in result["chapters"][0]["text"]
+    assert [item["classification"] for item in result["report"]["excluded_sections"]].count("empty_heading") == 1
+
+
 def test_korean_numbered_headings_accept_hwa_and_hoe_as_distinct_units():
     text = """170화.< title >
 body 170.

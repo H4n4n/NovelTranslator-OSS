@@ -695,8 +695,14 @@ def build_source_integrity_audit_plan(
     *,
     max_contexts: int = 2,
     context_radius: int = 180,
+    whole_novel: bool = False,
 ) -> dict[str, Any]:
-    """Build one read-only, source-verified periodic-audit candidate plan."""
+    """Build one read-only, source-verified periodic-audit candidate plan.
+
+    With whole_novel, every term gets a second look, including auto-locked ones,
+    with contexts from both ends of the book, because later chapters may reveal
+    what a term really means.
+    """
     chapter_texts = [
         str(chapter.get("text", "") or "")
         for chapter in chapters
@@ -714,13 +720,19 @@ def build_source_integrity_audit_plan(
     for source_key, entry in sorted(entries.items()):
         first_chapter = entry.get("first_chapter", 0)
         if not isinstance(first_chapter, int) or not (
-            start_chapter <= first_chapter <= end_chapter
+            start_chapter <= first_chapter <= end_chapter or whole_novel
         ):
             continue
-        if str(entry.get("status", "") or "").strip().lower() == "locked":
+        if str(entry.get("status", "") or "").strip().lower() == "locked" and not (
+            whole_novel and entry.get("promoted_by_audit")
+        ):
             continue
         contexts: list[dict[str, Any]] = []
-        for chapter_number in range(start_chapter, end_chapter + 1):
+        for chapter_number in (
+            sorted(chapter_by_index, key=lambda n: min(n, end_chapter + 1 - n))
+            if whole_novel
+            else range(start_chapter, end_chapter + 1)
+        ):
             text = str(
                 chapter_by_index.get(chapter_number, {}).get("text", "") or ""
             )

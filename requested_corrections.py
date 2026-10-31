@@ -33,16 +33,21 @@ def _window_path(data_dir, start, end):
     return Path(data_dir) / WINDOW_DIR / f"{start:04d}_{end:04d}.json"
 
 
-def claim_for_audit(data_dir, start, end, promotions=()):
+def claim_for_audit(data_dir, start, end, promotions=(), second_look=False):
     """Move waiting requests and due promotions to this audit. Safe to repeat after a crash."""
     path = _window_path(data_dir, start, end)
     requests = waiting(data_dir)
-    if path.is_file() or not (requests or promotions):
+    if path.is_file() or not (requests or promotions or second_look):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, requests + [{"chinese": term, "promote": True} for term in promotions])
+    atomic_write_json(path, requests + [{"chinese": term, "promote": True} for term in promotions]
+                      + ([{"second_look": True}] if second_look else []))
     if requests:
         (Path(data_dir) / QUEUE_FILE).unlink()
+
+
+def is_second_look(data_dir, start, end):
+    return any(item.get("second_look") for item in for_audit(data_dir, start, end))
 
 
 def for_audit(data_dir, start, end):

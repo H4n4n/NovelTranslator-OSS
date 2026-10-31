@@ -1,8 +1,9 @@
-"""Term changes you ask for: "change X to Y". The next audit applies them through its normal correction path.
+"""Glossary changes an audit applies besides its own decisions.
 
-data/requested_corrections.jsonl holds what's waiting. Once an audit starts, its
-requests move to data/requested_corrections/<start>_<end>.json and never change,
-so re-checking that audit later gives the same result.
+Term changes you ask for ("change X to Y") wait in data/requested_corrections.jsonl.
+Once an audit starts, they move to data/requested_corrections/<start>_<end>.json
+along with any terms due for promotion. That file never changes, so re-checking
+the audit later gives the same result, and audits without one replay as they were.
 """
 import json
 from pathlib import Path
@@ -32,15 +33,16 @@ def _window_path(data_dir, start, end):
     return Path(data_dir) / WINDOW_DIR / f"{start:04d}_{end:04d}.json"
 
 
-def claim_for_audit(data_dir, start, end):
-    """Move waiting requests to this audit. Safe to repeat after a crash."""
+def claim_for_audit(data_dir, start, end, promotions=()):
+    """Move waiting requests and due promotions to this audit. Safe to repeat after a crash."""
     path = _window_path(data_dir, start, end)
     requests = waiting(data_dir)
-    if path.is_file() or not requests:
+    if path.is_file() or not (requests or promotions):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, requests)
-    (Path(data_dir) / QUEUE_FILE).unlink()
+    atomic_write_json(path, requests + [{"chinese": term, "promote": True} for term in promotions])
+    if requests:
+        (Path(data_dir) / QUEUE_FILE).unlink()
 
 
 def for_audit(data_dir, start, end):

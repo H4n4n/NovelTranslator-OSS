@@ -3139,6 +3139,10 @@ def apply_periodic_audit(
 
     for request in requested_corrections_for_audit(GLOSSARY_FILE.parent, start_chapter, end_chapter):
         entry = entries.get(request["chinese"])
+        if entry is not None and request.get("promote"):
+            if entry.get("status") == "provisional":
+                entry.update(status="locked", promoted_by_audit=True)
+            continue
         if entry is None or entry.get("english") == request["new_english"]:
             continue
         old_english = entry.get("english", "")
@@ -3198,7 +3202,8 @@ def run_periodic_audit(
     # Before the audit records this history, and never inside an audit already under way.
     if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
         retry_flagged_chapters(end_chapter)
-        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter)
+        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter,
+                                    promotions=terms_due_for_promotion())
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
@@ -3277,6 +3282,22 @@ def run_periodic_audit(
         **stats_event_fields(audit_stats),
     )
     rebuild_reader_epub_after_audit()
+
+
+PROMOTE_AFTER_CHAPTERS = 5
+
+
+def terms_due_for_promotion():
+    """Provisional terms an earlier audit kept, now seen in enough finished chapters.
+
+    An audit reviews a term once, in the range where it first appears, so a
+    second keep never comes. Continued use without trouble is the evidence.
+    """
+    kept = {term for audit in audit_history.get("audits", []) for term in audit.get("changes", {}).get("kept", [])}
+    sources = [chapter_map[number]["text"] for number in progress["completed"] if number in chapter_map]
+    return sorted(term for term in kept
+                  if glossary["entries"].get(term, {}).get("status") == "provisional"
+                  and sum(term in text for text in sources) >= PROMOTE_AFTER_CHAPTERS)
 
 
 def retry_flagged_chapters(through_chapter):

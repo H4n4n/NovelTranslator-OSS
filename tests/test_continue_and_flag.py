@@ -224,6 +224,21 @@ def test_requested_correction_for_an_unknown_term_is_refused(tmp_path, capsys):
     assert code == 2 and "isn't in this novel's glossary" in capsys.readouterr().out
 
 
+def test_term_kept_by_an_audit_is_locked_at_the_next_one(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=26)
+    result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)
+    assert result["status"] == novel_runner.COMPLETE, result
+    entry = json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]["\u5927\u5385"]
+    assert entry["status"] == "locked" and entry["promoted_by_audit"] is True
+
+
+def test_term_is_not_locked_by_the_audit_that_first_keeps_it(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=25)
+    result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]["\u5927\u5385"]["status"] == "provisional"
+
+
 def test_run_end_leaves_a_current_reader_epub(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)

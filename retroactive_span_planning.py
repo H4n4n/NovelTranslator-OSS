@@ -150,8 +150,9 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
 
     Count matching edits every English occurrence when the chapter has at least
     as many owned source occurrences. English can have fewer, because a term can
-    be referred to by pronoun. More English than source means something else
-    may be using the rendering, so that chapter is skipped.
+    be referred to by pronoun. English can also have more, where the translation
+    names what the source left implied: that is safe for a multi-word rendering
+    nothing else owns, but a single word may be something else, so it is skipped.
     """
     count_match = span_policy == COUNT_MATCH_POLICY_VERSION
     text = before.decode("utf-8")  # Preserve BOM, CRLF, Markdown and all other bytes.
@@ -183,7 +184,7 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
         if not reason and not any(anchor["phrase"] == rule["chinese"] for anchor in anchors):
             reason = "exact_source_identity_not_owned"
         if not reason:
-            if count_match and len(spans) > len(anchors):
+            if count_match and len(spans) > len(anchors) and " " not in rule["old_english"]:
                 reason = OVER_COUNT_REASON
             elif not spans or (not count_match and (len(anchors) != 1 or len(spans) != 1)):
                 reason = "cardinality_requires_manual_review"
@@ -208,7 +209,8 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
             decision["skip_reason"] = reason
         else:
             old, new = rule["old_english"].encode("utf-8"), rule["new_english"].encode("utf-8")
-            for (start, end), anchor in zip(spans, anchors):
+            for position, (start, end) in enumerate(spans):
+                anchor = anchors[min(position, len(anchors) - 1)]
                 edits.append({"rule_index": index, "source_identity": rule["chinese"],
                               "start": len(text[:start].encode("utf-8")),
                               "end": len(text[:end].encode("utf-8")),

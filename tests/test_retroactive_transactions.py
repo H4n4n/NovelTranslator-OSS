@@ -136,9 +136,18 @@ def test_count_match_allows_fewer_english_than_source():
     assert len(edits) == 1
 
 
-def test_count_match_skips_more_english_than_source():
+def test_count_match_skips_more_english_than_source_for_a_single_word():
     edits, decisions = count_plan("\u97d3", "Han spoke to Han.")
     assert not edits and decisions[0]["skip_reason"] == OVER_COUNT_REASON
+
+
+def test_count_match_edits_a_multiword_rendering_used_more_than_the_source():
+    rules = [rule(old="Azure Cloud Sect", new="Blue Cloud Sect", category="sect")]
+    data = glossary(**{"\u97d3": {"english": "Azure Cloud Sect", "category": "sect"}})
+    text = "The Azure Cloud Sect rose. Azure Cloud Sect disciples ran."
+    edits, _ = count_plan("\u97d3", text, rules, data)
+    assert transform_bytes(text.encode("utf-8"), edits).decode("utf-8") == (
+        "The Blue Cloud Sect rose. Blue Cloud Sect disciples ran.")
 
 
 @pytest.mark.parametrize("data,text,reason", [

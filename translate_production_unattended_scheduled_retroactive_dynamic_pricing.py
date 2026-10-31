@@ -75,6 +75,7 @@ from glossary_audit import (
 from provider_retry_policy import is_run_level_stop
 from retroactive_span_planning import OVER_COUNT_REASON
 from noveltranslator_core import atomic_write_bytes
+from requested_corrections import claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
@@ -3136,6 +3137,18 @@ def apply_periodic_audit(
             chinese
         )
 
+    for request in requested_corrections_for_audit(GLOSSARY_FILE.parent, start_chapter, end_chapter):
+        entry = entries.get(request["chinese"])
+        if entry is None or entry.get("english") == request["new_english"]:
+            continue
+        old_english = entry.get("english", "")
+        entry["english"] = request["new_english"]
+        corrected.append(f"{request['chinese']}: {old_english} → {request['new_english']}")
+        retroactive_replacements.append({
+            "chinese": request["chinese"], "old_english": old_english, "new_english": request["new_english"],
+            "category": entry.get("category", ""), "reason": "Correction you requested.",
+        })
+
     return {
         "kept": kept,
         "corrected": corrected,
@@ -3185,6 +3198,7 @@ def run_periodic_audit(
     # Before the audit records this history, and never inside an audit already under way.
     if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
         retry_flagged_chapters(end_chapter)
+        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter)
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:

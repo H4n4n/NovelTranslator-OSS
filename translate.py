@@ -46,6 +46,8 @@ def build_parser():
                         help="Run this novel until it finishes, is paused, or the budget ends")
     parser.add_argument("--budget-usd", type=float,
                         help="With --start: allow this much credit-equivalent spending from now on")
+    parser.add_argument("--correct-term", nargs=2, metavar=("SOURCE_TERM", "NEW_ENGLISH"),
+                        help="Change a glossary term and its past uses at the next audit")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
     parser.add_argument("--authorize-goat-run", action="store_true")
     parser.add_argument("--state-fingerprint")
@@ -103,6 +105,16 @@ def bounded_goat_run(args):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.correct_term:
+        from novel_project import load_novel_project
+        from requested_corrections import add_request
+        project = load_novel_project(args.novel, repo_root=args.repo_root)
+        if args.correct_term[0] not in json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]:
+            print(f"{args.correct_term[0]} isn't in this novel's glossary.")
+            return 2
+        add_request(project.data_dir, chinese=args.correct_term[0], new_english=args.correct_term[1])
+        print("Queued. The next audit changes the term and corrects past chapters.")
+        return 0
     if args.start:
         from novel_runner import STOPPED, run_novel
         result = run_novel(args.novel, repo_root=args.repo_root, budget_usd=args.budget_usd)

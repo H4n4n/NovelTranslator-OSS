@@ -198,6 +198,32 @@ def test_flag_stays_open_when_the_retry_also_fails_and_is_tried_only_once(tmp_pa
     assert [item["kind"] for item in review_queue.open_items(project.data_dir)] == ["commit_qa"]
 
 
+def test_requested_correction_changes_the_term_and_past_chapters_at_the_next_audit(tmp_path, monkeypatch):
+    import requested_corrections
+    project = novel(tmp_path, count=26)
+    queued = []
+
+    def ask_midway(chapter, kind):
+        if chapter == 12 and not queued:
+            queued.append(True)
+            requested_corrections.add_request(project.data_dir, chinese="\u5927\u5385", new_english="Grand Hall")
+    result = run(project, tmp_path, monkeypatch, ask_midway)
+    assert result["status"] == novel_runner.COMPLETE, result
+    glossary = json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]
+    assert glossary["\u5927\u5385"]["english"] == "Grand Hall"
+    text = (project.chapter_dir / "0005.md").read_text(encoding="utf-8")
+    assert "Grand Hall" in text and "Great Hall" not in text
+    assert requested_corrections.waiting(project.data_dir) == []
+    assert list(project.backup_dir.glob("retroactive_*/chapters_before/0005.md"))
+
+
+def test_requested_correction_for_an_unknown_term_is_refused(tmp_path, capsys):
+    import translate
+    project = novel(tmp_path, count=3)
+    code = translate.main(["--novel", "fixture", "--repo-root", str(tmp_path), "--correct-term", "\u4e0d\u5728", "X"])
+    assert code == 2 and "isn't in this novel's glossary" in capsys.readouterr().out
+
+
 def test_run_end_leaves_a_current_reader_epub(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     result = run(project, tmp_path, monkeypatch, lambda chapter, kind: None)

@@ -1153,6 +1153,49 @@ def _chunk_failure_message(
     )
 
 
+def run_chunked_audit_skipping_failures(
+    *,
+    candidates: Sequence[Mapping[str, Any]],
+    checkpoint_path: Path,
+    run_audit: Callable[..., dict[str, Any]] | None = None,
+    on_skip: Callable[[str, int], None] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Run an audit, keeping the terms of any chunk that can't produce a valid result.
+
+    A failed chunk changes nothing in the glossary, so the audit can finish.
+    Provider outages and budget stops still propagate and resume later.
+    """
+    from provider_retry_policy import is_run_level_stop
+
+    by_id = {_candidate_id(candidate): candidate for candidate in candidates}
+    while True:
+        try:
+            return (run_audit or run_chunked_audit)(candidates=candidates, checkpoint_path=checkpoint_path, **kwargs)
+        except AuditChunkFailure as exc:
+            if is_run_level_stop(exc):
+                raise
+            checkpoint = json.loads(Path(checkpoint_path).read_text(encoding="utf-8"))
+            failed = next((chunk for chunk in checkpoint["chunks"]
+                           if chunk.get("status") not in {"completed", "split", "pending"}), None)
+            if failed is None:
+                raise
+            failed["result"] = {"issues": [], "decisions": [
+                {**({"candidate_id": candidate_id} if "candidate_id" in by_id[candidate_id] else {}),
+                 "chinese": _candidate_source(by_id[candidate_id]), "action": "keep",
+                 "english": by_id[candidate_id].get("english", ""), "notes": "Kept: audit chunk failed."}
+                for candidate_id in failed["candidate_ids"]]}
+            failed["status"] = "completed"
+            failed["skipped_after_failure"] = True
+            for record in checkpoint["attempt_records"]:
+                if record.get("chunk_id") == failed["chunk_id"] and record.get("lifecycle") in {
+                        "prepared", "in_flight", "remote_outcome_uncertain"}:
+                    record["lifecycle"] = "abandoned"
+            atomic_write_json(checkpoint_path, checkpoint)
+            if on_skip is not None:
+                on_skip(failed["chunk_id"], len(failed["candidate_ids"]))
+
+
 def run_chunked_audit(
     *,
     candidates: Sequence[Mapping[str, Any]],

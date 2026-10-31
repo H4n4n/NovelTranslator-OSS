@@ -58,6 +58,13 @@ def _body_text(exc):
     return f"{getattr(exc, 'message', '')} {getattr(exc, 'body', '')}"
 
 
+def is_run_level_stop(exc):
+    """True when the provider or budget stopped the run, not this one chapter's data."""
+    return any(getattr(item, "definite_no_response", False) is True
+               or getattr(item, "deterministic_local_budget_refusal", False) is True
+               for item in _chain(exc))
+
+
 def classify(exc):
     status = _status(exc)
     if status is not None:

@@ -63,6 +63,11 @@ class GoatAllowanceExhausted(GoatRuntimeError):
     deterministic_local_budget_refusal = True
 
 
+class GoatResponseRejected(GoatRuntimeError):
+    """A helper call was answered and accounted, but its content is unusable."""
+    response_rejected = True
+
+
 class GoatProviderStop(GoatRuntimeError):
     """Retries ran out or the provider refused. Nothing billable came back."""
     definite_no_response = True
@@ -473,11 +478,13 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                 from production_uncertain_request_disposition import KIND as NO_RECORD_STATE
                 uncertain_controller = kind == NO_RECORD_STATE and getattr(module, "_goat_uncertain_state_proof", None)
                 if diagnostic["fail_closed"] and not audit_split and not state_controller and not terminal_controller and not uncertain_controller:
-                    raise GoatRuntimeError("GOAT auxiliary response rejected: " + diagnostic["status"])
+                    raise GoatResponseRejected("GOAT auxiliary response rejected: " + diagnostic["status"])
             return {**result, "response": envelope,
                 "wire_completion_policy": ({"revision": WIRE_POLICY_REVISION,
                     "auxiliary_completion_policy": "provider_unbounded", "auxiliary_completion_tokens": None}
                     if logical != "translation" else {"max_completion_tokens": wire["max_completion_tokens"]})}
+        except GoatResponseRejected:
+            raise
         except Exception as exc:
             if budget is not None:
                 if not accounted:

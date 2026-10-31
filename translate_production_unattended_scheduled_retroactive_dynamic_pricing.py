@@ -70,7 +70,10 @@ from strict_terminology_repair import (
 from glossary_audit import (
     AuditChunkConfig,
     run_chunked_audit,
+    run_chunked_audit_skipping_failures,
 )
+from provider_retry_policy import is_run_level_stop
+from review_queue import add_item as add_review_item, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
     build_source_integrity_audit_plan,
@@ -90,6 +93,7 @@ from glossary_candidate_auto_resolution import (
     resolve_candidate_conflicts_automatically,
 )
 from chapter_glossary_review import (
+    CHAPTER_REVIEW_RECOVERY_KEY,
     ChapterGlossaryCandidateIdentityError,
     ChapterGlossaryReviewFailure,
     build_chapter_review_schema_correction_prompt,
@@ -133,6 +137,7 @@ from translation_model_config import pending_translation_model_record
 
 from production_state_extraction import (
     DEFAULT_STATE_POLICY,
+    StateExtractionError,
     run_state_extraction,
     validate_state,
 )
@@ -184,6 +189,7 @@ from translation_profile import (
     project_low_value_terms,
 )
 
+REVIEW_SKIPPED_KEY = "glossary_review_skipped"
 MODEL = None
 ENGINE_ROOT = Path(__file__).resolve().parent
 PROJECT_CONFIG_FILE = Path("novel.json")
@@ -2765,7 +2771,9 @@ def call_periodic_audit(start_chapter, end_chapter):
         start_chapter, end_chapter, glossary_index, chunk_targets, metadata)
     repair_periodic_audit_chunk.build_request = build_repair_periodic_audit_chunk
     correct_periodic_audit_chunk_semantics.build_request = build_correct_periodic_audit_chunk_semantics
-    run = run_chunked_audit(
+    run = run_chunked_audit_skipping_failures(
+        run_audit=run_chunked_audit,
+        on_skip=lambda chunk_id, count: flag_for_review(end_chapter, f"audit_chunk:{chunk_id}", f"{count} terms kept unaudited"),
         candidates=targets,
         all_glossary_keys=source_integrity["safe_glossary_keys"],
         start_chapter=start_chapter,
@@ -3817,6 +3825,46 @@ def autonomous_recovery_supervisor(chapter_number):
     )
 
 
+def flag_for_review(chapter_number, kind, detail):
+    add_review_item(GLOSSARY_FILE.parent, chapter=chapter_number, kind=kind, detail=detail)
+    log_event("flagged_for_review", chapter=chapter_number, stage=kind)
+    print(f"Flagged Chapter {chapter_number} for review ({kind}) and continuing.")
+
+
+def continue_without_state(chapter_number, meta, pending_meta_file, identity, error):
+    """Keep the paid translation moving when its state update is unusable.
+
+    Continuity is rolling, so the next chapter's extraction restores it. Terms
+    that matter recur and get another chance to enter the glossary.
+    """
+    prior = identity["prior_continuity"].get("summary", "").strip()
+    state = {"new_terms": [], "issues": [],
+             "continuity_summary": prior or "No continuity is available for this chapter yet."}
+    stats = zero_stats()
+    meta["stage"] = "state_extracted"
+    meta["state"] = state
+    meta["state_stats"] = stats
+    meta[STATE_CHECKPOINT_IDENTITY_KEY] = copy.deepcopy(dict(identity))
+    save_json(pending_meta_file, meta)
+    flag_for_review(chapter_number, "state_extraction", type(error).__name__)
+    return {"status": "extracted", "state": state, "state_stats": stats, "meta": meta, "error": None}
+
+
+def review_failure_can_be_skipped(error):
+    if is_run_level_stop(error):
+        return False
+    return (isinstance(error, (ChapterGlossaryReviewFailure, ProviderResponseError))
+            or getattr(error, "response_rejected", False))
+
+
+def skip_glossary_review(chapter_number, meta, pending_meta_file, error):
+    """New terms can wait: they will be proposed again when they recur."""
+    meta[REVIEW_SKIPPED_KEY] = type(error).__name__
+    meta.pop(CHAPTER_REVIEW_RECOVERY_KEY, None)
+    save_json(pending_meta_file, meta)
+    flag_for_review(chapter_number, "glossary_review", type(error).__name__)
+
+
 def process_chapter(chapter_number):
     chapter_started = time.perf_counter()
     chapter = chapter_map[chapter_number]
@@ -4028,12 +4076,14 @@ def process_chapter(chapter_number):
         translation=translation,
         finish_reason=finish_reason,
         meta=meta,
-        qa_checker=local_qa,
+        qa_checker=lambda *args: soften_commit_blockers(local_qa(*args)),
         reset_failed_meta=pending_meta_after_commit_qa_failure,
         persist_meta=lambda value: save_json(pending_meta_file, value),
     ))
     qa = qa_checkpoint["qa"]
     meta = qa_checkpoint["meta"]
+    if qa.get("flagged_blockers"):
+        flag_for_review(chapter_number, "commit_qa", json.dumps(qa["flagged_blockers"], ensure_ascii=False))
     if not qa_checkpoint["commit_allowed"]:
         # Any downstream pending work belongs to the failed text and must not be
         # replayed after an operator repairs that text. Preserve translation and
@@ -4118,18 +4168,25 @@ def process_chapter(chapter_number):
         print("=" * 70)
         return False
     except NonProviderProductionError as exc:
-        log_error(
-            exc,
-            chapter=chapter_number,
-            stage="state_extraction_local",
-        )
-        print("\n" + "=" * 70)
-        print("LOCAL/RECOVERY ERROR DURING STATE EXTRACTION")
-        print("=" * 70)
-        print(f"Chapter: {chapter_number}\nError: {exc}\n")
-        print(describe_non_provider_error(exc))
-        print(f"\nThe paid translation remains safely saved in:\n{pending_file}")
-        return False
+        if getattr(exc, "response_rejected", False):
+            state_checkpoint = continue_without_state(chapter_number, meta, pending_meta_file,
+                                                      state_checkpoint_identity, exc)
+        else:
+            log_error(
+                exc,
+                chapter=chapter_number,
+                stage="state_extraction_local",
+            )
+            print("\n" + "=" * 70)
+            print("LOCAL/RECOVERY ERROR DURING STATE EXTRACTION")
+            print("=" * 70)
+            print(f"Chapter: {chapter_number}\nError: {exc}\n")
+            print(describe_non_provider_error(exc))
+            print(f"\nThe paid translation remains safely saved in:\n{pending_file}")
+            return False
+    if state_checkpoint["status"] == "failed" and isinstance(state_checkpoint["error"], StateExtractionError):
+        state_checkpoint = continue_without_state(chapter_number, meta, pending_meta_file,
+                                                  state_checkpoint_identity, state_checkpoint["error"])
     if state_checkpoint["status"] == "failed":
         exc = state_checkpoint["error"]
         if isinstance(exc, ProviderResponseError):
@@ -4170,65 +4227,61 @@ def process_chapter(chapter_number):
             **stats_event_fields(state_stats),
         )
 
-    candidate_checkpoint = recovery.run("candidates", lambda: run_candidate_preparation_checkpoint(
-        prepare_candidates=lambda: prefilter_candidates(
-            state.get("new_terms", []),
-            chinese_text,
-            chapter_number,
-            state=state,
-            translation=translation,
-            return_preparation=True,
-        ),
-        resolve_conflict=lambda conflict: attempt_automatic_glossary_candidate_resolution(
+    if meta.get(REVIEW_SKIPPED_KEY):
+        candidate_checkpoint = None
+    else:
+        candidate_checkpoint = recovery.run("candidates", lambda: run_candidate_preparation_checkpoint(
+            prepare_candidates=lambda: prefilter_candidates(
+                state.get("new_terms", []),
+                chinese_text,
+                chapter_number,
+                state=state,
+                translation=translation,
+                return_preparation=True,
+            ),
+            resolve_conflict=lambda conflict: attempt_automatic_glossary_candidate_resolution(
+                chapter_number,
+                chinese_text,
+                translation,
+                state,
+                meta,
+                pending_meta_file,
+                conflict,
+            ),
+        ))
+    if candidate_checkpoint is not None and candidate_checkpoint["status"] in {
+        "resolution_failed", "identity_failed", "unresolved",
+    }:
+        skip_glossary_review(chapter_number, meta, pending_meta_file, candidate_checkpoint["error"])
+        candidate_checkpoint = None
+    if candidate_checkpoint is None:
+        eligible_candidates, prefilter_rejected = [], []
+        candidate_preparation = meta.get("candidate_preparation", {})
+    else:
+        eligible_candidates = candidate_checkpoint["eligible_candidates"]
+        prefilter_rejected = candidate_checkpoint["prefilter_rejected"]
+        candidate_preparation = candidate_checkpoint["candidate_preparation"]
+        log_glossary_candidate_preparation(chapter_number, candidate_preparation)
+        report_glossary_candidate_resolutions(
+            chapter_number, candidate_preparation
+        )
+
+    def run_review_stage(candidates, *, supervised=True):
+        review_checkpoint_identity = current_review_checkpoint_identity(
             chapter_number,
             chinese_text,
             translation,
-            state,
-            meta,
-            pending_meta_file,
-            conflict,
-        ),
-    ))
-    if candidate_checkpoint["status"] == "resolution_failed":
-        return stop_for_glossary_candidate_resolution_error(
-            chapter_number, candidate_checkpoint["error"], pending_file
+            candidates,
         )
-    if candidate_checkpoint["status"] == "identity_failed":
-        return stop_for_glossary_candidate_identity_conflict(
-            chapter_number, candidate_checkpoint["error"], pending_file
-        )
-    if candidate_checkpoint["status"] == "unresolved":
-        return stop_for_unresolved_automatic_glossary_candidate_conflict(
-            chapter_number,
-            candidate_checkpoint["automatic"],
-            candidate_checkpoint["error"],
-            pending_file,
-        )
-    eligible_candidates = candidate_checkpoint["eligible_candidates"]
-    prefilter_rejected = candidate_checkpoint["prefilter_rejected"]
-    candidate_preparation = candidate_checkpoint["candidate_preparation"]
-    log_glossary_candidate_preparation(chapter_number, candidate_preparation)
-    report_glossary_candidate_resolutions(
-        chapter_number, candidate_preparation
-    )
-
-    review_checkpoint_identity = current_review_checkpoint_identity(
-        chapter_number,
-        chinese_text,
-        translation,
-        eligible_candidates,
-    )
-
-    try:
-        review_checkpoint = recovery.run("glossary_review", lambda: run_glossary_review_checkpoint(
+        checkpoint = lambda: run_glossary_review_checkpoint(
             meta=meta,
-            eligible_candidates=eligible_candidates,
+            eligible_candidates=candidates,
             candidate_preparation=candidate_preparation,
             prefilter_rejected=prefilter_rejected,
             checkpoint_identity=review_checkpoint_identity,
             validate_saved_review=lambda saved: validate_glossary_review_result(
                 saved,
-                eligible_candidates,
+                candidates,
                 glossary["entries"].keys(),
             ),
             reprice_saved_stats=lambda saved: reprice_saved_stats_or_raise(
@@ -4240,7 +4293,7 @@ def process_chapter(chapter_number):
                 chapter_number,
                 chinese_text,
                 translation,
-                eligible_candidates,
+                candidates,
                 recovery_record=recovery_record,
                 persist_recovery=persist_recovery,
             ),
@@ -4253,7 +4306,18 @@ def process_chapter(chapter_number):
                 pending_meta_file,
                 value,
             ),
-        ))
+        )
+        return recovery.run("glossary_review", checkpoint) if supervised else checkpoint()
+
+    try:
+        try:
+            review_checkpoint = run_review_stage(eligible_candidates)
+        except NonProviderProductionError as exc:
+            if not (eligible_candidates and review_failure_can_be_skipped(exc)):
+                raise
+            skip_glossary_review(chapter_number, meta, pending_meta_file, exc)
+            eligible_candidates, prefilter_rejected = [], []
+            review_checkpoint = run_review_stage(eligible_candidates, supervised=False)
     except SavedCheckpointIdentityError as exc:
         log_error(
             exc,

@@ -2128,87 +2128,13 @@ def test_recovered_process_path_builds_list_shaped_review_context_without_regene
         == 1
     )
 
-    # The original mocked request may have been paid. An unchanged restart
-    # must stop at its durable intent without generating translation or review.
-    assert production.process_chapter(1) is False
+    # The original mocked request may have been paid. An unchanged restart skips
+    # the review and commits, without generating translation or review again.
+    assert production.process_chapter(1) is True
     assert len(request_calls) == 1
-    assert "automatic retry is forbidden" in capsys.readouterr().out
-    assert pending_md.read_text(encoding="utf-8") == paid_translation
-
-    conflicting_state = copy.deepcopy(saved_state)
-    conflicting_state["new_terms"][1]["english"] = "Conflicting Tower Title"
-    conflict_meta = copy.deepcopy(recovered_meta)
-    conflict_meta["state"] = conflicting_state
-    _write_json(pending_json, conflict_meta)
-    progress_before = (project / "data" / "progress.json").read_bytes()
-    paid_before = pending_md.read_bytes()
-    request_count_before = len(request_calls)
-
-    assert production.process_chapter(1) is False
-
-    controlled_output = capsys.readouterr().out
-    assert "GLOSSARY CANDIDATE IDENTITY CONFLICT" in controlled_output
-    assert "Differing semantic fields: english" in controlled_output
-    assert "Proposal 0:" in controlled_output
-    assert "Proposal 1:" in controlled_output
-    assert "No new glossary-review API call was made." in controlled_output
-    assert len(request_calls) == request_count_before
-    assert pending_md.read_bytes() == paid_before
-    assert (project / "data" / "progress.json").read_bytes() == progress_before
-
-    source_backed, rejected = glossary_integrity.source_backed_candidate_proposals(
-        conflicting_state["new_terms"], source_text, 1
-    )
-    assert rejected == []
-    eligible, rejected = filter_profile_candidates(
-        production.ACTIVE_PROFILE,
-        source_backed,
-        existing_terms=production.glossary["entries"],
-        low_value_terms=production.LOW_VALUE_TERMS,
-    )
-    assert rejected == []
-    with pytest.raises(GlossaryCandidateIdentityError) as conflict_error:
-        canonicalize_glossary_review_candidates(eligible)
-    conflict = conflict_error.value.diagnostics["conflicts"][0]
-    selected = next(
-        item["semantic_identity_fingerprint"]
-        for item in conflict["proposals"]
-        if item["english"] == "Tower Master"
-    )
-    create_candidate_resolution(
-        candidate_resolution_path(project / "data", 1),
-        novel_id="synthetic_recovery",
-        chapter=1,
-        pending_identity=pending_content_identity(paid_translation),
-        state_identity=state_extraction_identity(conflicting_state),
-        conflict=conflict,
-        selected_semantic_fingerprint=selected,
-        rationale="Synthetic explicit source review approved Tower Master.",
-        timestamp_utc="2026-08-29T20:00:00+00:00",
-    )
-
-    assert production.process_chapter(1) is False
-    resolved_output = capsys.readouterr().out
-    assert "GLOSSARY CANDIDATE CONFLICT RESOLUTION APPLIED" in resolved_output
-    assert "Canonical candidates after resolution: 1" in resolved_output
-    assert len(request_calls) == request_count_before
-    assert "saved chapter glossary-review recovery does not match current input" in resolved_output
-    assert pending_md.read_bytes() == paid_before
-    assert (project / "data" / "progress.json").read_bytes() == progress_before
-    resolved_meta = json.loads(pending_json.read_text(encoding="utf-8"))
-    assert resolved_meta["candidate_preparation"]["resolved_conflict_count"] == 1
-    assert resolved_meta["candidate_preparation"]["canonical_candidate_count"] == 1
-
-    resolution_file = candidate_resolution_path(project / "data", 1)
-    resolution_file.write_text("{malformed", encoding="utf-8")
-    requests_before_invalid = len(request_calls)
-    assert production.process_chapter(1) is False
-    invalid_output = capsys.readouterr().out
-    assert "GLOSSARY CANDIDATE CONFLICT RESOLUTION INVALID" in invalid_output
-    assert "No new glossary-review API call was made." in invalid_output
-    assert len(request_calls) == requests_before_invalid
-    assert pending_md.read_bytes() == paid_before
-    assert (project / "data" / "progress.json").read_bytes() == progress_before
+    assert (project / "output" / "chapters" / "0001.md").read_text(encoding="utf-8") == paid_translation
+    from review_queue import read_items
+    assert [item["kind"] for item in read_items(project / "data")] == ["glossary_review"]
 
 
 def test_original_review_intent_is_durable_before_request():

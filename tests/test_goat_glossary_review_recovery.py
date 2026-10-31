@@ -166,8 +166,20 @@ def test_live_shaped_recorded_replay_one_send_same_wire_accounting_commit(engine
     assert not (project.chapter_dir / "0002.md").exists()
 
 
-@pytest.mark.parametrize("answer", [empty_stop(), response(content="partial", finish="length"),
-    response(content=VALID, usage=False), response(content=VALID, model="wrong"),
+@pytest.mark.parametrize("answer", [empty_stop(), response(content="partial", finish="length")])
+def test_recovery_unusable_answer_skips_review_and_commits(engine, answer):
+    from review_queue import read_items
+    project, module, sends, budget = incident(engine)
+    before = initial_path(project).read_bytes()
+    assert review_again(engine, answer) is True
+    assert len(sends) == 4
+    assert initial_path(project).read_bytes() == before
+    assert load_matching_journal(journal(project), {})["status"] == "response_recorded"
+    assert (project.chapter_dir / "0001.md").exists()
+    assert [item["kind"] for item in read_items(project.data_dir)] == ["glossary_review"]
+
+
+@pytest.mark.parametrize("answer", [response(content=VALID, usage=False), response(content=VALID, model="wrong"),
     response(content=VALID, reasoning=11)])
 def test_recovery_terminal_no_second_no_third_original(engine, answer):
     project, module, sends, budget = incident(engine)

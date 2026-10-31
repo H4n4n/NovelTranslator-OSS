@@ -705,27 +705,37 @@ def test_aut1_ambiguous_or_mismatched_state_stops_without_resend(aut1_engine, mo
                for event, fields in h.events if event == "autonomous_recovery")
 
 
-@pytest.mark.parametrize("failure", ["cap", "unproven_truncation", "cjk", "terminology"])
+@pytest.mark.parametrize("failure", ["cap", "unproven_truncation"])
 def test_aut1_spent_or_ineligible_recovery_preserves_pending_and_never_advances(aut1_engine, failure):
     h = aut1_engine
     if failure == "cap":
         h.queue.extend([h.response("The disciple crossed the valley and saw the gate", "length"),
                         h.response("The disciple crossed the valley and saw the gate", "length")])
-    elif failure == "unproven_truncation":
-        h.queue.append(h.response("...", "length"))
-    elif failure == "cjk":
-        h.queue.append(h.response("The Azure Cloud Sect disciple spoke 未知陌生文字從未出現在來源文字中。"))
     else:
-        h.engine.glossary["entries"]["青雲宗"].update(auto_repair=False)
-        h.engine.glossary["entries"]["青雲宗"].pop("repair_aliases")
-        h.queue.append(h.response("The wrong organization opened its gate."))
+        h.queue.append(h.response("...", "length"))
     for _ in range(2):
         assert h.engine.process_chapter(1) is False
     assert len(h.calls) == (2 if failure == "cap" else 1)
     assert not h.queue and h.engine.progress["completed"] == []
     assert not list(h.engine.OUTPUT_DIR.iterdir())
-    if failure in {"cjk", "terminology"}:
-        assert (h.engine.PENDING_DIR / "0001.md").is_file()
+
+
+@pytest.mark.parametrize("failure", ["cjk", "terminology"])
+def test_aut1_unrepairable_reader_flaw_commits_and_is_flagged(aut1_engine, failure):
+    from review_queue import read_items
+    h = aut1_engine
+    if failure == "cjk":
+        translation = "The Azure Cloud Sect disciple spoke 未知陌生文字從未出現在來源文字中。"
+    else:
+        h.engine.glossary["entries"]["青雲宗"].update(auto_repair=False)
+        h.engine.glossary["entries"]["青雲宗"].pop("repair_aliases")
+        translation = "The wrong organization opened its gate."
+    h.queue.extend([h.response(translation), h.response(json.dumps(
+        {"new_terms": [], "continuity_summary": "He returned.", "issues": []}))])
+    assert h.engine.process_chapter(1) is True
+    assert not h.queue and h.engine.progress["completed"] == [1]
+    assert (h.engine.OUTPUT_DIR / "0001.md").read_text(encoding="utf-8") == translation
+    assert [item["kind"] for item in read_items(h.engine.GLOSSARY_FILE.parent)] == ["commit_qa"]
 
 
 @pytest.mark.parametrize("drift", [False, True])

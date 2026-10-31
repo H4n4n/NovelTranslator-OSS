@@ -253,6 +253,7 @@ pyproject.toml
 pytest.ini
 qa_provenance_backfill_execute.py
 qa_provenance_backfill_plan.py
+requested_corrections.py
 residual_cjk_micro_repair.py
 resolve_glossary_candidate_conflict.py
 retroactive_span_planning.py

@@ -37,6 +37,14 @@ def read_items(data_dir):
     return items
 
 
+def open_items(data_dir):
+    """Flags that still need attention. A later flag_resolved item closes a chapter's flag."""
+    items = read_items(data_dir)
+    resolved = {(item["chapter"], item["detail"]) for item in items if item["kind"] == "flag_resolved"}
+    return [item for item in items if item["kind"] not in ("flag_resolved", "flag_retried")
+            and (item["chapter"], item["kind"]) not in resolved]
+
+
 def soften_commit_blockers(qa):
     """Turn repairable reader-visible flaws into flags, so the chapter can commit.
 

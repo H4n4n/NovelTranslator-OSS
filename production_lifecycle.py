@@ -73,6 +73,7 @@ def run_unattended_lifecycle(
     local_error_types,
     print_fn,
     target_chapter=None,
+    stop_after_chapter=None,
     run_whole_history_consistency=None,
 ):
     """Run production sequencing, optionally bounded to one exact target.
@@ -170,6 +171,9 @@ def run_unattended_lifecycle(
                     or progress["next_chapter"] != chapter_number + 1):
                     raise ProductionIntegrityError("chapter callback returned before durable commit")
                 run_due_audits_callback()
+                if stop_after_chapter is not None and stop_after_chapter(chapter_number):
+                    log_event("shutdown", stage="chapter_processing", reason="trial_finished", chapter=chapter_number)
+                    raise SystemExit(0)
 
         run_final_audit_if_needed_callback()
         history_status = None

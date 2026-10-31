@@ -75,7 +75,8 @@ from glossary_audit import (
 from provider_retry_policy import is_run_level_stop
 from retroactive_span_planning import OVER_COUNT_REASON
 from noveltranslator_core import atomic_write_bytes
-from requested_corrections import claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit
+from requested_corrections import (claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit,
+                                   is_second_look as audit_is_second_look)
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
 from glossary_integrity import (
     GlossaryCandidateIdentityError,
@@ -2540,13 +2541,15 @@ def audit_targets(
     return_integrity=False,
 ):
     glossary_data = glossary if glossary_data is None else glossary_data
+    whole_novel = audit_is_second_look(GLOSSARY_FILE.parent, start_chapter, end_chapter)
     plan = build_source_integrity_audit_plan(
         glossary_data["entries"],
         chapters,
         start_chapter,
         end_chapter,
-        max_contexts=MAX_TERM_CONTEXTS,
+        max_contexts=2 * MAX_TERM_CONTEXTS if whole_novel else MAX_TERM_CONTEXTS,
         context_radius=TERM_CONTEXT_RADIUS,
+        whole_novel=whole_novel,
     )
     integrity = {
         "counts": plan["counts"],
@@ -2878,7 +2881,8 @@ def apply_periodic_audit(
 
         if entry.get(
             "status"
-        ) == "locked":
+        ) == "locked" and not (entry.get("promoted_by_audit")
+                               and audit_is_second_look(GLOSSARY_FILE.parent, start_chapter, end_chapter)):
             continue
 
         decision = decisions.get(
@@ -3138,8 +3142,12 @@ def apply_periodic_audit(
         )
 
     for request in requested_corrections_for_audit(GLOSSARY_FILE.parent, start_chapter, end_chapter):
-        entry = entries.get(request["chinese"])
-        if entry is None or entry.get("english") == request["new_english"]:
+        entry = entries.get(request.get("chinese"))
+        if entry is not None and request.get("promote"):
+            if entry.get("status") == "provisional":
+                entry.update(status="locked", promoted_by_audit=True)
+            continue
+        if entry is None or entry.get("english") == request.get("new_english"):
             continue
         old_english = entry.get("english", "")
         entry["english"] = request["new_english"]
@@ -3198,7 +3206,10 @@ def run_periodic_audit(
     # Before the audit records this history, and never inside an audit already under way.
     if load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter) is None:
         retry_flagged_chapters(end_chapter)
-        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter)
+        # The last audit looks at every term again, so it promotes nothing.
+        last_audit = FINAL_CHAPTER is not None and end_chapter >= FINAL_CHAPTER
+        claim_requested_corrections(GLOSSARY_FILE.parent, start_chapter, end_chapter,
+                                    promotions=() if last_audit else terms_due_for_promotion(), second_look=last_audit)
     recovery = autonomous_audit_recovery_supervisor(start_chapter, end_chapter)
     intent = load_intent(SimpleNamespace(**globals()), start_chapter, end_chapter)
     if intent is not None:
@@ -3277,6 +3288,22 @@ def run_periodic_audit(
         **stats_event_fields(audit_stats),
     )
     rebuild_reader_epub_after_audit()
+
+
+PROMOTE_AFTER_CHAPTERS = 5
+
+
+def terms_due_for_promotion():
+    """Provisional terms an earlier audit kept, now seen in enough finished chapters.
+
+    An audit reviews a term once, in the range where it first appears, so a
+    second keep never comes. Continued use without trouble is the evidence.
+    """
+    kept = {term for audit in audit_history.get("audits", []) for term in audit.get("changes", {}).get("kept", [])}
+    sources = [chapter_map[number]["text"] for number in progress["completed"] if number in chapter_map]
+    return sorted(term for term in kept
+                  if glossary["entries"].get(term, {}).get("status") == "provisional"
+                  and sum(term in text for text in sources) >= PROMOTE_AFTER_CHAPTERS)
 
 
 def retry_flagged_chapters(through_chapter):
@@ -4651,6 +4678,12 @@ def run_whole_history_consistency():
     return save_final_consistency(SimpleNamespace(**globals()))
 
 
+def trial_finished(chapter_number):
+    """A trial stops the run here so you can read the first chapters before going on."""
+    path = GLOSSARY_FILE.parent / "trial_stop.json"
+    return path.is_file() and chapter_number >= json.loads(path.read_text(encoding="utf-8"))["after_chapter"]
+
+
 def run_unattended_production(*, target_chapter=None):
     """Compatibility callable backed by shared lifecycle sequencing."""
 
@@ -4691,6 +4724,7 @@ def run_unattended_production(*, target_chapter=None):
         local_error_types=(NonProviderProductionError,),
         print_fn=print,
         target_chapter=target_chapter,
+        stop_after_chapter=trial_finished,
         run_whole_history_consistency=(run_whole_history_consistency if target_chapter is None else None),
     )
 

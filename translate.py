@@ -106,7 +106,6 @@ def bounded_goat_run(args):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.correct_term:
-        from novel_project import load_novel_project
         from requested_corrections import add_request
         project = load_novel_project(args.novel, repo_root=args.repo_root)
         if args.correct_term[0] not in json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]:

@@ -231,7 +231,7 @@ def test_interrupt_after_response_replace_preserves_recorded_response(engine, mo
         assert replay["replayed"] and not replay["api_called"]
         envelope = replay["response"]
     else:
-        with pytest.raises(GoatRuntimeError, match="no reissue"):
+        with pytest.raises(GoatRuntimeError, match="auxiliary response rejected"):
             fresh.journaled_chat_request(kind, 1, source, request)
         # The reviewed terminal mechanism accepts known usage even when the
         # ordinary domain result is rejected. It has no transport callback.
@@ -258,7 +258,7 @@ def test_interrupt_after_response_replace_preserves_recorded_response(engine, mo
         assert again["replayed"] and again["response"] == envelope
         assert not core.add_accounting_totals_once(restarted.progress, enriched["operation_id"], stats)
     else:
-        with pytest.raises(GoatRuntimeError, match="no reissue"):
+        with pytest.raises(GoatRuntimeError, match="auxiliary response rejected"):
             restarted.journaled_chat_request(kind, 1, source, request)
         assert not settle(restarted, enriched, envelope)
     assert project.progress_file.read_bytes() == progress_bytes

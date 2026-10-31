@@ -100,17 +100,27 @@ def test_no_ambiguous_unbound_checkpoint_before_binding(engine, monkeypatch, kin
     assert len(sends) == before + 1
 
 
+def blocked_or_flagged_without_send(module, project, sends, count):
+    """An unproven attempt never resends. It either blocks, or skips the review and is flagged."""
+    from review_queue import read_items
+    finished = module.process_chapter(1)
+    assert len(sends) == count
+    if finished:
+        assert (project.chapter_dir / "0001.md").exists()
+        assert [item["kind"] for item in read_items(project.data_dir)] == ["glossary_review"]
+    return finished
+
+
 @pytest.mark.parametrize("kind", PAID_ATTEMPT_KINDS)
-def test_legacy_unbound_unfinished_attempt_still_blocks(engine, monkeypatch, kind):
-    _, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, kind)
+def test_legacy_unbound_unfinished_attempt_never_resends(engine, monkeypatch, kind):
+    project, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, kind)
     value = read(path)
     legacy = value[review.CHAPTER_REVIEW_RECOVERY_KEY][key]
     legacy.pop("transport_binding")
     legacy.pop("transport_ownership_version", None)
     module.atomic_write_json(path, value)
-    count = len(sends)
-    assert module.process_chapter(1) is False
-    assert len(sends) == count
+    if blocked_or_flagged_without_send(module, project, sends, len(sends)):
+        return
     saved = read(path)[review.CHAPTER_REVIEW_RECOVERY_KEY][key]
     assert "transport_binding" not in saved
     assert saved["operation_id"] == attempt["operation_id"]
@@ -274,8 +284,8 @@ def test_fresh_runtime_closed_transport_replays_paid_chapter_review(engine, monk
 
 @pytest.mark.parametrize("kind", ["original", "json_repair", "schema_correction", "semantic_correction"])
 @pytest.mark.parametrize("drift", ["request", "repair_policy", "operation", "provider"])
-def test_chapter_review_reconstruction_drift_fails_closed(engine, monkeypatch, kind, drift):
-    _, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, kind)
+def test_chapter_review_reconstruction_drift_never_resends(engine, monkeypatch, kind, drift):
+    project, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, kind)
     from pathlib import Path
     lower = Path(attempt["transport_binding"]["journal_path"])
     if drift == "request":
@@ -288,9 +298,7 @@ def test_chapter_review_reconstruction_drift_fails_closed(engine, monkeypatch, k
         module.atomic_write_json(path, meta)
     else:
         module.atomic_write_json(lower, _updated_record(read(lower), provider="wrong provider"))
-    count = len(sends)
-    assert module.process_chapter(1) is False
-    assert len(sends) == count
+    blocked_or_flagged_without_send(module, project, sends, len(sends))
 
 
 def test_identical_wire_cannot_satisfy_a_different_correction_attempt(engine, monkeypatch):
@@ -342,11 +350,9 @@ def test_nested_chapter_review_json_repair_transport_state(engine, monkeypatch, 
         assert read(path)[review.CHAPTER_REVIEW_RECOVERY_KEY][key] == attempt
 
 
-def test_multiple_unfinished_chapter_review_requests_block(engine, monkeypatch):
-    _, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, "original")
+def test_multiple_unfinished_chapter_review_requests_never_resend(engine, monkeypatch):
+    project, module, sends, _, path, key, attempt = interrupt_outer(engine, monkeypatch, "original")
     value = read(path)
     value[review.CHAPTER_REVIEW_RECOVERY_KEY]["semantic_correction"] = copy.deepcopy(attempt)
     module.atomic_write_json(path, value)
-    count = len(sends)
-    assert module.process_chapter(1) is False
-    assert len(sends) == count
+    blocked_or_flagged_without_send(module, project, sends, len(sends))

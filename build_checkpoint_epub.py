@@ -2,6 +2,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
@@ -15,12 +16,14 @@ from chapter_library import (
 )
 from noveltranslator_core import (
     atomic_replace_prepared_file,
+    atomic_write_text,
     create_unique_sibling_temp,
     recognize_english_chapter_heading,
     validate_progress_consistency,
 )
 from novel_project import legacy_project, select_project
 from production_run_lock import production_run_lock
+from epub_validate import validate_epub
 
 
 # ============================================================
@@ -57,7 +60,11 @@ def chapter_file_number(path):
     return int(match.group(1))
 
 
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
 def normalize_newlines(text):
+    text = _XML_ILLEGAL.sub("", text)
     return (
         text
         .replace("\r\n", "\n")
@@ -261,7 +268,11 @@ def checkpoint_output_path(epub_dir, first_chapter, last_chapter, novel_id=None)
     return Path(epub_dir) / filename
 
 
-def build_epub(project=None, from_chapter=None, to_chapter=None):
+def latest_output_path(epub_dir, novel_id):
+    return Path(epub_dir) / f"{novel_id}_latest.epub"
+
+
+def build_epub(project=None, from_chapter=None, to_chapter=None, write_latest=False):
     project = project or legacy_project()
     progress = load_json(
         project.progress_file
@@ -303,8 +314,12 @@ def build_epub(project=None, from_chapter=None, to_chapter=None):
 
     book = epub.EpubBook()
 
+    # The stable "latest" book keeps one identifier so readers treat rebuilds
+    # as the same book; range files keep a per-range identifier.
     book.set_identifier(
-        f"noveltranslator-{project.config.id}-{first_chapter}-{last_chapter}"
+        f"noveltranslator-{project.config.id}"
+        if write_latest
+        else f"noveltranslator-{project.config.id}-{first_chapter}-{last_chapter}"
     )
 
     book.set_title(
@@ -324,7 +339,7 @@ def build_epub(project=None, from_chapter=None, to_chapter=None):
 body {
     font-family: serif;
     line-height: 1.5;
-    margin: 5%;
+    margin: 0 4%;
 }
 
 h1 {
@@ -359,7 +374,7 @@ p {
     )
 
     title_page = epub.EpubHtml(
-        title="Checkpoint",
+        title=book_title,
         file_name="title.xhtml",
         lang=book_language,
     )
@@ -446,7 +461,6 @@ Generated locally from committed translation files.
     )
 
     book.spine = [
-        "nav",
         title_page,
         *epub_chapters,
     ]
@@ -470,6 +484,20 @@ Generated locally from committed translation files.
         if not published:
             temp_output.unlink(missing_ok=True)
 
+    if write_latest:
+        # Copy from the finished range file; any earlier failure never reaches
+        # here, so the previous latest stays intact.
+        latest_file = latest_output_path(epub_dir, project.config.id)
+        latest_temp = create_unique_sibling_temp(latest_file)
+        latest_done = False
+        try:
+            latest_temp.write_bytes(output_file.read_bytes())
+            atomic_replace_prepared_file(latest_temp, latest_file)
+            latest_done = True
+        finally:
+            if not latest_done:
+                latest_temp.unlink(missing_ok=True)
+
     print()
     print("=" * 70)
     print("CHECKPOINT EPUB CREATED")
@@ -490,6 +518,65 @@ Generated locally from committed translation files.
     return output_file
 
 
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _report_is_current(report_file, latest_file, project):
+    try:
+        report = load_json(report_file)
+        progress = load_json(project.progress_file)
+        if report.get("status") not in ("BUILT", "SKIPPED"):
+            return None
+        if report.get("last_completed") != progress.get("last_completed"):
+            return None
+        if not latest_file.is_file():
+            return None
+        built = latest_file.stat().st_mtime
+        for path in Path(project.chapter_dir).glob("*.md"):
+            if path.stat().st_mtime > built:
+                return None
+        return report
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def rebuild_reader_epub(project, take_lock=False, epubcheck_jar=None):
+    """Build, validate and report the always-current reader EPUB.
+
+    Never raises. Pass take_lock=True only when the caller does NOT already hold
+    the novel's production lock (the CLI does); a process that holds it must
+    leave the default so the non-reentrant lock is not taken twice.
+    """
+    try:
+        project = project or legacy_project()
+        epub_dir = Path(project.epub_dir)
+        latest_file = latest_output_path(epub_dir, project.config.id)
+        report_file = epub_dir / "latest_report.json"
+        current = _report_is_current(report_file, latest_file, project)
+        if current is not None:
+            return {**current, "status": "SKIPPED"}
+        if take_lock:
+            with production_run_lock(project.root):
+                output = build_epub(project, write_latest=True)
+        else:
+            output = build_epub(project, write_latest=True)
+        last = int(load_json(project.progress_file)["last_completed"])
+        report = {
+            "status": "BUILT",
+            "last_completed": last,
+            "chapters_covered": last,
+            "path": str(latest_file),
+            "range_path": str(output),
+            "validation": validate_epub(latest_file, epubcheck_jar),
+            "utc": _utc_now(),
+        }
+        atomic_write_text(report_file, json.dumps(report, indent=2) + "\n")
+        return report
+    except Exception as exc:
+        return {"status": "ERROR", "error_type": type(exc).__name__, "error": str(exc)}
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Build a local checkpoint EPUB for one novel"
@@ -500,6 +587,11 @@ def build_parser():
     )
     parser.add_argument("--from-chapter", type=int)
     parser.add_argument("--to-chapter", type=int)
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="build and validate <id>_latest.epub plus latest_report.json",
+    )
     return parser
 
 
@@ -507,6 +599,10 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         project = select_project(args.novel)
+        if args.latest:
+            report = rebuild_reader_epub(project, take_lock=True)
+            print(json.dumps(report, indent=2))
+            return 1 if report["status"] == "ERROR" else 0
         with production_run_lock(project.root):
             build_epub(
                 project,

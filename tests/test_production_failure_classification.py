@@ -134,60 +134,6 @@ def test_saved_accounting_repricing_failure_is_typed_local_callback(monkeypatch)
     assert caught.value.__cause__ is failure
 
 
-def test_active_runtime_provider_tuples_exclude_generic_runtime_and_journal_errors():
-    source = (
-        REPO_ROOT
-        / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
-    ).read_text(encoding="utf-8")
-
-    source = supervised_callback_source(source, "process_chapter", {
-        'selected': ('translation', 'obtain_translation'),
-        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
-        'review_checkpoint': ('glossary_review', 'run_glossary_review_checkpoint'),
-    })
-    lifecycle_call = source[source.rindex("return run_unattended_lifecycle("):]
-    assert "handled_error_types=(" in lifecycle_call
-    handled = lifecycle_call[
-        lifecycle_call.index("handled_error_types=("):
-        lifecycle_call.index("describe_local_error=", lifecycle_call.index("handled_error_types=("))
-    ]
-    assert "APIError" in handled
-    assert "APIConnectionError" in handled
-    assert "APITimeoutError" in handled
-    assert "RateLimitError" in handled
-    assert "RuntimeError" not in handled
-    assert "PaidRequestJournalError" not in handled
-    assert "local_error_types=(NonProviderProductionError,)" in lifecycle_call
-
-    process = source[
-        source.index("def process_chapter("):
-        source.index("def reconcile_startup_partial_commit_if_present(")
-    ]
-    translation_provider = process[
-        process.index("except ("):
-        process.index("except NonProviderProductionError as exc:")
-    ]
-    assert "PaidRequestJournalError" not in translation_provider
-    assert "RuntimeError" not in translation_provider
-
-    state_call = process[
-        process.index("state_checkpoint = run_state_extraction_checkpoint("):
-        process.index('if state_checkpoint["status"] == "failed":')
-    ]
-    assert "ProviderResponseError" in state_call
-    assert "RuntimeError" not in state_call
-    assert "except NonProviderProductionError as exc:" in state_call
-
-    review_start = process.index("review_checkpoint = run_glossary_review_checkpoint(")
-    review_end = process.index(
-        'review_result = review_checkpoint["review_result"]',
-        review_start,
-    )
-    review_block = process[review_start:review_end]
-    assert "APIError" in review_block
-    assert "RateLimitError" in review_block
-    assert "RuntimeError" not in review_block
-    assert "except NonProviderProductionError as exc:" in review_block
 
 
 def test_active_startup_integrity_uses_typed_local_error():

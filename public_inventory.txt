@@ -177,6 +177,7 @@ list_novels.py
 migrate_single_novel.py
 model_candidate_ids.py
 novel_project.py
+novel_runner.py
 noveltranslator_core.py
 noveltranslator_observability.py
 operator_preflight.py
@@ -241,6 +242,7 @@ profiles/xianxia_xuanhuan/profile.json
 profiles/xianxia_xuanhuan/translation_instructions.txt
 proven_stage_cleanup.py
 provider_model_identity_runtime.py
+provider_retry_policy.py
 public_inventory.txt
 publication_readiness.py
 publication_regeneration.py
@@ -252,6 +254,7 @@ residual_cjk_micro_repair.py
 resolve_glossary_candidate_conflict.py
 retroactive_span_planning.py
 retroactive_transactions.py
+review_queue.py
 run_production_engine.py
 runtime_hardening_smoke.py
 scripts/guard_allowlist.py
@@ -355,6 +358,7 @@ tests/test_command_code_provider_transport.py
 tests/test_commandcode_orchestration_config.py
 tests/test_committed_qa_provenance.py
 tests/test_completed_uncertain_history.py
+tests/test_continue_and_flag.py
 tests/test_controlled_trial_execute.py
 tests/test_controlled_trial_peak_allowed.py
 tests/test_controlled_trial_plan.py
@@ -415,6 +419,8 @@ tests/test_multi_novel.py
 tests/test_multilingual_source_prompt.py
 tests/test_normalization_inventory.py
 tests/test_novel_management.py
+tests/test_novel_runner.py
+tests/test_novels_root.py
 tests/test_observability.py
 tests/test_operator_preflight.py
 tests/test_pending_provider_completion_gate.py
@@ -454,6 +460,7 @@ tests/test_production_translation_request.py
 tests/test_prospective_strict_qa.py
 tests/test_proven_stage_cleanup.py
 tests/test_provider_model_identity_runtime.py
+tests/test_provider_retry_policy.py
 tests/test_publication_guard.py
 tests/test_publication_readiness.py
 tests/test_pytest_configuration.py

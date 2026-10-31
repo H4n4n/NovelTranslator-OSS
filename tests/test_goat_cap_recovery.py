@@ -219,7 +219,8 @@ def test_success_one_send(engine):
 
 
 @pytest.mark.parametrize("recovery_used", [False, True])
-def test_qa_failure_preserves_pending_no_extra_translation(engine, recovery_used):
+def test_unrepaired_leftover_commits_flagged_with_no_extra_translation(engine, recovery_used):
+    from review_queue import read_items
     answers = ([saturation()] if recovery_used else []) + [response(content="A man entered the hall. 甲")]
     project, module, sends, _ = configure(engine, answers)
     client = engine[3]
@@ -227,12 +228,14 @@ def test_qa_failure_preserves_pending_no_extra_translation(engine, recovery_used
     def create(**body):
         if body.get("max_completion_tokens") == 50000: return previous(**body)
         sends.append(body)
+        if "state" in json.dumps(body.get("messages", [])[0], ensure_ascii=False).lower():
+            return state_response()
         return response(content='{"repairs": []}')
     client.chat.completions.create = create
-    assert module.process_chapter(1) is False
+    assert module.process_chapter(1) is True
     assert sum(body.get("max_completion_tokens") == 50000 for body in sends) == (2 if recovery_used else 1)
-    assert (project.pending_dir / "0001.md").exists()
-    assert module.progress["completed"] == []
+    assert module.progress["completed"] == [1]
+    assert [item["kind"] for item in read_items(project.data_dir)] == ["commit_qa"]
     assert journal(project, KIND).exists() == recovery_used
 
 
@@ -461,8 +464,7 @@ def test_residual_composition_single_send_full_qa_and_accounting(engine, monkeyp
     answers = ([saturation()] if cap_recovered else []) + [response(content=text)]
     if repair != "clean":
         answers.append(response(content="invalid JSON" if repair == "malformed" else json.dumps(patch)))
-    if repair in ("clean", "success"):
-        answers.append(state_response())
+    answers.append(state_response())
     configure(engine, answers)
     qa_inputs = []
     original = module.local_qa
@@ -473,11 +475,10 @@ def test_residual_composition_single_send_full_qa_and_accounting(engine, monkeyp
             result["commit_allowed"] = False
         return result
     monkeypatch.setattr(module, "local_qa", qa)
-    committed = module.process_chapter(1)
-    assert committed == (repair in ("clean", "success"))
+    assert module.process_chapter(1) is True
     translation_sends = [body for body in sends if body.get("max_completion_tokens") == 50000]
     assert len(translation_sends) == (2 if cap_recovered else 1)
-    assert len(sends) == (len(translation_sends) + (1 if repair != "clean" else 0) + (1 if committed else 0))
+    assert len(sends) == (len(translation_sends) + (1 if repair != "clean" else 0) + 1)
     assert qa_inputs
     if repair == "success":
         assert sum("Jia" in candidate for candidate in qa_inputs) >= 2
@@ -493,12 +494,10 @@ def test_residual_composition_single_send_full_qa_and_accounting(engine, monkeyp
         progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
         assert progress["estimated_cost_usd"] == pytest.approx(budget.actual_cost_usd)
         assert len(progress["accounted_api_operation_ids"]) == 1
-    if not committed:
-        before = len(sends)
-        assert module.process_chapter(1) is False
-        assert len(sends) == before
-        assert (project.pending_dir / "0001.md").read_text(encoding="utf-8") == text
-        assert module.progress["completed"] == []
+    if repair in ("residual", "malformed", "qa"):
+        from review_queue import read_items
+        assert (project.chapter_dir / "0001.md").read_text(encoding="utf-8") == text
+        assert [item["kind"] for item in read_items(project.data_dir)] == ["commit_qa"]
 
 
 def test_frozen_v1_identity_and_24k_provenance_validate_unchanged(engine):

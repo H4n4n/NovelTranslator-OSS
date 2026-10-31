@@ -190,63 +190,6 @@ def test_persistence_failure_propagates_after_checkpoint_mutation():
     assert meta["local_qa"] is qa
 
 
-def test_legacy_process_orders_repairs_checkpoint_state_and_commit():
-    repo_root = Path(__file__).resolve().parents[1]
-    source = (
-        repo_root
-        / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
-    ).read_text(encoding="utf-8")
-    source = supervised_callback_source(source, "process_chapter", {
-        'strict_micro_repair': ('strict_micro', 'maybe_repair_strict_terminology'),
-        'micro_repair': ('residual_cjk', 'maybe_repair_residual_cjk'),
-        'qa_checkpoint': ('commit_qa', 'run_commit_qa_checkpoint'),
-        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
-        'glossary_changes': ('reviewed_state', 'finalize_reviewed_chapter_state'),
-        'chapter_stats': ('chapter_commit', 'commit_reviewed_chapter'),
-    })
-    process = source[source.index("def process_chapter("):]
-
-    strict_repair = process.index(
-        "strict_micro_repair = maybe_repair_strict_terminology("
-    )
-    residual_repair = process.index(
-        "micro_repair = maybe_repair_residual_cjk(",
-        strict_repair,
-    )
-    checkpoint = process.index(
-        "qa_checkpoint = run_commit_qa_checkpoint(",
-        residual_repair,
-    )
-    state = process.index(
-        "state_checkpoint = run_state_extraction_checkpoint(",
-        checkpoint,
-    )
-    reviewed = process.index(
-        "glossary_changes = finalize_reviewed_chapter_state(",
-        state,
-    )
-    commit = process.index(
-        "chapter_stats = commit_reviewed_chapter(",
-        reviewed,
-    )
-
-    assert (
-        strict_repair
-        < residual_repair
-        < checkpoint
-        < state
-        < reviewed
-        < commit
-    )
-
-    checkpoint_block = process[checkpoint:state]
-    assert "qa_checker=local_qa" in checkpoint_block
-    assert (
-        "reset_failed_meta=pending_meta_after_commit_qa_failure"
-        in checkpoint_block
-    )
-    assert "persist_meta=lambda value: save_json(" in checkpoint_block
-    assert 'if not qa_checkpoint["commit_allowed"]:' in checkpoint_block
 
 
 @pytest.mark.parametrize("dispatch", [

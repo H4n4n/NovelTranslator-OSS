@@ -133,6 +133,8 @@ def checkpoint_proof(module, start, end):
         chunk = chunks_by_id.get(attempt.get("chunk_id"))
         require(chunk is not None and attempt.get("kind") in {"audit", "json_repair", "semantic_correction"}
                 and type(attempt.get("attempt")) is int and attempt["attempt"] >= 1, "invalid paid audit attempt")
+        if chunk.get("skipped_after_failure"):
+            continue  # This chunk changed nothing in the glossary, so there is nothing to prove.
         metadata = attempt["request_metadata"]
         require(metadata.get("audit_window") == checkpoint["audit_window"] and metadata.get("candidate_set_hash") == candidate_hash,
                 "audit request metadata drift")
@@ -243,6 +245,9 @@ def checkpoint_proof(module, start, end):
                 raise RuntimeError("saved normalization has no validation error")
         journals.append(dict(path=str(path), journal_sha256=file_sha(path), record=journal))
     for leaf in leaves:
+        if leaf.get("skipped_after_failure"):
+            require(all(d.get("action") == "keep" for d in leaf["result"]["decisions"]), "skipped audit chunk changed terms")
+            continue
         require(parsed_by_chunk.get(leaf["chunk_id"]) == leaf.get("result"), "audit leaf result lacks exact validated paid response")
     combined = audit.combine_audit_chunk_results(checkpoint["chunks"], ids, integrity["safe_glossary_keys"])
     require(combined == checkpoint.get("combined_result"), "combined audit result drift")

@@ -6,6 +6,7 @@ It provides the small decision functions shared by production and local tests.
 
 import json
 import os
+import time
 import re
 import uuid
 from bisect import bisect_right
@@ -2347,6 +2348,18 @@ def atomic_replace_prepared_file(temp_path, path):
     os.replace(temp_path, path)
 
 
+def _replace_with_retry(temp, path, attempts=6, delay_seconds=0.5):
+    """Antivirus and indexers can briefly lock a file on Windows."""
+    for attempt in range(attempts):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay_seconds)
+
+
 def atomic_write_text(path, text, encoding="utf-8"):
     """Fsync a unique sibling temp file, then atomically replace the target."""
     path = Path(path)
@@ -2359,7 +2372,7 @@ def atomic_write_text(path, text, encoding="utf-8"):
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
+        _replace_with_retry(temp, path)
         replaced = True
     finally:
         if descriptor is not None:
@@ -2380,7 +2393,7 @@ def atomic_write_bytes(path, content):
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
+        _replace_with_retry(temp, path)
         replaced = True
     finally:
         if descriptor is not None:
@@ -2735,7 +2748,7 @@ def inspect_pending_state(pending_dir, completed_chapters, next_chapter):
         related = [path for path in files if path.stem == stem]
         unsupported = sorted(path.suffix for path in related if path.suffix not in {".md", ".json"})
         if not stem.isdigit():
-            errors.append(f"pending file stem is not numeric: {stem}")
+            warnings.append(f"ignoring non-chapter file in pending: {stem}")
             continue
         chapter = int(stem)
         text_path = pending_dir / f"{stem}.md"

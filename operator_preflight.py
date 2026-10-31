@@ -83,6 +83,18 @@ def _base_report(project, requested_config, max_api_calls, max_cost_usd):
     }
 
 
+def _translation_needs_saturation_recovery(journal_path):
+    """A slot with no answer, or a finished answer, is handled by the normal run."""
+    if not journal_path.exists():
+        return False
+    record = json.loads(journal_path.read_text(encoding="utf-8"))
+    if record.get("status") == "planned":
+        return False
+    response = record.get("response") or {}
+    finish = response.get("finish_reason") or ((response.get("raw_response") or {}).get("choices") or [{}])[0].get("finish_reason")
+    return not (record.get("status") == "response_recorded" and finish == "stop")
+
+
 def _blocked(report, *errors):
     report["status"] = STATUS_BLOCKED
     report["recommended_action"] = "resolve_blockers"
@@ -538,7 +550,7 @@ def build_operator_preflight(
         from goat_saturation_recovery_plan import (
             target_initial_path, inspect_target, build_goat_saturation_recovery_plan,
         )
-        if target_initial_path(project).exists():
+        if _translation_needs_saturation_recovery(target_initial_path(project)):
             if report["manual_pause_active"]:
                 report.update(status=STATUS_PAUSED, recommended_action="remove_manual_pause",
                               resume_route="GOAT_SATURATION_RECOVERY_READY")

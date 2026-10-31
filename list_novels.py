@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from novel_project import load_novel_project, repository_root
+from novel_project import load_novel_project, novels_root_for, repository_root
 from noveltranslator_core import validate_progress_consistency
 from translation_profile import load_translation_profile
 
@@ -55,7 +55,7 @@ def inspect_novel_directory(directory, repo_root):
 
 def collect_novels(repo_root=None):
     repo_root = Path(repo_root or repository_root()).resolve()
-    novels_root = repo_root / "novels"
+    novels_root = novels_root_for(repo_root)
     if not novels_root.is_dir():
         return []
     return [

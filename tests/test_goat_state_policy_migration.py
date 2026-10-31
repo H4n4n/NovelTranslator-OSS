@@ -242,7 +242,7 @@ def test_single_generation_preserves_translation_and_resumes_local_pipeline(inci
     module.run_periodic_audit = lambda *a,**k: pytest.fail("startup audits forbidden")
     install_state_policy_migration(module, p)
     success = module.process_chapter(1)
-    assert success is (finish == "stop")
+    assert success is (finish != "ambiguous")
     assert len(sends) == budget.api_calls == 1
     assert "max_tokens" not in sends[0] and "max_completion_tokens" not in sends[0]
     for name, data in old.items(): assert (project.data_dir / "provider_request_journal" / name).read_bytes() == data
@@ -253,6 +253,11 @@ def test_single_generation_preserves_translation_and_resumes_local_pipeline(inci
         assert module.continuity["latest_chapter"] == 1
         qa = json.loads((project.qa_dir / "0001.json").read_text())
         assert qa["translation_provider_identity"] == p["migration_proof"]["old_policy"]
+    elif finish in {"length", "malformed"}:
+        from review_queue import read_items
+        assert (project.chapter_dir / "0001.md").read_bytes() == paid
+        assert module.progress["completed"] == [1]
+        assert [item["kind"] for item in read_items(project.data_dir)] == ["state_extraction"]
     else:
         assert (project.pending_dir / "0001.md").read_bytes() == paid
         assert module.progress["completed"] == []

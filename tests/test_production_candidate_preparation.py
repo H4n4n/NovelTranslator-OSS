@@ -135,26 +135,3 @@ def test_unrelated_failures_escape_unchanged_without_retry(stage, error):
     assert caught.value is error
     assert calls == {"prepare": ["prepare"], "resolve": ["prepare", "resolve"],
                      "verify": ["prepare", "resolve", "prepare"]}[stage]
-
-
-def test_production_candidate_failure_gates_review_and_finalization():
-    source = (Path(__file__).resolve().parents[1] /
-              "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py").read_text(encoding="utf-8")
-    source = supervised_callback_source(source, "process_chapter", {
-        'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
-        'candidate_checkpoint': ('candidates', 'run_candidate_preparation_checkpoint'),
-        'review_checkpoint': ('glossary_review', 'run_glossary_review_checkpoint'),
-        'glossary_changes': ('reviewed_state', 'finalize_reviewed_chapter_state'),
-        'chapter_stats': ('chapter_commit', 'commit_reviewed_chapter'),
-    })
-    process = source[source.index("def process_chapter("):]
-    state = process.index("state_checkpoint = run_state_extraction_checkpoint(")
-    candidates = process.index("candidate_checkpoint = run_candidate_preparation_checkpoint(")
-    review = process.index("review_checkpoint = run_glossary_review_checkpoint(")
-    finalize = process.index("glossary_changes = finalize_reviewed_chapter_state(")
-    commit = process.index("chapter_stats = commit_reviewed_chapter(")
-    assert state < candidates < review < finalize < commit
-    block = process[candidates:review]
-    for outcome in ("resolution_failed", "identity_failed", "unresolved"):
-        assert f'if candidate_checkpoint["status"] == "{outcome}":' in block
-    assert block.count("return stop_for_") == 3

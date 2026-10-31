@@ -168,7 +168,8 @@ def test_pending_checkpoint_uses_artifact_chapter_not_next_progress(tmp_path, ch
     assert seen == [chapter, chapter]
 
 
-def test_real_pending_397_restarts_without_send_or_accounting_loss(engine, monkeypatch):
+def test_real_pending_397_is_flagged_and_keeps_going_without_retranslating(engine, monkeypatch):
+    from review_queue import read_items
     project, production, sends, client, budget, *_ = engine
     monkeypatch.setattr(production, "glossary", {"entries": prospective(auto_repair=False)})
     monkeypatch.setitem(production.chapter_map, 397, {"chapter": 397, "text": "有熙氏"})
@@ -180,22 +181,24 @@ def test_real_pending_397_restarts_without_send_or_accounting_loss(engine, monke
     core.atomic_write_json(meta_path, {"chapter": 397, "stage": "translated", "finish_reason": "stop",
         "translation_stats": stats, "translation_model": "deepseek-flash",
         **goat_provenance(IDENTITY, "a"*64)})
+    class ReachedStateExtraction(BaseException):
+        pass
+    def reached_state(*args, **kwargs):
+        raise ReachedStateExtraction()
     def forbidden(*args, **kwargs):
-        pytest.fail("local strict failure must not send, extract, review or commit")
-    for name in ("translate_chapter", "send_api_request_once", "extract_state", "review_new_terms", "commit_reviewed_chapter"):
+        pytest.fail("a flagged term must not retranslate or send")
+    for name in ("translate_chapter", "send_api_request_once"):
         monkeypatch.setattr(production, name, forbidden)
+    monkeypatch.setattr(production, "extract_state", reached_state)
     client.chat.completions.create = forbidden
-    paths = (project.progress_file, project.glossary_file, project.continuity_file,
-             project.issues_file, project.audit_history_file)
-    before = {p: p.read_bytes() for p in paths}
-    for _ in range(2):
-        assert production.process_chapter(397) is False
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        assert meta["local_qa"]["chapter"] == 397
-        assert not meta["local_qa"]["commit_allowed"]
-        assert meta["translation_stats"] == stats
-        assert text_path.read_text(encoding="utf-8") == "A Youxi clansman arrived."
-        assert all(p.read_bytes() == data for p, data in before.items())
+    with pytest.raises(ReachedStateExtraction):
+        production.process_chapter(397)
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["local_qa"]["chapter"] == 397
+    assert meta["local_qa"]["commit_allowed"] and meta["local_qa"]["flagged_blockers"]
+    assert meta["translation_stats"] == stats
+    assert text_path.read_text(encoding="utf-8") == "A Youxi clansman arrived."
+    assert [item["kind"] for item in read_items(project.data_dir)] == ["commit_qa"]
     assert sends == [] and budget.api_calls == 0
 
 

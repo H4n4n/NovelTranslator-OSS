@@ -56,6 +56,10 @@ def supervised_callback_source(source, function_name, expected):
             retained = ast.parse('(intent["audit_result"], intent["audit_stats"], intent["chunking"])', mode="eval").body
             assert ast.dump(saved[0].value) == ast.dump(retained)
             assignments = [n for n in assignments if n is not saved[0]]
+        # Continuing without state, or skipping candidates, isn't a dispatch.
+        assignments = [n for n in assignments if not (isinstance(n.value, ast.Constant) and n.value.value is None)
+                       and not (isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)
+                                and n.value.func.id == "continue_without_state")]
         assert len(assignments) == 1, target
         call = assignments[0].value
         assert isinstance(call, ast.Call)

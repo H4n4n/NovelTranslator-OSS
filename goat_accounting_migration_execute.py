@@ -47,10 +47,11 @@ def execute_goat_accounting_migration(novel_id, *, repo_root, plan,
         raise ValueError("proposed migration mismatch")
     repo = Path(repo_root).resolve()
     # Resolve caller identity before acquiring a lock (no arbitrary path from a plan).
-    from novel_project import NOVEL_ID_RE
+    from novel_project import NOVEL_ID_RE, novels_root_for
     if not NOVEL_ID_RE.fullmatch(novel_id):
         raise ValueError("invalid novel ID")
-    root = require_local_path(repo / "novels" / novel_id, repo)
+    novels_root = novels_root_for(repo)
+    root = require_local_path(novels_root / novel_id, novels_root)
     if plan["state_binding"]["novel_id"] != novel_id or plan["state_binding"]["repo_root"] != str(repo):
         raise ValueError("novel/repository identity mismatch")
     evidence = external_path(evidence_root, repo)

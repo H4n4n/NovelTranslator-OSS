@@ -465,7 +465,8 @@ def verified_completed_dispositions(project, inventory, *, allow_pending=False, 
             or disposition.get("accounting_disposition") != "zero_provider_usage" or disposition.get("provider_proof_claimed") is not False
             or proof["novel_id"] != project.config.id or proof["profile_id"] != project.config.profile or proof["chapter"] != chapter
             or not original or original["status"] != "uncertain" or original_has_usage(original)
-            or proof["original_journal_path"] != str(original_path)
+            # Compare the file name only, so a novel folder can be moved or copied.
+            or proof["original_journal_path"].replace("\\", "/").rsplit("/", 1)[-1] != original_path.name
             or proof["original_operation_kind"] != "state_extraction"
             or original["operation_id"] != proof["original_operation_id"]
             or original["record_sha256"] != proof["original_record_sha256"]

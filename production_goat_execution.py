@@ -45,6 +45,7 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
     missing = object()
     previous = sys.modules.get(PRODUCTION_MODULE_NAME, missing)
     error = None
+    stop_exception = None
     generation_attempted = False
     state_generation_attempted = False
     state_checkpoint_saved = False
@@ -158,10 +159,11 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
                 else:
                     module.run_unattended_production(**({} if plan.get("mode") == "bounded_goat_unattended"
                         else {"target_chapter": plan["target_chapter"]}))
-    except (Exception, KeyboardInterrupt, SystemExit):
+    except (Exception, KeyboardInterrupt, SystemExit) as exc:
         # Provider/SDK failures may contain credential-bearing bodies. Safe fixed
         # diagnostics accompany durable journal evidence; never stringify them.
         error = "GOAT authorized execution stopped; inspect durable journal/local QA"
+        stop_exception = type(exc.__context__ or exc).__name__
     finally:
         _restore_core_runtime(core_state)
         if previous is missing:
@@ -182,6 +184,7 @@ def execute_authorized_goat(plan, *, repo_root, recovery, saturation_recovery=Fa
     if uncertain_disposition:
         report.update(maximum_new_recovery_sends=1, disposition_id=plan["disposition_id"],
             original_provider_usage="zero", original_journal_preserved=True)
+    report["stop_exception"] = stop_exception
     report["accepted_provider_responses"] = budget.response_records
     report.update(provider=PROVIDER_COMMAND_CODE, provider_identity=expected,
         pricing_version=expected["pricing_version"], pricing_unit=expected["pricing_unit"],

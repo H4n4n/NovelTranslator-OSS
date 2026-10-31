@@ -42,6 +42,10 @@ def build_parser():
     parser.add_argument("--repo-root", type=Path, default=None)
     parser.add_argument("--max-api-calls", type=int)
     parser.add_argument("--max-credit-equivalent-usd", type=float)
+    parser.add_argument("--start", action="store_true",
+                        help="Run this novel until it finishes, is paused, or the budget ends")
+    parser.add_argument("--budget-usd", type=float,
+                        help="With --start: allow this much credit-equivalent spending from now on")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
     parser.add_argument("--authorize-goat-run", action="store_true")
     parser.add_argument("--state-fingerprint")
@@ -99,6 +103,11 @@ def bounded_goat_run(args):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.start:
+        from novel_runner import STOPPED, run_novel
+        result = run_novel(args.novel, repo_root=args.repo_root, budget_usd=args.budget_usd)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2 if result["status"] == STOPPED else 0
     backend = provider_identity(args.provider, args.model)
     if backend["provider"] == PROVIDER_COMMAND_CODE:
         return bounded_goat_run(args)

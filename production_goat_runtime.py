@@ -1,7 +1,8 @@
 """Production-owned GOAT adapter around the existing sequential lifecycle.
 
-Raw physical responses are journaled before provider acceptance. There is no
-second engine, fallback, retry, credential read or client construction here.
+Raw physical responses are journaled before provider acceptance. Retries follow
+provider_retry_policy. There is no second engine, fallback, credential read or
+client construction here.
 """
 import copy
 import hashlib
@@ -32,6 +33,7 @@ from production_paid_request_journal import (
 )
 from production_provider_runtime import provider_identity
 from production_provider_contract import PROVIDER_COMMAND_CODE, COMMAND_CODE_DEEPSEEK_V41_FLASH
+from provider_retry_policy import DefiniteProviderFailure, send_with_retries
 
 # PR140 domain operations retain their fixed domain-owned journal paths.
 DOMAIN_OPERATIONS = {
@@ -59,6 +61,20 @@ class GoatRuntimeError(NonProviderProductionError):
 
 class GoatAllowanceExhausted(GoatRuntimeError):
     deterministic_local_budget_refusal = True
+
+
+class GoatResponseRejected(GoatRuntimeError):
+    """A helper call was answered and accounted, but its content is unusable."""
+    response_rejected = True
+
+
+class GoatProviderStop(GoatRuntimeError):
+    """Retries ran out or the provider refused. Nothing billable came back."""
+    definite_no_response = True
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def normalize_production_request(logical, kwargs):
@@ -158,6 +174,11 @@ class GoatBudget:
         self.api_calls += 1
         self.records.append({"call": self.api_calls, "request_sha256": digest, "status": "started",
             "authorization_exposure": copy.deepcopy(self.authorized_exposure)})
+
+    def retract(self):
+        """A definite provider failure used no allowance, so undo its begin()."""
+        self.api_calls -= 1
+        self.records.pop()
 
     def account(self, stats):
         self.actual_cost_usd += stats["cost_usd"]
@@ -336,11 +357,21 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
         def send():
             if getattr(module, "_goat_glossary_recovery_only", False) and logical != "glossary_review":
                 raise GoatRuntimeError("dedicated glossary recovery forbids other lifecycle sends")
-            if budget is not None:
-                budget.begin(transport.request_sha256)
-            try:
+            def send_once():
+                if budget is not None:
+                    budget.begin(transport.request_sha256)
                 return provider_client.chat.completions.create(**copy.deepcopy(wire))
-            except BaseException:
+            def log_retry(entry):
+                module.log_event("provider_retry", chapter=chapter, operation_kind=kind, **entry)
+            try:
+                return send_with_retries(send_once, log=log_retry, before_retry=module.wait_for_api_permission,
+                    on_definite_failure=None if budget is None else budget.retract)
+            except DefiniteProviderFailure as exc:
+                failure = GoatProviderStop(exc.reason)
+                raise failure from None
+            except BaseException as exc:
+                if getattr(exc, "definite_no_response", False) is True:
+                    raise
                 if budget is not None:
                     budget.blocked = True
                 raise GoatRuntimeError("GOAT transport outcome uncertain; automatic reissue forbidden") from None
@@ -447,11 +478,13 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                 from production_uncertain_request_disposition import KIND as NO_RECORD_STATE
                 uncertain_controller = kind == NO_RECORD_STATE and getattr(module, "_goat_uncertain_state_proof", None)
                 if diagnostic["fail_closed"] and not audit_split and not state_controller and not terminal_controller and not uncertain_controller:
-                    raise GoatRuntimeError("GOAT auxiliary response rejected: " + diagnostic["status"])
+                    raise GoatResponseRejected("GOAT auxiliary response rejected: " + diagnostic["status"])
             return {**result, "response": envelope,
                 "wire_completion_policy": ({"revision": WIRE_POLICY_REVISION,
                     "auxiliary_completion_policy": "provider_unbounded", "auxiliary_completion_tokens": None}
                     if logical != "translation" else {"max_completion_tokens": wire["max_completion_tokens"]})}
+        except GoatResponseRejected:
+            raise
         except Exception as exc:
             if budget is not None:
                 if not accounted:

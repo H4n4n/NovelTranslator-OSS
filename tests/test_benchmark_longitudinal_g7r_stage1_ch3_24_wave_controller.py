@@ -303,6 +303,9 @@ def _write_run(
         "final_chapter": 30,
         "audit_interval": spec["audit_interval"],
         "chapter_numbering": spec["chapter_numbering"],
+        # These recorded runs predate repair being on by default.
+        "residual_cjk_micro_repair": {"enabled": False},
+        "glossary_candidate_auto_resolution": {"enabled": False},
     }
     if spec["novel_id"] == "rogue_first_prince":
         # Mirrors the real Stage-1 rogue novel.json opt-in exactly.

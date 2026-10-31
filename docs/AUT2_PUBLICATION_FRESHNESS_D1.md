@@ -271,7 +271,7 @@ Integration validation on Windows Python 3.14.4:
 - `python -m py_compile` passed for `historical_reconciliation.py`,
   `publication_readiness.py`, `publication_regeneration.py`,
   `tests/test_build_publication_epub.py`, `tests/test_publication_readiness.py`
-  and `tests/test_public_ci_reliability.py`.
+  and the (since removed) public CI reliability test module.
 - Local publication inventory validation and `git diff --check` passed.
 
 The measured JUnit case sums are 504.699 seconds for readiness and 386.631 seconds

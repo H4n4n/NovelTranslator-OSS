@@ -5,6 +5,9 @@ Modes:
   --index (default)  validate the staged index against the staged inventory
   --tree REV         validate a commit tree against that commit's inventory
   --push-check       validate all local branches, tags and HEAD (detached-safe)
+  --regenerate-inventory
+                     rewrite public_inventory.txt from the staged index (sorted,
+                     header comments kept); refuses forbidden paths and secrets
   --pre-push         consume Git pre-push stdin ref updates and validate the
                      newly reachable outgoing commits, trees and annotated tags
 
@@ -212,6 +215,50 @@ def validate_index():
     return len(paths)
 
 
+def regenerate_inventory():
+    """Rewrite the working-tree inventory from the staged index, fail closed.
+
+    Every staged path and blob goes through the same path/mode/secret checks as
+    --index; the result is the header comments plus the sorted staged paths.
+    Stage the rewritten file afterwards with: git add public_inventory.txt
+    """
+    records = parse_z(git(["ls-files", "--stage", "-z"]))
+    if not records:
+        raise GuardError("empty index")
+    paths = {INVENTORY_NAME}
+    for record in records:
+        meta, raw_path = record.split(b"\t", 1)
+        parts = meta.decode("ascii").split()
+        if len(parts) != 3:
+            raise GuardError("malformed index entry")
+        mode, sha, stage = parts
+        try:
+            path = raw_path.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise GuardError("invalid UTF-8 index path")
+        if stage != "0":
+            raise GuardError("unmerged index entry: " + path)
+        if mode not in ALLOWED_MODES:
+            raise GuardError("unsupported index mode " + mode + ": " + path)
+        check_path_shape(path)
+        scan_content(path, git(["cat-file", "blob", sha]))
+        paths.add(path)
+    target = os.path.join(REPO, INVENTORY_NAME)
+    try:
+        with open(target, "rb") as handle:
+            old = handle.read()
+    except OSError:
+        old = git(["show", ":" + INVENTORY_NAME])
+    try:
+        old_lines = old.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        raise GuardError("inventory is not valid UTF-8: working tree")
+    header = [line for line in old_lines if line.startswith("#")]
+    with open(target, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("".join(line + "\n" for line in header + sorted(paths)))
+    return len(paths)
+
+
 def _is_shallow():
     return git(["rev-parse", "--is-shallow-repository"]).decode("ascii", "strict").strip() == "true"
 
@@ -408,6 +455,7 @@ def main(argv=None):
     parser.add_argument("--tree", metavar="REV")
     parser.add_argument("--push-check", action="store_true")
     parser.add_argument("--pre-push", action="store_true")
+    parser.add_argument("--regenerate-inventory", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -417,6 +465,9 @@ def main(argv=None):
             result["mode"] = "pre-push"
             updates = pre_push_updates()
             result.update(ok=True, checked=validate_pre_push(updates) if updates else validate_push_check())
+        elif args.regenerate_inventory:
+            result["mode"] = "regenerate-inventory"
+            result.update(ok=True, checked=regenerate_inventory())
         elif args.push_check:
             result["mode"] = "push-check"
             result.update(ok=True, checked=validate_push_check())

@@ -139,7 +139,7 @@ python scripts/publication_guard.py --tree HEAD
 Do not edit root Python files while these tests run: the exact builder bytes
 are intentionally part of each synthetic generation's identity.
 `tests/test_final_editorial.py` is already classified PRIVATE in
-`tests/public_test_classification.json`; 26 tests require an omitted novel-owned
+`tests/ci_exclusions.json`; 26 tests require an omitted novel-owned
 manifest. An exploratory guarded run correctly denied those reads (409 passed,
 4 skipped, 26 blocked failures). Do not copy private inputs in to make it pass.
 The new public tests exercise the real editorial planner/applier with disposable

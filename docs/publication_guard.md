@@ -11,6 +11,9 @@
 - `--push-check`: validates all local branches, tags and `HEAD` (including a
   detached HEAD). It walks **every reachable commit**, not only tip trees, and
   follows every annotated-tag object in a chain. Used by CI.
+- `--regenerate-inventory`: rewrites `public_inventory.txt` from the staged index
+  (header comments kept, paths sorted). It refuses on any forbidden path, bad
+  mode or secret match in the index. Then `git add public_inventory.txt`.
 - `--pre-push`: consumes the actual Git pre-push stdin ref-update records and
   validates every newly reachable outgoing commit/tree and annotated tag,
   including detached and custom-reference tips. It recursively inspects nested
@@ -40,7 +43,8 @@
 
 ## Normal development workflow
 
-Adding a reviewed module, test or document requires adding its path to
+Stage your change, then run `python scripts/publication_guard.py --regenerate-inventory`
+and `git add public_inventory.txt`. In other words, adding a reviewed module, test or document requires adding its path to
 `public_inventory.txt` in the same commit. Deleting or renaming a file requires
 updating that file in the same commit and removing/renaming the old entry.
 Normal `git add` does not stage ignored private directories; `git add -f` does,
@@ -176,7 +180,7 @@ For focused independent review, choose a fresh external TEMP child and run:
 $guardTemp = Join-Path ([System.IO.Path]::GetTempPath()) ('publication-cache-review-' + [guid]::NewGuid().ToString('N'))
 python tests/zero_provider_validation.py --basetemp $guardTemp `
   --deselect tests/test_benchmark_longitudinal_g7g_stage1_secure_launcher.py::test_real_windows_dpapi_round_trip `
-  -- -q tests/test_public_ci_reliability.py
+  -- -q tests/test_publication_guard.py
 python scripts/publication_guard.py --push-check --json
 ```
 

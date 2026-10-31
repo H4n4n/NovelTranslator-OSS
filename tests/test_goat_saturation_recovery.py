@@ -218,20 +218,24 @@ def test_success_one_send(engine):
 
 
 @pytest.mark.parametrize("recovery_used", [False, True])
-def test_qa_failure_preserves_pending_no_extra_translation(engine, recovery_used):
+def test_unrepaired_leftover_commits_flagged_with_no_extra_translation(engine, recovery_used):
+    from review_queue import read_items
     answers = ([saturation()] if recovery_used else []) + [response(content="A man entered the hall. 甲")]
     project, module, sends, _ = configure(engine, answers)
     client = engine[3]
     previous = client.chat.completions.create
     def create(**body):
-        if body["max_completion_tokens"] == 24000: return previous(**body)
+        if body.get("max_completion_tokens") == 24000: return previous(**body)
         sends.append(body)
+        if "state" in json.dumps(body.get("messages", [])[0], ensure_ascii=False).lower():
+            return response(content=json.dumps({"new_terms": [], "continuity_summary": "A man entered.", "issues": []}),
+                            completion=100, reasoning=20)
         return response(content='{"repairs": []}')
     client.chat.completions.create = create
-    assert module.process_chapter(1) is False
-    assert sum(body["max_completion_tokens"] == 24000 for body in sends) == (2 if recovery_used else 1)
-    assert (project.pending_dir / "0001.md").exists()
-    assert module.progress["completed"] == []
+    assert module.process_chapter(1) is True
+    assert sum(body.get("max_completion_tokens") == 24000 for body in sends) == (2 if recovery_used else 1)
+    assert module.progress["completed"] == [1]
+    assert [item["kind"] for item in read_items(project.data_dir)] == ["commit_qa"]
     assert journal(project, KIND).exists() == recovery_used
 
 

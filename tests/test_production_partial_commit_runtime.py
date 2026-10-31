@@ -538,6 +538,11 @@ def test_failed_commit_qa_never_reaches_rolling_state_extraction(monkeypatch, tm
     monkeypatch.setattr(production, "zero_stats", lambda: _stats(0))
     monkeypatch.setattr(production, "extract_state", lambda *a, **k: pytest.fail("QA must block extraction"))
     monkeypatch.setattr(production, "send_api_request_once", lambda **k: pytest.fail("no provider calls"))
+    real_qa = production.local_qa
+    def incomplete(*args):
+        # Leftover source text only gets flagged, so this needs a hard blocker.
+        return {**real_qa(*args), "commit_allowed": False, "commit_blockers": [{"type": "incomplete_translation"}]}
+    monkeypatch.setattr(production, "local_qa", incomplete)
     before = copy.deepcopy(production.continuity)
     assert production.process_chapter(1) is False
     assert production.continuity == before

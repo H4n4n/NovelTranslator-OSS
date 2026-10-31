@@ -1783,6 +1783,58 @@ def extract_epub(project, overwrite=False):
     return result
 
 
+@dataclass(frozen=True)
+class _DryRunConfig:
+    id: str
+    profile: str
+    final_chapter: int
+    chapter_numbering: str
+
+
+class _DryRunProject:
+    """Minimal project view for analysing an EPUB that is not installed yet.
+
+    It exposes only what extract_source_epub reads: the source path, the
+    (absent) overrides file, the profile and the numbering settings.
+    """
+
+    is_legacy = False
+
+    def __init__(self, source, *, final_chapter, chapter_numbering, profile, repo_root):
+        source = Path(source).resolve()
+        self.root = source.parent
+        self.source_epub = source
+        self.source_overrides_file = source.parent / (source.name + ".no-overrides.json")
+        self.repository_root = Path(repo_root)
+        self.config = _DryRunConfig(
+            "dry-run", profile, final_chapter, chapter_numbering
+        )
+
+
+def dry_run_extract_epub(
+    source,
+    *,
+    chapter_numbering=CHAPTER_NUMBERING_GLOBAL,
+    final_chapter=10_000_000,
+    profile="historical_military",
+    repo_root=None,
+):
+    """Extract an EPUB in memory without an installed project or any writes.
+
+    The default final_chapter is deliberately huge, so only the errors that
+    mention final_chapter are artefacts of the placeholder.
+    """
+    repo_root = repo_root or Path(__file__).resolve().parent
+    project = _DryRunProject(
+        source,
+        final_chapter=final_chapter,
+        chapter_numbering=chapter_numbering,
+        profile=profile,
+        repo_root=repo_root,
+    )
+    return extract_source_epub(project)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Extract a source EPUB for one novel")
     parser.add_argument(

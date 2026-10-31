@@ -25,6 +25,9 @@ from chapter_library import (
     UNIT_KIND_SIDE_STORY,
     validate_chapter_library,
 )
+import unicodedata
+
+from extract_epub import CHINESE_NUMERAL_CHARACTERS, parse_chinese_integer
 from novel_project import (
     CHAPTER_NUMBERING_SPINE_SEQUENTIAL,
     SOURCE_TYPE_TXT,
@@ -45,6 +48,24 @@ NUMBERED_PLAIN_HWA_HEADING_RE = re.compile(
     r"^(?P<number>\d+)\s*\uD654\s+(?P<title>.+?)\s*$"
 )
 TWO_LINE_NUMBER_RE = re.compile(r"^제\s*(?P<number>\d+)\s*[화회]\s*$")
+_ZH_NUMERAL = rf"(?:[0-9０-９]+|[{CHINESE_NUMERAL_CHARACTERS}]+)"
+ZH_NUMBERED_HEADING_RE = re.compile(
+    rf"^第\s*(?P<number>{_ZH_NUMERAL})\s*[章回节節]\s*[:：\-—、.．]?\s*(?P<title>.*)$"
+)
+ZH_NAMED_HEADING_RE = re.compile(
+    rf"^(?P<name>序章|序幕|楔子|番外|尾声|尾聲|后记|後記)\s*(?:{_ZH_NUMERAL})?"
+    r"(?:$|(?:\s+|\s*[:：\-—、.．]\s*)(?P<title>.+)$)"
+)
+ZH_MAX_HEADING_CHARS = 40
+ZH_PROSE_END = "。！？!?…”」』"
+ZH_KIND_BY_NAME = {
+    "序章": UNIT_KIND_PROLOGUE, "序幕": UNIT_KIND_PROLOGUE, "楔子": UNIT_KIND_PROLOGUE,
+    "番外": UNIT_KIND_SIDE_STORY,
+    "尾声": UNIT_KIND_EPILOGUE, "尾聲": UNIT_KIND_EPILOGUE,
+    "后记": UNIT_KIND_EPILOGUE, "後記": UNIT_KIND_EPILOGUE,
+}
+HANGUL_RE = re.compile(r"[ᄀ-ᇿ㄰-㆏가-힯]")
+CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 COMPLETION_MARKER_RE = re.compile(r"^<\s*완결\s*>$")
 KIND_VALUES = frozenset((
     UNIT_KIND_CHAPTER,
@@ -240,7 +261,44 @@ class Heading:
     heading_format: str
 
 
-def _recognize_heading(lines, line_number, heading_overrides):
+def detect_heading_script(text):
+    """Return "ko" or "zh" so Korean sources keep their exact patterns."""
+    hangul = len(HANGUL_RE.findall(text))
+    cjk = len(CJK_RE.findall(text))
+    return "ko" if hangul and hangul >= 0.3 * (hangul + cjk) else "zh"
+
+
+def _recognize_chinese_heading(lines, line_number):
+    raw = lines[line_number - 1]
+    line = raw.strip()
+    if not line or len(line) > ZH_MAX_HEADING_CHARS or line[-1] in ZH_PROSE_END:
+        return None
+    normalized = unicodedata.normalize("NFKC", line)
+    match = ZH_NUMBERED_HEADING_RE.fullmatch(normalized)
+    if match is not None:
+        numeral = match.group("number")
+        number = int(numeral) if numeral.isdigit() else None
+        if number is None:
+            try:
+                number = parse_chinese_integer(numeral)
+            except ValueError:
+                return None
+        title = match.group("title").strip() or line
+        return Heading(
+            line_number, line_number, raw, title, UNIT_KIND_CHAPTER, number,
+            "zh_numbered",
+        )
+    match = ZH_NAMED_HEADING_RE.fullmatch(normalized)
+    if match is not None:
+        title = (match.group("title") or "").strip() or match.group("name")
+        return Heading(
+            line_number, line_number, raw, title,
+            ZH_KIND_BY_NAME[match.group("name")], None, "zh_named",
+        )
+    return None
+
+
+def _recognize_heading(lines, line_number, heading_overrides, script="ko"):
     line = lines[line_number - 1].strip()
     override = heading_overrides.get(line_number)
     if override is not None:
@@ -266,6 +324,8 @@ def _recognize_heading(lines, line_number, heading_overrides):
             line_number, end_line, line, title, override["unit_kind"],
             override.get("source_number"), "source_override",
         )
+    if script == "zh":
+        return _recognize_chinese_heading(lines, line_number)
     if PROLOGUE_RE.fullmatch(line):
         return Heading(
             line_number, line_number, lines[line_number - 1], line,
@@ -324,6 +384,7 @@ def extract_txt_text(text, source_sha256, overrides=None, source_file="novel.txt
     lines = text.splitlines()
     if not lines:
         raise TXTExtractionError("TXT source is empty")
+    script = detect_heading_script(text)
     overrides = overrides or {"line_classifications": [], "heading_overrides": []}
     line_rules = {}
     for rule in overrides.get("line_classifications", []):
@@ -370,7 +431,7 @@ def extract_txt_text(text, source_sha256, overrides=None, source_file="novel.txt
                 "text": lines[line_number - 1],
             })
             continue
-        heading = _recognize_heading(lines, line_number, heading_overrides)
+        heading = _recognize_heading(lines, line_number, heading_overrides, script)
         if heading is not None:
             headings.append(heading)
             consumed_title_lines.update(range(line_number + 1, heading.end_line + 1))

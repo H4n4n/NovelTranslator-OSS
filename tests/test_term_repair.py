@@ -6,7 +6,9 @@ import term_repair
 from noveltranslator_core import atomic_write_json
 
 
-def project_with(tmp_path, chapters, glossary):
+def project_with(tmp_path, chapters, glossary, established=True):
+    if established:  # Chapters already using the agreed form, which a repair needs before it changes anything.
+        chapters = {**chapters, **{len(chapters) + n: ("藍衣嘍羅來了。", "A Blue-Clothed Minion came.") for n in (1, 2)}}
     root = tmp_path / "novel"
     (root / "output" / "chapters").mkdir(parents=True)
     (root / "data").mkdir()
@@ -126,6 +128,39 @@ def test_a_fix_cannot_rewrite_another_terms_phrase():
     text = "He traded the Powerful Charm Technique scroll."
     assert term_repair.rejected_reason(fix, text, entry, {"powerful charm technique"}) == "belongs_to_another_term"
     assert term_repair.rejected_reason(fix, text, entry) == ""
+
+
+def test_a_form_the_book_has_not_adopted_is_not_imposed(tmp_path):
+    chapters = {1: ("藍衣嘍羅。", "A goon."), 2: ("藍衣嘍羅！", "Goon!"), 3: ("藍衣嘍羅來了。", "A Blue-Clothed Minion came.")}
+    project = project_with(tmp_path, chapters, GLOSSARY, established=False)
+    send = sender([])
+    summary = term_repair.repair_novel(project, max_usd=1, send=send, log=quiet)
+    assert send.calls == [] and summary["chapters_checked"] == 3
+
+
+def test_an_agreed_form_with_an_explanation_is_not_repaired():
+    glossary = {"視肉": dict(english="Shi Rou (Regenerating Beast)", category="monster", status="provisional")}
+    assert term_repair.repairable_terms(glossary) == {}
+
+
+def test_english_is_not_replaced_by_a_romanization():
+    ordinary = term_repair.ordinary_words(["the anguish of a hate, parting", "the anguish of a hate, parting",
+                                           "the anguish of a hate, parting", "of a minion"])
+    entry = dict(english="Youhinao", category="alias")
+
+    def reason(old, new, english="Youhinao"):
+        return term_repair.rejected_reason({"old": old, "new": new}, old, dict(entry, english=english), (), ordinary)
+    assert reason("death, anguish, birth", "death, Youhinao, birth") == "replaces_english_with_romanization"
+    assert reason("Hate Of Parting came", "Henbieli came", "Henbieli") == "replaces_english_with_romanization"
+    assert reason("Afaf came", "Afafu came", "Afafu") == ""
+    assert reason("an OF Contract", "a KOF Contract", "KOF Contract") == ""
+    assert reason("the anguish came", "the Hate came", "Hate") == ""
+
+
+def test_a_repaired_novel_skips_the_old_disposition_chain(tmp_path):
+    from production_historical_lineage import verify_disposition_lineage
+    (tmp_path / "output" / "term_repairs").mkdir(parents=True)
+    assert verify_disposition_lineage(SimpleNamespace(root=tmp_path), {"chapter": 1}) is None
 
 
 def test_ordinary_word_categories_are_not_repaired():

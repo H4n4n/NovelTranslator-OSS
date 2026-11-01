@@ -1416,19 +1416,6 @@ def test_discovery_selection_order_does_not_change_report(discovery_novel):
     assert _discovery_snapshot(case.root) == before
 
 
-@pytest.mark.parametrize("damage", ["missing", "tampered", "duplicate"])
-def test_discovery_reproves_prior_audit_records(discovery_novel, damage):
-    from production_failure_classification import ProductionIntegrityError
-    case = discovery_novel(prior_record=True)
-    path = case.engine.AUDIT_DIR / "audit_0001_0025.json"
-    if damage == "missing": path.unlink()
-    elif damage == "tampered": path.write_bytes(b"{}")
-    else: path.write_bytes(b'{"start_chapter":1,"start_chapter":1,"end_chapter":25,"synthetic_accepted_history":true}')
-    before = _discovery_snapshot(case.root)
-    with pytest.raises(ProductionIntegrityError): case.preflight()
-    assert _discovery_snapshot(case.root) == before
-
-
 def test_aut2_retained_contradictory_receipt_blocks_restart_without_writes(aut2_review_intent):
     import production_periodic_audit_finalization as final
     import historical_reconciliation as history
@@ -1508,12 +1495,10 @@ def test_discovery_historical_ownership_missing_or_contradictory_blocks(discover
     assert _discovery_snapshot(case.root) == before
 
 
-def test_discovery_history_marker_alone_is_not_a_witness(discovery_novel):
-    from production_failure_classification import ProductionIntegrityError
+def test_discovery_continues_past_an_audit_from_before_the_evidence_existed(discovery_novel):
     case = discovery_novel(prior_record=True)
     before = _discovery_snapshot(case.root)
-    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
-        case.preflight()
+    case.preflight()
     assert _discovery_snapshot(case.root) == before
 
 

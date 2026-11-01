@@ -10,6 +10,11 @@ address, military ranks and units, knights and knight orders, mana, magic,
 spells, skills, techniques, progression ranks, artifacts, weapons, fantasy
 species, organizations, and locations. Formal status or system-like displays
 should remain compact and structurally faithful without inventing an RPG UI.
+Render system messages, which the source marks with 『』, in square brackets with
+no quotation marks, for example [Your Mana Heart has expanded.]. When 『』 marks
+a character speaking a foreign tongue, it is dialogue and takes normal quotation
+marks. Text the source sets in square brackets also stays in square brackets
+with no quotation marks.
 
 Use formal English where the Korean establishes royal, courtly, noble, or
 military ceremony, and natural casual English where characters speak casually.

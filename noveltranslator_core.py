@@ -227,6 +227,9 @@ def calculate_cost_from_token_counts(
     return cost, cache_hits, cache_misses
 
 
+_NAME_PARTS_THAT_ARE_TITLES = frozenset({"남작", "자작", "백작", "후작", "공작", "왕자", "공자", "공주", "기사", "영주", "가문의"})
+
+
 def _glossary_source_forms(chinese_term, category, variant_categories=()):
     forms = [chinese_term]
     category = normalize_category(category)
@@ -236,6 +239,10 @@ def _glossary_source_forms(chinese_term, category, variant_categories=()):
             forms.append(chinese_term[:-2] + "境")
         else:
             forms.append(chinese_term[:-1] + "之境")
+    if category == "character":
+        # A chapter may use only part of a full name, and then still needs the agreed spelling.
+        forms.extend(part for part in re.split(r"[\s·・.]+", chinese_term)
+                     if len(part) >= 2 and part not in _NAME_PARTS_THAT_ARE_TITLES)
     return tuple(dict.fromkeys(forms))
 
 

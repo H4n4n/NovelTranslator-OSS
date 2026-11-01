@@ -122,7 +122,7 @@ def rule_eligibility(rule, policy, safe_categories):
         return "missing_source_identity"
     if not retroactive_replacement_is_safe(old, new, rule["category"], safe_categories):
         return "category_or_generic_safety_gate"
-    if (not old[0].isupper() or old.casefold() in
+    if ((not old[0].isupper() and " " not in old) or old.casefold() in
             set(GENERIC_ARTIFACT_WORDS) | set(NONCOUNTABLE_TERMINOLOGY_FINAL_WORDS)):
         return "generic_or_common_target"
     if " " not in old and "-" not in old and rule["category"] not in {

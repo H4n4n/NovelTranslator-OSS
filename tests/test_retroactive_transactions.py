@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import retroactive_span_planning
 import retroactive_transactions as tx
 from noveltranslator_core import RETROACTIVE_SAFE_CATEGORIES, source_anchored_replacement
 from production_failure_classification import ProductionIntegrityError
@@ -2574,3 +2575,12 @@ def test_parent_link_observations_are_fresh_at_traversal_exit(discovery_novel, m
         with pytest.raises(ProductionIntegrityError, match="LINKED_EVIDENCE"):
             inspect(case.engine)
     assert _discovery_snapshot(case.root) == before
+
+
+def test_a_lowercase_rendering_of_several_words_can_be_corrected_but_a_single_word_cannot():
+    glossary = {"entries": {"甲乙": {"english": "Blue Minion", "category": "monster", "accepted_inflections": ["blue minion", "minion"]}}}
+    policy = retroactive_span_planning.ownership_policy(glossary)
+    rule = {"chinese": "甲乙", "old_english": "blue minion", "new_english": "Blue Minion", "category": "monster"}
+    assert retroactive_span_planning.rule_eligibility(rule, policy, {"monster"}) == ""
+    rule.update(old_english="minion")
+    assert retroactive_span_planning.rule_eligibility(rule, policy, {"monster"}) == "generic_or_common_target"

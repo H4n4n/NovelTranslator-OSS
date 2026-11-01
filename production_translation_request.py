@@ -12,6 +12,7 @@ instructions are transport-independent.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from chapter_library import source_language_prompt_label, source_prompt_heading
@@ -126,25 +127,28 @@ def build_production_translation_messages(
     profile: Any,
     continuity_summary: str | None,
     glossary_text_override: str | None = None,
+    context_in_system: bool = False,
 ) -> list[dict[str, str]]:
     """Return canonical system/user messages for one production translation."""
     if not isinstance(system_prompt, str) or not system_prompt.strip():
         raise ValueError("system_prompt must be a non-empty string")
+    user = build_production_translation_user_prompt(
+        chapter,
+        chapter_numbering=chapter_numbering,
+        source_language=source_language,
+        target_language=target_language,
+        glossary_entries=glossary_entries,
+        profile=profile,
+        continuity_summary=continuity_summary,
+        glossary_text_override=glossary_text_override,
+    )
+    if context_in_system:
+        source_at = user.rindex(chapter["text"])
+        system_prompt = f"{system_prompt}\n\n{user[:source_at].strip()}"
+        user = user[source_at:]
     return [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": build_production_translation_user_prompt(
-                chapter,
-                chapter_numbering=chapter_numbering,
-                source_language=source_language,
-                target_language=target_language,
-                glossary_entries=glossary_entries,
-                profile=profile,
-                continuity_summary=continuity_summary,
-                glossary_text_override=glossary_text_override,
-            ),
-        },
+        {"role": "user", "content": user},
     ]
 
 
@@ -212,12 +216,17 @@ def build_production_translation_request(
     return request
 
 
-def build_translation_request(*, chapter, config, profile, system_prompt,
-                              continuity, model, controls, glossary_entries=None, rendered_glossary=None):
+def filter_refused_marker(data_dir, chapter_number):
+    """Exists once the provider's filter refused this chapter's normal request."""
+    return Path(data_dir) / "filter_refused" / f"{chapter_number:04d}.json"
+
+
+def build_translation_request(*, chapter, config, profile, system_prompt, continuity, model, controls,
+                              glossary_entries=None, rendered_glossary=None, context_in_system=False):
     """Legacy operation controls around the shared canonical message builder."""
     return {"model": model, "messages": build_production_translation_messages(chapter,
         system_prompt=system_prompt, chapter_numbering=config.chapter_numbering if config else "global",
         source_language=config.source_language if config else None,
         target_language=config.target_language if config else None, glossary_entries=glossary_entries or {},
         profile=profile, continuity_summary=continuity.get("summary", ""),
-        glossary_text_override=rendered_glossary), **controls}
+        glossary_text_override=rendered_glossary, context_in_system=context_in_system), **controls}

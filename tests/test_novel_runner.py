@@ -7,6 +7,7 @@ import pytest
 
 import novel_runner
 import provider_retry_policy
+import review_queue
 import translate
 import command_code_provider_transport as transport
 from test_goat_unattended import fake_runtime, novel
@@ -155,6 +156,52 @@ def test_second_ambiguous_failure_blocks_with_message(tmp_path, monkeypatch):
     assert novel_runner.run_novel("fixture", repo_root=tmp_path)["status"] == novel_runner.COMPLETE
 
 
+def refuse_translations(monkeypatch, *, times):
+    """The provider's filter refuses the first translation sends, at no cost."""
+    real_factory = transport.create_command_code_client
+    wires = []
+
+    def factory(**kwargs):
+        client = real_factory(**kwargs)
+        real_create = client.chat.completions.create
+
+        def create(**wire):
+            response = real_create(**wire)
+            if wire.get("max_completion_tokens") == 50000:
+                wires.append(wire)
+                if len(wires) <= times:
+                    response.choices[0].finish_reason = "content_filter"
+                    response.choices[0].message.content = "refused"
+                    response.usage.prompt_tokens = response.usage.completion_tokens = response.usage.total_tokens = 0
+            return response
+        client.chat.completions.create = create
+        return client
+    monkeypatch.setattr(transport, "create_command_code_client", factory)
+    return wires
+
+
+def test_a_filtered_chapter_is_sent_again_with_context_in_the_system_message(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=2)
+    fake_runtime(project, monkeypatch, tmp_path)
+    wires = refuse_translations(monkeypatch, times=1)
+    result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)
+    assert result["status"] == novel_runner.COMPLETE, result
+    assert "ESTABLISHED GLOSSARY" in wires[0]["messages"][-1]["content"]
+    assert "ESTABLISHED GLOSSARY" in wires[1]["messages"][0]["content"]
+    assert "ESTABLISHED GLOSSARY" not in wires[1]["messages"][-1]["content"]
+    assert (project.data_dir / "filter_refused" / "0001.refused_request.json").is_file()
+    assert [item["kind"] for item in review_queue.read_items(project.data_dir) if item["chapter"] == 1] == ["filter_retry"]
+
+
+def test_a_chapter_filtered_twice_stops_with_a_plain_message(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=2)
+    fake_runtime(project, monkeypatch, tmp_path)
+    refuse_translations(monkeypatch, times=2)
+    result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)
+    assert result["status"] == novel_runner.STOPPED and result["reason"] == "provider_refused", result
+    assert progress(project)["last_completed"] == 0
+
+
 def test_crash_after_paid_translation_replays_without_resending(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     failed = []
@@ -172,3 +219,4 @@ def test_crash_after_paid_translation_replays_without_resending(tmp_path, monkey
     result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)
     assert failed and result["status"] == novel_runner.COMPLETE, result
     assert [n for n, kind in operations if kind == "chapter_translation"] == [1, 2, 3]
+

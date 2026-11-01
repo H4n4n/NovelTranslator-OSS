@@ -19,7 +19,7 @@ from production_goat_runtime import normalize_production_request, GoatBudget
 from production_goat_cap_recovery import (
     KIND, REVISION, STRATEGY, policy_sha256, prove_initial, recovery_binding, journal_identity,
 )
-from production_translation_request import build_translation_request
+from production_translation_request import build_translation_request, filter_refused_marker
 from production_provider_runtime import authorization_provider
 from production_provider_contract import PROVIDER_COMMAND_CODE
 from production_uncertain_request_disposition import effective_paid_request_inventory
@@ -60,6 +60,7 @@ def inspect_target(project, *, initial_only=False):
     chapter = chapters[target]
     profile = load_translation_profile(project.config.profile, Path(__file__).parent)
     kwargs = build_translation_request(chapter=chapter, config=project.config, profile=profile,
+        context_in_system=filter_refused_marker(project.data_dir, target).exists(),
         system_prompt=effective_translation_instructions(profile, project.translation_addendum_file),
         glossary_entries=_read_json(project.glossary_file, "glossary")["entries"],
         continuity=_read_json(project.continuity_file, "continuity"), model="deepseek-flash",

@@ -352,9 +352,11 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
     read_object = _inputs.read_object
     try:
         records = selected["baseline"]["history"]["audits"]
-        if any("historical_reconciliation" not in record for record in records):
-            # Audits from before this evidence existed can't be reproved. This is only a
-            # veto list, and each edit is still tied to the source and backed up.
+        if (any("historical_reconciliation" not in record for record in records)
+                or (Path(module.AUDIT_DIR).parent / "term_repairs").is_dir()):
+            # Audits from before this evidence existed can't be reproved, and a term repair
+            # is outside this history. This is only a veto list, and each edit is still
+            # tied to the source and backed up.
             return {}, []
         paths = list(plain(module.AUDIT_DIR).glob("*.finalization.json"))
         intents = [audit_intent(module, path, _inputs=_inputs) for path in paths]

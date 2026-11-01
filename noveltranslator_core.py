@@ -228,6 +228,9 @@ def calculate_cost_from_token_counts(
 
 
 _NAME_PARTS_THAT_ARE_TITLES = frozenset({"남작", "자작", "백작", "후작", "공작", "왕자", "공자", "공주", "기사", "영주", "가문의"})
+_TERM_BRACKET = re.compile(r"[(（](?:[A-Za-z .]+|[一-鿿]+)[)）]")
+_LATIN_BRACKET = re.compile(r"[(（][A-Za-z .]+[)）]")
+_HANGUL = re.compile(r"[가-힣]")
 
 
 def _glossary_source_forms(chinese_term, category, variant_categories=()):
@@ -243,6 +246,10 @@ def _glossary_source_forms(chinese_term, category, variant_categories=()):
         # A chapter may use only part of a full name, and then still needs the agreed spelling.
         forms.extend(part for part in re.split(r"[\s·・.]+", chinese_term)
                      if len(part) >= 2 and part not in _NAME_PARTS_THAT_ARE_TITLES)
+    # A term first seen as 검후(劍侯) or 藍朋克猴人（PN） usually appears later without the bracket.
+    bare = _TERM_BRACKET.sub("", chinese_term)
+    if bare != chinese_term and len(bare) >= 2 and (_HANGUL.search(bare) or _LATIN_BRACKET.search(chinese_term)):
+        forms.append(bare)
     return tuple(dict.fromkeys(forms))
 
 

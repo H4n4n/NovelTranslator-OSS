@@ -1494,8 +1494,9 @@ def translate_chapter(chapter):
     print("=" * 70)
     log_event("chapter_translation_start", chapter=chapter_number, stage="translation")
     start = time.perf_counter()
-    from production_translation_request import build_translation_request
+    from production_translation_request import build_translation_request, filter_refused_marker
     request_kwargs = build_translation_request(chapter=chapter, config=ACTIVE_NOVEL_CONFIG,
+        context_in_system=filter_refused_marker(PAID_REQUEST_JOURNAL_DIR.parent, chapter_number).exists(),
         profile=ACTIVE_PROFILE, system_prompt=system_prompt,
         rendered_glossary=glossary_to_text(relevant_glossary(chinese_text), chapter_number=chapter_number), continuity=continuity, model=MODEL, controls=operation_request_controls("chapter_translation"))
     policy = current_production_operation_policy()

@@ -15,7 +15,9 @@ from novel_project import load_novel_project
 from production_paid_request_journal import allow_another_resend, release_ambiguous_requests
 from production_provider_contract import PROVIDER_COMMAND_CODE
 from production_run_lock import production_run_lock
+from production_translation_request import filter_refused_marker
 from provider_retry_policy import MAX_AMBIGUOUS_RESENDS
+from review_queue import add_item as add_review_item
 
 MODEL = "v41-flash"
 REQUEST_SET_ASIDE_USD = 1.50  # A request with no output limit, priced for its whole context at peak rates.
@@ -115,7 +117,34 @@ def _release_ambiguous(project, next_chapter):
         released = release_ambiguous_requests(project.data_dir / "provider_request_journal", next_chapter=next_chapter,
             save_json=atomic_write_json, max_resends=MAX_AMBIGUOUS_RESENDS)
         _clear_unanswered_review_attempt(project, next_chapter)
+        released["refused"] = _retry_refused_translation(project, next_chapter)
         return released
+
+
+def _retry_refused_translation(project, chapter):
+    """The provider's filter refused this chapter, at no cost. Returns True if it refused twice.
+
+    The filter reads the user message, so the next try moves the glossary and continuity
+    to the system message. The chapter goes on the review list.
+    """
+    record_path = project.data_dir / "provider_request_journal" / f"{chapter:04d}.chapter_translation.json"
+    if not record_path.is_file():
+        return False
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    response = record.get("response") or {}
+    choices = (response.get("raw_response") or {}).get("choices") or [{}]
+    if record.get("status") != "response_recorded" or "content_filter" not in (response.get("finish_reason"), choices[0].get("finish_reason")):
+        return False
+    marker = filter_refused_marker(project.data_dir, chapter)
+    set_aside = marker.with_suffix(".refused_request.json")
+    if set_aside.exists():
+        return True
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(marker, dict(chapter=chapter, operation_id=record["operation_id"], utc=datetime.now(timezone.utc).isoformat()))
+    record_path.replace(set_aside)
+    add_review_item(project.data_dir, chapter=chapter, kind="filter_retry",
+                    detail="The provider's filter refused the normal request, so this chapter was sent again with its glossary and context in a different place.")
+    return False
 
 
 def _set_aside_orphan_pending(project):
@@ -231,6 +260,8 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
         if released["blocked"]:
             return dict(status=STOPPED, blocked_requests=released["blocked"],
                         **describe_stop(project, "ambiguous_request_blocked"))
+        if released["refused"]:
+            return dict(status=STOPPED, **describe_stop(project, "provider_refused"))
         report = build_operator_preflight(novel_id, repo_root=repo_root, model_selection=MODEL,
             provider_selection=PROVIDER_COMMAND_CODE, max_api_calls=PHYSICAL_CALL_LIMIT,
             max_credit_equivalent_usd=remaining)

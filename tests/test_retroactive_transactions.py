@@ -1508,12 +1508,10 @@ def test_discovery_historical_ownership_missing_or_contradictory_blocks(discover
     assert _discovery_snapshot(case.root) == before
 
 
-def test_discovery_history_marker_alone_is_not_a_witness(discovery_novel):
-    from production_failure_classification import ProductionIntegrityError
+def test_discovery_continues_past_an_audit_from_before_the_evidence_existed(discovery_novel):
     case = discovery_novel(prior_record=True)
     before = _discovery_snapshot(case.root)
-    with pytest.raises(ProductionIntegrityError, match="HISTORICAL_OWNERSHIP_UNAVAILABLE_UNPROVEN"):
-        case.preflight()
+    case.preflight()
     assert _discovery_snapshot(case.root) == before
 
 

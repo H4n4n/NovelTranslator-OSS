@@ -139,3 +139,12 @@ def test_aut2_invalid_freshness_never_certifies_editorial_copy(incident, damage)
     with pytest.raises(Exception, match="AUT2"):
         publication.build_publication_epub(project)
     assert snapshot(project) == before
+
+
+def test_only_a_current_format_backup_can_be_an_orphan(tmp_path):
+    from production_periodic_audit_finalization import orphan_transaction_backups
+    known, orphan = "a" * 64, "b" * 64
+    for name in (f"retroactive_{known}", f"retroactive_{orphan}", "retroactive_0001_0025"):
+        (tmp_path / name / "chapters_before").mkdir(parents=True)
+        (tmp_path / name / "chapters_before" / "0001.md").write_text("x", encoding="utf-8")
+    assert [path.name for path in orphan_transaction_backups(tmp_path, {known})] == [f"retroactive_{orphan}"]

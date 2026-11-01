@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from types import SimpleNamespace
 from pathlib import Path
@@ -29,6 +30,15 @@ REVISION = "periodic-audit-local-finalization-v1"
 
 class AuditFinalizationBlocked(ProductionIntegrityError):
     pass
+
+
+
+def orphan_transaction_backups(backup_dir, known_transaction_ids):
+    """Older engines named these folders by audit range, like retroactive_0001_0025, with no plan to match."""
+    return [path for path in Path(backup_dir).glob("retroactive_*")
+            if re.fullmatch(r"[0-9a-f]{64}", path.name.removeprefix("retroactive_"))
+            and path.name.removeprefix("retroactive_") not in known_transaction_ids
+            and any(path.rglob("*.md"))]
 
 
 def require(condition, message):
@@ -182,8 +192,7 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
             # Backups whose immutable plan disappeared cannot authorize a new
             # baseline. Existing other audits are identified by plan provenance.
             known = {read_json(p).get("transaction_id") for p in directory.glob("*.plan.json")}
-            require(not any(p.name.removeprefix("retroactive_") not in known
-                            and any(p.rglob("*.md")) for p in module.BACKUP_DIR.glob("retroactive_*")),
+            require(not orphan_transaction_backups(module.BACKUP_DIR, known),
                     "orphan historical backup without immutable plan")
         plan = _inputs.build_plan(request, originals, module.chapter_map)
     if intent:

@@ -143,7 +143,7 @@ def build_production_translation_messages(
         glossary_text_override=glossary_text_override,
     )
     if context_in_system:
-        source_at = user.rindex(source_language_prompt_label(source_language) + " — ")
+        source_at = user.rindex(chapter["text"])
         system_prompt = f"{system_prompt}\n\n{user[:source_at].strip()}"
         user = user[source_at:]
     return [

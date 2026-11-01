@@ -50,6 +50,8 @@ def build_parser():
                         help="With --start: translate only this many chapters, then stop so you can read them")
     parser.add_argument("--allow-resend", action="store_true",
                         help="After checking your usage, send once more a request that failed twice with no answer")
+    parser.add_argument("--repair-terms", action="store_true",
+                        help="Check finished chapters for missing glossary terms and repair them, up to --budget-usd")
     parser.add_argument("--correct-term", nargs=2, metavar=("SOURCE_TERM", "NEW_ENGLISH"),
                         help="Change a glossary term and its past uses at the next audit")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
@@ -117,6 +119,17 @@ def main(argv=None):
             return 2
         add_request(project.data_dir, chinese=args.correct_term[0], new_english=args.correct_term[1])
         print("Queued. The next audit changes the term and corrects past chapters.")
+        return 0
+    if args.repair_terms:
+        if not args.budget_usd:
+            print("Give the most this repair may spend with --budget-usd.")
+            return 2
+        from command_code_provider_credentials import command_code_api_key_scope
+        from term_repair import repair_novel, send_with_command_code
+        with command_code_api_key_scope() as key:
+            summary = repair_novel(load_novel_project(args.novel, repo_root=args.repo_root),
+                                   max_usd=args.budget_usd, send=send_with_command_code(key))
+        print(json.dumps(summary, indent=2))
         return 0
     if args.allow_resend:
         from novel_runner import allow_resend

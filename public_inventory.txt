@@ -275,6 +275,7 @@ semantic_shadow_runtime.py
 source_language_filter.py
 status_project.py
 strict_terminology_repair.py
+term_repair.py
 test_api.py
 tests/ci_exclusions.json
 tests/conftest.py
@@ -488,6 +489,7 @@ tests/test_semantic_integrity_policy.py
 tests/test_semantic_kinship.py
 tests/test_semantic_shadow_runtime.py
 tests/test_synthetic_goat_batch_witness.py
+tests/test_term_repair.py
 tests/test_terminology_policy.py
 tests/test_title_resolution_plan.py
 tests/test_translate_model_selection.py

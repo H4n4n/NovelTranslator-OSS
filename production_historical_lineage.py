@@ -169,6 +169,14 @@ def verify_audit_obligations(project, *, pending_window=None):
         return
     with proof_input_scope(module) as _inputs:
         intents = _audits(module, _inputs=_inputs)
+        if (project.root / "output" / "term_repairs").is_dir():
+            # A term repair changes chapters outside this history, with its own backups and
+            # log, so the byte chain can't reach them. An unfinished audit still blocks.
+            for intent in intents:
+                unfinished = module.progress.get("last_audited_chapter", 0) < intent["end"]
+                require(not unfinished or pending_window == (intent["start"], intent["end"]),
+                        "unfinished periodic audit requires exact local finalization")
+            return
         blobs = _blobs(module, intents, _inputs=_inputs)
         matched = False
         latest = {}

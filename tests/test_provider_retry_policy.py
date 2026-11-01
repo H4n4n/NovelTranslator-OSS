@@ -25,6 +25,13 @@ def connect_error():
     return error
 
 
+def test_the_openai_clients_own_http_library_counts_as_never_connected():
+    httpx2 = pytest.importorskip("httpx2")
+    error = openai.APIConnectionError(request=REQUEST)
+    error.__cause__ = httpx2.ConnectError("no route")
+    assert policy.classify(error) == policy.WAIT_FOR_NETWORK
+
+
 def read_timeout():
     return openai.APITimeoutError(request=REQUEST)
 

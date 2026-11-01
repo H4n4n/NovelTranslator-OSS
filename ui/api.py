@@ -146,6 +146,7 @@ class App:
             ("POST", ("novels", "*", "pause"), self.pause),
             ("POST", ("novels", "*", "resume"), self.resume),
             ("POST", ("novels", "*", "budget"), self.set_budget),
+            ("POST", ("novels", "*", "allow-resend"), self.allow_resend),
             ("GET", ("novels", "*", "review"), self.review),
             ("POST", ("novels", "*", "review", "resolve"), self.resolve_flag),
             ("GET", ("novels", "*", "glossary"), self.glossary),
@@ -240,7 +241,7 @@ class App:
         if not last:
             return dict(state="ready", message="", action="")
         return dict(state=LAST_RUN_STATE.get(last.get("status"), "stopped"), message=last.get("message", ""),
-                    action=last.get("action", ""), blockers=last.get("blockers") or [])
+                    action=last.get("action", ""), blockers=last.get("blockers") or [], reason=last.get("reason"))
 
     def _summary(self, project):
         progress = self._progress(project)
@@ -400,6 +401,13 @@ class App:
             return dict(paused=False, started=False, queued=False,
                         message="The pause is off. This novel needs more budget before it can start.")
         return dict(paused=False, **self._start_or_queue(project, None, None))
+
+    def allow_resend(self, request, query, novel_id):
+        project = self._project(novel_id)
+        if self.workers.running(project):
+            raise ApiError(409, "This novel is running.")
+        novel_runner.allow_resend(project)
+        return self._start_or_queue(project, None, None)
 
     def set_budget(self, request, query, novel_id):
         project = self._project(novel_id)

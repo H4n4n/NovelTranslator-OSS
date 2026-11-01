@@ -241,6 +241,15 @@ def test_pause_and_resume_use_the_flag_and_leave_a_waiting_run_alone(tmp_path, p
     assert len(holder.started) == 1
 
 
+def test_allow_resend_restarts_a_stopped_novel(tmp_path, project, holder, monkeypatch):
+    app = make_app(tmp_path)
+    allowed = []
+    monkeypatch.setattr(novel_runner, "allow_resend", allowed.append)
+    monkeypatch.setattr(app, "_start_or_queue", lambda project, budget, trial: dict(started=True, queued=False))
+    assert ok(app, "POST", "novels/fixture/allow-resend")["started"] is True
+    assert [item.config.id for item in allowed] == ["fixture"]
+
+
 def test_paused_novel_wont_start_and_resume_starts_it_if_budget_remains(tmp_path, project, holder):
     app = make_app(tmp_path, command=holder.command)
     ok(app, "POST", "novels/fixture/pause")

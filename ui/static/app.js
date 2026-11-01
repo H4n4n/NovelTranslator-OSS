@@ -298,7 +298,11 @@ async function novelPage(id) {
       h("p", {}, h("span", { class: `badge ${novel.state}` }, novel.state_text)),
       novel.message ? h("div", { class: novel.state === "stopped" ? "notice bad" : "notice" },
         h("p", {}, novel.message), novel.action ? h("p", {}, novel.action) : null,
-        (novel.blockers || []).map((text) => h("p", {}, String(text)))) : null,
+        (novel.blockers || []).map((text) => h("p", {}, String(text))),
+        novel.reason === "ambiguous_request_blocked" ? h("button", { type: "button", onclick: () => act(async () => {
+          await api(`novels/${encodeId(id)}/allow-resend`, { json: {} });
+          await draw();
+        }) }, "Allow the resend and continue") : null) : null,
       progressBar(novel.completed, novel.final),
       h("dl", { class: "facts" },
         fact("Translated", `${novel.completed} of ${novel.final} chapters`),

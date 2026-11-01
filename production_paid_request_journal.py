@@ -484,9 +484,34 @@ def _resend_counts(journal_dir: Path | str) -> dict[str, int]:
     except FileNotFoundError:
         return counts
     for line in lines:
-        operation_id = json.loads(line)["operation_id"]
-        counts[operation_id] = counts.get(operation_id, 0) + 1
+        entry = json.loads(line)
+        step = -1 if entry.get("owner_allowed") else 1
+        counts[entry["operation_id"]] = counts.get(entry["operation_id"], 0) + step
     return counts
+
+
+def allow_another_resend(journal_dir: Path | str, *, next_chapter: int, max_resends: int) -> list[str]:
+    """The owner checked their usage: give each blocked request one more resend.
+
+    The caller holds the novel's writer lock.
+    """
+    directory = Path(journal_dir)
+    allowed: list[str] = []
+    if not directory.is_dir():
+        return allowed
+    counts = _resend_counts(directory)
+    for path in sorted(directory.glob("*.json")):
+        record = _validate_common_record(_load_json_object(path), path=path)
+        if (record["status"] not in {"started", "uncertain"} or record.get("chapter", 0) < next_chapter
+                or counts.get(record["operation_id"], 0) < max_resends):
+            continue
+        with resend_log_path(directory).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"operation_id": record["operation_id"], "file": path.name,
+                                     "owner_allowed": True, "utc": _timestamp()}) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        allowed.append(path.name)
+    return allowed
 
 
 def release_ambiguous_requests(

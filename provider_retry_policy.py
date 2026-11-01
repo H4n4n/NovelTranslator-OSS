@@ -29,7 +29,7 @@ MAX_AMBIGUOUS_RESENDS = 1
 
 _OUT_OF_CREDIT = re.compile(r"insufficient|out of credit|no credits|payment required|top.?up", re.I)
 _USAGE_LIMIT = re.compile(r"usage limit|limit for your plan|your limit resets|resets at|quota", re.I)
-_NEVER_CONNECTED = (httpx.ConnectError, httpx.ConnectTimeout)
+_NEVER_CONNECTED = {"ConnectError", "ConnectTimeout"}  # By name: the openai client's HTTP library isn't always httpx.
 
 
 class DefiniteProviderFailure(RuntimeError):
@@ -77,7 +77,7 @@ def classify(exc):
             return RETRY
         return STOP
     if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)) or isinstance(exc, httpx.TransportError):
-        if any(isinstance(item, _NEVER_CONNECTED) for item in _chain(exc)):
+        if any(type(item).__name__ in _NEVER_CONNECTED for item in _chain(exc)):
             return WAIT_FOR_NETWORK
         return RESEND_ONCE
     return None

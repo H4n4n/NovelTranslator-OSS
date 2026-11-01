@@ -444,8 +444,10 @@ Generated locally from committed translation files.
             named_heading=named_unit,
         )
 
-        chapter.add_item(
-            style
+        chapter.add_link(
+            href="../style/main.css",
+            rel="stylesheet",
+            type="text/css",
         )
 
         book.add_item(

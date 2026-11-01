@@ -99,6 +99,14 @@ def test_ming_epub_contains_only_selected_ming_chapters(tmp_path):
     assert "OTHER-ONLY-MARKER" not in rendered
 
 
+def test_chapters_link_to_the_stylesheet_that_is_in_the_book(tmp_path):
+    project = create_project(tmp_path, "novel_a")
+    commit_chapters(project, {1: "Chapter 1\n\nBody"})
+    output = checkpoint.build_epub(project)
+    assert 'href="../style/main.css"' in epub_member_text(output, "chapters/chapter_0001.xhtml")
+    assert "line-height" in epub_member_text(output, "style/main.css")
+
+
 def test_two_novels_can_both_have_chapter_one_without_cross_contamination(tmp_path):
     first = create_project(tmp_path, "novel_a")
     second = create_project(tmp_path, "novel_b")

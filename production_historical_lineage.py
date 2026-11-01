@@ -210,6 +210,8 @@ def verify_disposition_lineage(project, original, *, pending_window=None):
     Original disposition/receipt/journal validation remains with the caller.
     """
     from goat_periodic_audit_finalize_plan import local_module
+    if (project.root / "output" / "term_repairs").is_dir():
+        return  # A term repair changes chapters outside this chain, with its own backups and log.
     module = local_module(project)
     if project.is_legacy and (project.root / "output/retroactive_fixes/standalone_lineage").exists():
         module.ACTIVE_NOVEL_CONFIG = None

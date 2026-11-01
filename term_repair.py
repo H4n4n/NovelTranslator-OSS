@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,12 +20,15 @@ from production_run_lock import production_run_lock
 from review_queue import add_item
 
 REPAIR_DIR = "term_repairs"
-REVISION = 4  # A saved answer from an older revision is asked again.
+REVISION = 5  # A saved answer from an older revision is asked again.
 # Their words are too ordinary to repair reliably: "in a daze" isn't always the Stun effect.
 ORDINARY_WORD_CATEGORIES = frozenset({"status effect", "rank", "stat"})
 PERSON_CATEGORIES = frozenset({"character", "alias", "historical person"})
 NAME_CATEGORIES = frozenset({"character", "alias", "faction", "title", "noble title", "organization", "location", "clan", "sect"})
 MAX_OLD_CHARS = 400
+ORDINARY_WORD_MIN_CHAPTERS = 3
+WORD = re.compile(r"[^\W\d_]+")
+LOWERCASE_WORD = re.compile(r"(?<![\w'’-])[a-z]+(?!\w)")
 MAX_PASSAGES_PER_TERM = 2
 MAX_PASSAGE_CHARS = 500
 MAX_COMPLETION_TOKENS = 12000
@@ -90,17 +94,54 @@ def term_is_present(entry, folded):
 
 
 def repairable_terms(entries):
-    return {key: value for key, value in entries.items() if value.get("english")
+    # An agreed form with an explanation in brackets reads badly when pasted into a sentence.
+    return {key: value for key, value in entries.items() if value.get("english") and "(" not in value["english"]
             and value.get("status") != "contextual" and not value.get("alias_of")
             and value.get("category") not in ORDINARY_WORD_CATEGORIES}
 
 
 def find_missing_terms(source, english, terms):
     """Terms this chapter's source owns, with none of their agreed forms in the English."""
+    return _terms_in_chapter(source, english, terms)[1]
+
+
+def _terms_in_chapter(source, english, terms):
+    """The terms this chapter's source owns: (written the agreed way, not)."""
     claims = _claim_longest_non_overlapping_occurrences(source, [
         (key, list(_glossary_source_forms(key, value.get("category", "")))) for key, value in terms.items()])
     folded = _normalized(english)
-    return [term for term, anchors in claims.items() if anchors and not term_is_present(terms[term], folded)]
+    owned = [term for term, anchors in claims.items() if anchors]
+    return ([term for term in owned if term_is_present(terms[term], folded)],
+            [term for term in owned if not term_is_present(terms[term], folded)])
+
+
+def established_terms(per_chapter):
+    """Terms the book mostly writes the agreed way.
+
+    Repair brings stray chapters into line with the book. It doesn't impose a form the book
+    hasn't adopted, because a glossary entry that is rarely used is as likely to be wrong as the prose.
+    """
+    using, lacking = Counter(), Counter()
+    for present, missing in per_chapter:
+        using.update(present)
+        lacking.update(missing)
+    return {term for term in using if using[term] >= lacking[term]}
+
+
+def ordinary_words(texts):
+    """How many chapters use each word in lowercase, which marks it as ordinary English."""
+    counts = Counter()
+    for text in texts:
+        counts.update(set(LOWERCASE_WORD.findall(text)))
+    return counts
+
+
+def _replaces_english_with_romanization(old, new, ordinary):
+    new_words = {word.lower() for word in WORD.findall(new)}
+    old_words = {word.lower() for word in WORD.findall(old)}
+    removed = [word.lower() for word in WORD.findall(old) if word.lower() not in new_words and not word.isupper()]
+    added = new_words - old_words
+    return any(ordinary[word] >= 1 for word in removed) and any(ordinary[word] < ORDINARY_WORD_MIN_CHAPTERS for word in added)
 
 
 def _passages(source, term, entry):
@@ -125,10 +166,11 @@ def parse_answer(content):
     return answer
 
 
-def rejected_reason(fix, text, entry, others=()):
+def rejected_reason(fix, text, entry, others=(), ordinary=Counter()):
     """Why this fix can't be applied, or an empty string if it's safe.
 
     others holds the English of the other glossary terms, which a fix must not rewrite.
+    ordinary is what ordinary_words returns for the book.
     """
     old, new = fix.get("old"), fix.get("new")
     if not isinstance(old, str) or not isinstance(new, str) or not old or not new.strip():
@@ -149,6 +191,8 @@ def rejected_reason(fix, text, entry, others=()):
         return "only_changes_number_or_adds_words"
     if len(new) > len(old) + len(entry["english"]) + 12:
         return "too_much_added"
+    if _replaces_english_with_romanization(old, new, ordinary):
+        return "replaces_english_with_romanization"
     return ""
 
 
@@ -157,14 +201,14 @@ def _plural_only(old, new):
     return words(old) == words(new)
 
 
-def apply_fixes(project, chapter, text, answer, terms):
+def apply_fixes(project, chapter, text, answer, terms, ordinary=Counter()):
     applied, rejected = [], []
     for fix in answer.get("fixes") or []:
         entry = terms.get(fix.get("term")) if isinstance(fix, dict) else None
         others = () if entry is None else {_normalized(value["english"]) for value in terms.values()
                                            if value is not entry and " " in value["english"]
                                            and _normalized(value["english"]) not in _normalized(entry["english"])}
-        reason = "unknown_term" if entry is None else rejected_reason(fix, text, entry, others)
+        reason = "unknown_term" if entry is None else rejected_reason(fix, text, entry, others, ordinary)
         if reason:
             rejected.append({"fix": fix, "reason": reason})
             continue
@@ -181,7 +225,8 @@ def apply_fixes(project, chapter, text, answer, terms):
 
 def _add_cost(project, stats):
     progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
-    progress["rate_correct_cost_usd"] = progress.get("rate_correct_cost_usd", 0.0) + stats["rate_correct_cost_usd"]
+    for field in ("rate_correct_cost_usd", "estimated_cost_usd"):
+        progress[field] = progress.get(field, 0.0) + stats["rate_correct_cost_usd"]
     for field, key in (("total_prompt_tokens", "prompt_tokens"), ("total_completion_tokens", "completion_tokens")):
         progress[field] = progress.get(field, 0) + stats[key]
     atomic_write_json(project.progress_file, progress)
@@ -196,11 +241,15 @@ def repair_novel(project, *, max_usd, send, log=print):
         terms = repairable_terms(json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"])
         directory = repair_dir(project)
         directory.mkdir(parents=True, exist_ok=True)
-        for chapter in range(1, progress["last_completed"] + 1):
-            path = project.chapter_dir / f"{chapter:04d}.md"
-            text = path.read_bytes().decode("utf-8")
+        chapters = range(1, progress["last_completed"] + 1)
+        texts = {chapter: (project.chapter_dir / f"{chapter:04d}.md").read_bytes().decode("utf-8") for chapter in chapters}
+        per_chapter = {chapter: _terms_in_chapter(sources[chapter], texts[chapter], terms) for chapter in chapters}
+        established = established_terms(per_chapter.values())
+        ordinary = ordinary_words(texts.values())
+        for chapter in chapters:
+            text = texts[chapter]
             summary["chapters_checked"] += 1
-            missing = find_missing_terms(sources[chapter], text, terms)
+            missing = [term for term in per_chapter[chapter][1] if term in established]
             record_path = directory / f"{chapter:04d}.json"
             record = json.loads(record_path.read_text(encoding="utf-8")) if record_path.is_file() else None
             before = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -238,7 +287,7 @@ def repair_novel(project, *, max_usd, send, log=print):
                 record.update(status="done", outcome="unreadable_answer", error=str(exc)[:200])
                 atomic_write_json(record_path, record)
                 continue
-            applied, rejected = apply_fixes(project, chapter, text, answer, terms)
+            applied, rejected = apply_fixes(project, chapter, text, answer, terms, ordinary)
             record.update(status="done", outcome="applied", applied=applied, rejected=rejected, fine=answer.get("fine") or [])
             atomic_write_json(record_path, record)
             summary["fixes_applied"] += len(applied)

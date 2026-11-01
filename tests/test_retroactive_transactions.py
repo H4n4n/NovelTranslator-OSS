@@ -2569,3 +2569,10 @@ def test_a_lowercase_rendering_of_several_words_can_be_corrected_but_a_single_wo
     assert retroactive_span_planning.rule_eligibility(rule, policy, {"monster"}) == ""
     rule.update(old_english="minion")
     assert retroactive_span_planning.rule_eligibility(rule, policy, {"monster"}) == "generic_or_common_target"
+
+
+def test_the_quick_presence_check_never_hides_a_competing_rendering():
+    import retroactive_span_planning as planning
+    for text, phrase in (("The GREAT Hall", "great hall"), ("Stra\u00dfe", "STRASSE"), ("D\u0131ng", "Ding"), ("\u017fword", "Sword")):
+        if planning.target_spans(text, phrase, reserve_case_variants=True):
+            assert planning._folded_phrase(phrase) in planning._folded(text)

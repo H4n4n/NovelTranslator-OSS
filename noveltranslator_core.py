@@ -250,6 +250,9 @@ def _glossary_source_forms(chinese_term, category, variant_categories=()):
     bare = _TERM_BRACKET.sub("", chinese_term)
     if bare != chinese_term and len(bare) >= 2 and (_HANGUL.search(bare) or _LATIN_BRACKET.search(chinese_term)):
         forms.append(bare)
+    # 甲之乙 is often written 甲乙 later in the same book.
+    if "之" in chinese_term[1:-1] and len(chinese_term) >= 4:
+        forms.append(chinese_term.replace("之", ""))
     return tuple(dict.fromkeys(forms))
 
 

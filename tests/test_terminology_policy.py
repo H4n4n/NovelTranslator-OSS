@@ -199,6 +199,25 @@ def test_a_chapter_using_part_of_a_full_name_still_gets_the_entry():
     assert chosen("하든이 왔다.") == ["Baron Harden"]
 
 
+def test_a_term_first_seen_with_a_bracket_is_found_without_it():
+    entries = {
+        "달검(月劍)의 명인(名人)": {"english": "Moon Sword Master", "category": "title", "status": "provisional"},
+        "업(業)": {"english": "karma", "category": "system term", "status": "provisional"},
+        "돌거인（GOLEM）": {"english": "Stone Giant", "category": "monster", "status": "provisional"},
+        "探測器（E型）": {"english": "Detector (Type E)", "category": "item", "status": "provisional"},
+        "雷石（山）": {"english": "Thunder Stone (Mountain)", "category": "item", "status": "provisional"},
+    }
+    chosen = lambda text: [item["english"] for item in core.relevant_glossary_entries(text, entries)]
+    assert chosen("달검의 명인이 왔다.") == ["Moon Sword Master"]
+    assert chosen("돌거인이 왔다.") == ["Stone Giant"]
+    assert chosen("업이 쌓였다. 探測器。雷石。") == []
+
+
+def test_a_term_written_with_zhi_is_found_without_it():
+    entries = {"XY之契約": {"english": "XY Pact", "category": "item", "status": "provisional"}}
+    assert [item["english"] for item in core.relevant_glossary_entries("雙方簽了XY契約。", entries)] == ["XY Pact"]
+
+
 def test_reporting_separates_overlap_acceptance_and_repair():
     entries = youxi(strict_qa=True, accepted_inflections=["Youxi clansman"], auto_repair=False)
     entries.update({

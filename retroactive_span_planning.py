@@ -111,6 +111,16 @@ def _phrase_pattern(phrase, flags):
     return re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", flags)
 
 
+def _folded(text):
+    # Dotless i is the one letter IGNORECASE matches that casefold keeps apart.
+    return text.casefold().replace("ı", "i")
+
+
+@lru_cache(maxsize=16384)
+def _folded_phrase(phrase):
+    return _folded(phrase)
+
+
 def target_spans(text, phrase, *, reserve_case_variants=False):
     """Exact phrase boundaries include Unicode letters/digits and underscores."""
     return [(match.start(), match.end()) for match in _phrase_pattern(
@@ -168,8 +178,9 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
                          for claim in _claim_longest_non_overlapping_occurrences(
                              source, [(key, item["source_forms"])]
                          ).get(key, [])]
+    folded_text = _folded(text)
     families = [(key, target, span) for key, item in policy.items()
-                for target in item["targets"]
+                for target in item["targets"] if _folded_phrase(target) in folded_text
                 for span in target_spans(text, target, reserve_case_variants=True)]
     # Include proposed old/new targets in competing families even if the staged
     # glossary has not installed them yet. Never chain historical corrections.

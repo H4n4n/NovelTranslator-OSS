@@ -227,6 +227,7 @@ def build_operator_preflight(
     report["completed_chapter_count"] = preflight.get(
         "completed_chapter_count", 0
     )
+    report["audited_through"] = preflight.get("audited_through", report["completed_chapter_count"])
     report["committed_output_count"] = preflight.get(
         "committed_output_count", 0
     )
@@ -541,7 +542,8 @@ def build_operator_preflight(
             "completed chapter count exceeds configured final chapter: "
             f"{completed} > {final_chapter}",
         )
-    if completed == final_chapter:
+    # A book's last audit can stop partway, on its budget for example, and must still finish.
+    if completed == final_chapter and report["audited_through"] >= final_chapter:
         report["status"] = STATUS_COMPLETE
         report["recommended_action"] = "none"
         return report

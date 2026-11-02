@@ -407,6 +407,17 @@ def test_real_complete_project_routes_to_complete(
     assert report["recommended_action"] == "none"
 
 
+def test_finished_chapters_with_unfinished_last_audit_are_not_complete(tmp_path):
+    project = _real_project(tmp_path, completed=(1, 2))
+    progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
+    progress["last_audited_chapter"] = 1
+    project.progress_file.write_text(json.dumps(progress), encoding="utf-8")
+
+    report = operator.build_operator_preflight("fixture", repo_root=tmp_path, model_selection="pro")
+
+    assert report["status"] != operator.STATUS_COMPLETE
+
+
 def test_clean_unfinished_project_routes_to_production(
     tmp_path,
     monkeypatch,

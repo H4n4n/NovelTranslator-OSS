@@ -49,7 +49,7 @@ def correct_chapter(source, text, replacements):
 
     def replace(match):
         old, new = match.group(1), pairs[match.group(1)]
-        if text.startswith(new, match.start()):
+        if len(new) > len(old) and text.startswith(new, match.start()):
             return old  # Already corrected, as when the new form adds English in brackets.
         changes.append({"offset": match.start(), "old": old, "new": new})
         return new

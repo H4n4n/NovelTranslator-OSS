@@ -1,0 +1,132 @@
+{
+  "id": "korean_historical",
+  "display_name": "Korean Historical",
+  "description": "Korean historical and alternate-history fiction set in Joseon or the Korean Empire, with precise court, military, diplomatic, and period terminology.",
+  "translation_policy": {
+    "style": [
+      "Natural, polished English historical prose faithful to the Korean source.",
+      "Preserve narrator voice, humor, characterization, hierarchy, and shifts between courtly, military, diplomatic, and casual registers, including a modern narrator's voice inside a historical setting.",
+      "Keep Joseon institutions, offices, and customs conceptually Korean in clear English rather than replacing them with Western or Chinese equivalents."
+    ],
+    "terminology_preservation_rules": [
+      "Keep royal titles, forms of address, court offices, government bodies, military ranks and units, factions, treaties, historical events, and recurring period terms stable.",
+      "Keep 전하 (Your Highness) and 폐하 (Your Majesty) distinct; the change from kingdom to empire is meaningful.",
+      "Distinguish formal named concepts from ordinary vocabulary and reject generic objects, actions, and one-off descriptions."
+    ],
+    "pinyin_preference": "Do not apply Chinese pinyin policy to Korean. Korean personal and place names use Revised Romanization, surname first, except well-known historical names with an established English form. Chinese names use pinyin, Japanese names use Hepburn without long-vowel marks, and Western names keep their original spelling.",
+    "semantic_translation_preference": "Translate Joseon offices, institutions, ranks, and titles into their standard English renderings, never bare romanization or a Western substitute; keep Korean words that English dictionaries already use, such as yangban, and translate the rest."
+  },
+  "auxiliary_policy": {
+    "terminology_distinctions": [
+      "Korean names and places use Revised Romanization, surname first, unless a well-known historical name has an established English form.",
+      "Joseon offices and institutions take standard English renderings: 승정원 Royal Secretariat, 도승지 Chief Royal Secretary, 의정부 State Council, 영의정 Chief State Councillor; no Western substitutes such as Prime Minister.",
+      "전하 is Your Highness and 폐하 is Your Majesty; never merge them.",
+      "Chinese names use pinyin, Japanese names use Hepburn without long-vowel marks, Western names keep their original spelling.",
+      "Keep real historical people, treaties, and events under their established English names."
+    ]
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "historical person",
+      "title",
+      "royal title",
+      "government office",
+      "government body",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "state",
+      "location",
+      "treaty",
+      "historical event",
+      "weapon",
+      "ship",
+      "artifact",
+      "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "historical person",
+      "title",
+      "royal title",
+      "government office",
+      "government body",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "state",
+      "location",
+      "treaty",
+      "historical event"
+    ],
+    "review_priorities": [
+      "Korean, Chinese, Japanese, and Western name spellings under the profile's romanization rules.",
+      "Royal titles and forms of address, especially Your Highness versus Your Majesty.",
+      "Court offices, government bodies, military ranks and units in standard English renderings.",
+      "States, factions, organizations, treaties, historical events, and locations.",
+      "Named weapons, ships, and recurring period or technical terms.",
+      "Reject generic vocabulary, ordinary objects, and one-off descriptions."
+    ],
+    "retroactive_safe_categories": [
+      "character",
+      "alias",
+      "historical person",
+      "title",
+      "royal title",
+      "government office",
+      "government body",
+      "military rank",
+      "military unit",
+      "organization",
+      "faction",
+      "state",
+      "location",
+      "treaty",
+      "historical event",
+      "weapon",
+      "ship",
+      "artifact",
+      "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "government office",
+      "government body",
+      "military unit",
+      "organization",
+      "treaty",
+      "historical event",
+      "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "artifact": ["ordinary object", "common object"],
+      "weapon": ["ordinary weapon", "common weapon"],
+      "location": ["ordinary room", "generic building"],
+      "specialized recurring term": ["ordinary duty", "daily work", "generic action"]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "treaty",
+      "historical event"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Name consistency under the profile's romanization rules.",
+      "Royal titles and forms of address, including Your Highness versus Your Majesty.",
+      "Court offices, government bodies, military ranks and units: standard English, no bare romanization or Western substitutes.",
+      "States, factions, organizations, treaties, historical events, and locations.",
+      "Named weapons, ships, and recurring period or technical terms.",
+      "Register consistency across courtly, military, diplomatic, and casual scenes.",
+      "Residual Hangul, Hanja, or other source script in reader-facing English."
+    ]
+  }
+}

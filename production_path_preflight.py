@@ -334,6 +334,7 @@ def run_production_path_preflight(
         "profile": profile.id,
         "final_chapter": project.config.final_chapter,
         "completed_chapter_count": len(progress.get("completed", []) or []),
+        "audited_through": progress.get("last_audited_chapter", len(progress.get("completed", []) or [])),
         "committed_output_count": len(committed_files),
         "requested_model": runtime.get("requested_model", ""),
         "effective_model": runtime.get("effective_model", ""),

@@ -35,6 +35,13 @@ def test_a_form_already_carrying_the_english_is_left_alone():
     assert len(changes) == 1
 
 
+def test_a_correction_that_removes_a_bracket_applies_once():
+    removal = [{"source": ["經略"], "old": "Military Superintendent (Jinglue)", "new": "Military Superintendent"}]
+    text, changes = approved_corrections.correct_chapter("經略", "The Military Superintendent (Jinglue) arrived.", removal)
+    assert text == "The Military Superintendent arrived." and len(changes) == 1
+    assert approved_corrections.correct_chapter("經略", text, removal) == (text, [])
+
+
 def test_a_lowercase_term_also_changes_at_the_start_of_a_sentence():
     text, _ = approved_corrections.correct_chapter("鳥銃", "Bird guns fired. More bird guns.", REPLACEMENTS)
     assert text == "Fowling muskets fired. More fowling muskets."

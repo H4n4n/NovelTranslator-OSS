@@ -1486,6 +1486,17 @@ def current_review_checkpoint_identity(
     )
 
 
+def previous_chapter_heading(chapter_number):
+    """The previous committed chapter's source and English headings, so headings stay uniform."""
+    previous = (chapter_map or {}).get(chapter_number - 1)
+    path = OUTPUT_DIR / f"{chapter_number - 1:04d}.md"
+    if not previous or not path.exists():
+        return None
+    english = next((line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()), "")
+    source = (previous.get("heading") or "").strip()
+    return (source, english) if source and english else None
+
+
 def translate_chapter(chapter):
     chapter_number = chapter["chapter"]
     chinese_text = chapter["text"]
@@ -1498,7 +1509,8 @@ def translate_chapter(chapter):
     request_kwargs = build_translation_request(chapter=chapter, config=ACTIVE_NOVEL_CONFIG,
         context_in_system=filter_refused_marker(PAID_REQUEST_JOURNAL_DIR.parent, chapter_number).exists(),
         profile=ACTIVE_PROFILE, system_prompt=system_prompt,
-        rendered_glossary=glossary_to_text(relevant_glossary(chinese_text), chapter_number=chapter_number), continuity=continuity, model=MODEL, controls=operation_request_controls("chapter_translation"))
+        rendered_glossary=glossary_to_text(relevant_glossary(chinese_text), chapter_number=chapter_number), continuity=continuity, model=MODEL, controls=operation_request_controls("chapter_translation"),
+        previous_heading=previous_chapter_heading(chapter_number))
     policy = current_production_operation_policy()
     result = run_translation_stage(
         policy=policy, initial_kwargs=request_kwargs,

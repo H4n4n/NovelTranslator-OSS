@@ -84,6 +84,7 @@ def build_production_translation_user_prompt(
     profile: Any,
     continuity_summary: str | None,
     glossary_text_override: str | None = None,
+    previous_heading: tuple[str, str] | None = None,
 ) -> str:
     """Build the exact transport-independent user prompt for one chapter."""
     source_text = chapter.get("text")
@@ -101,6 +102,15 @@ def build_production_translation_user_prompt(
         production_glossary_text(source_text, glossary_entries, profile,
                                  chapter_number=chapter["chapter"]))
     continuity_text = normalized_continuity_text(continuity_summary)
+    heading_text = ""
+    if previous_heading:
+        heading_text = (
+            "PREVIOUS CHAPTER HEADING:\n\n"
+            f"Source: {previous_heading[0]}\nEnglish: {previous_heading[1]}\n"
+            "Format this chapter's heading the same way. If this chapter continues "
+            "the previous chapter's titled part, keep the same English title and "
+            "change only the part number.\n\n"
+        )
     return f"""
 ESTABLISHED GLOSSARY FOR THIS CHAPTER:
 
@@ -110,7 +120,7 @@ RECENT CONTINUITY:
 
 {continuity_text}
 
-{source_label} — {source_heading}:
+{heading_text}{source_label} — {source_heading}:
 
 {source_text}
 """.strip()
@@ -128,6 +138,7 @@ def build_production_translation_messages(
     continuity_summary: str | None,
     glossary_text_override: str | None = None,
     context_in_system: bool = False,
+    previous_heading: tuple[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Return canonical system/user messages for one production translation."""
     if not isinstance(system_prompt, str) or not system_prompt.strip():
@@ -141,6 +152,7 @@ def build_production_translation_messages(
         profile=profile,
         continuity_summary=continuity_summary,
         glossary_text_override=glossary_text_override,
+        previous_heading=previous_heading,
     )
     if context_in_system:
         source_at = user.rindex(chapter["text"])
@@ -222,11 +234,13 @@ def filter_refused_marker(data_dir, chapter_number):
 
 
 def build_translation_request(*, chapter, config, profile, system_prompt, continuity, model, controls,
-                              glossary_entries=None, rendered_glossary=None, context_in_system=False):
+                              glossary_entries=None, rendered_glossary=None, context_in_system=False,
+                              previous_heading=None):
     """Legacy operation controls around the shared canonical message builder."""
     return {"model": model, "messages": build_production_translation_messages(chapter,
         system_prompt=system_prompt, chapter_numbering=config.chapter_numbering if config else "global",
         source_language=config.source_language if config else None,
         target_language=config.target_language if config else None, glossary_entries=glossary_entries or {},
         profile=profile, continuity_summary=continuity.get("summary", ""),
-        glossary_text_override=rendered_glossary, context_in_system=context_in_system), **controls}
+        glossary_text_override=rendered_glossary, context_in_system=context_in_system,
+        previous_heading=previous_heading), **controls}

@@ -439,6 +439,7 @@ tests/test_pending_provider_completion_gate.py
 tests/test_pending_recovery_execute.py
 tests/test_pending_recovery_plan.py
 tests/test_post_guhuo_hardening.py
+tests/test_previous_heading.py
 tests/test_private_inputs.py
 tests/test_production_auxiliary_paid_request.py
 tests/test_production_candidate_preparation.py

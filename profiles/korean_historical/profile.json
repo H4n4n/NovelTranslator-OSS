@@ -43,6 +43,7 @@
       "location",
       "treaty",
       "historical event",
+      "technique",
       "weapon",
       "ship",
       "artifact",
@@ -114,8 +115,7 @@
   "capitalization": {
     "style": "capitalize_every_word",
     "formal_named_categories": [
-      "treaty",
-      "historical event"
+      "technique"
     ]
   },
   "audit": {

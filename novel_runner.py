@@ -58,11 +58,22 @@ def _cost(progress):
     return float(progress.get("rate_correct_cost_usd", 0.0))
 
 
+def _spent(project):
+    """An audit's requests only reach the progress total when the audit finishes."""
+    progress = _progress(project)
+    start = progress.get("last_audited_chapter", 0) + 1
+    unfinished = 0.0
+    for path in (project.root / "output" / "audits").glob(f"audit_{start:04d}_*.checkpoint.json"):
+        records = json.loads(path.read_text(encoding="utf-8")).get("attempt_records", [])
+        unfinished += sum(float((record.get("stats") or {}).get("rate_correct_cost_usd") or 0) for record in records)
+    return _cost(progress) + unfinished
+
+
 def set_budget(project, limit_usd):
     """Allow limit_usd of spending from now on, replacing any earlier budget."""
     if type(limit_usd) not in (int, float) or limit_usd <= 0:
         raise ValueError("budget must be a positive number of USD")
-    value = {"limit_usd": float(limit_usd), "baseline_cost_usd": _cost(_progress(project)),
+    value = {"limit_usd": float(limit_usd), "baseline_cost_usd": _spent(project),
              "set_utc": datetime.now(timezone.utc).isoformat()}
     atomic_write_json(budget_path(project), value)
     return value
@@ -73,7 +84,7 @@ def remaining_budget(project):
         value = json.loads(budget_path(project).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    spent = _cost(_progress(project)) - value["baseline_cost_usd"]
+    spent = _spent(project) - value["baseline_cost_usd"]
     return value["limit_usd"] - spent
 
 
@@ -246,6 +257,9 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
     runs_without_progress = 0
     last_state = None
     for _ in range(MAX_STEPS):
+        progress = _progress(project)
+        if min(progress["last_completed"], progress.get("last_audited_chapter", 0)) >= project.config.final_chapter:
+            return dict(status=COMPLETE, message="The novel is fully translated.", action="")
         remaining = remaining_budget(project)
         if remaining is None:
             return dict(status=STOPPED, **describe_stop(project, "no_budget"))

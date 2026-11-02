@@ -4674,6 +4674,10 @@ def run_final_audit_if_needed():
 
 
 def run_whole_history_consistency():
+    if any("historical_reconciliation" not in record for record in audit_history["audits"]):
+        # Audits from before this evidence existed can't be reproved, and the book is already finished.
+        flag_for_review(FINAL_CHAPTER, "whole_history_skipped", "Older audits lack the evidence for the whole-book report.")
+        return {"status": "SKIPPED_OLDER_AUDITS", "deferred_chapters": []}
     from types import SimpleNamespace
     from historical_reconciliation import save_final_consistency
     return save_final_consistency(SimpleNamespace(**globals()))

@@ -84,6 +84,27 @@ def test_budget_persists_across_runs(tmp_path, monkeypatch):
     assert second["status"] == novel_runner.COMPLETE, second
 
 
+def test_finished_book_is_complete_with_its_budget_used_up(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=2)
+    fake_runtime(project, monkeypatch, tmp_path)
+    assert novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)["status"] == novel_runner.COMPLETE
+    budget = json.loads(novel_runner.budget_path(project).read_text(encoding="utf-8"))
+    novel_runner.budget_path(project).write_text(json.dumps({**budget, "limit_usd": -1}), encoding="utf-8")
+    assert novel_runner.run_novel("fixture", repo_root=tmp_path)["status"] == novel_runner.COMPLETE
+
+
+def test_requests_in_an_unfinished_audit_count_against_the_budget(tmp_path):
+    project = novel(tmp_path, count=2)
+    novel_runner.set_budget(project, 1.0)
+    audits = project.root / "output" / "audits"
+    audits.mkdir(parents=True, exist_ok=True)
+    (audits / "audit_0001_0002.checkpoint.json").write_text(json.dumps(
+        {"attempt_records": [{"stats": {"rate_correct_cost_usd": 0.25}}, {"stats": {"rate_correct_cost_usd": 0.15}}, {}]}), encoding="utf-8")
+    assert novel_runner.remaining_budget(project) == pytest.approx(0.6)
+    novel_runner.set_budget(project, 1.0)
+    assert novel_runner.remaining_budget(project) == pytest.approx(1.0)
+
+
 def test_transient_errors_do_not_stop_the_run(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     fake_runtime(project, monkeypatch, tmp_path)

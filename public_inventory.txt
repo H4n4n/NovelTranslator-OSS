@@ -241,6 +241,8 @@ profiles/infinite_flow/profile.json
 profiles/infinite_flow/translation_instructions.txt
 profiles/korean_fantasy/profile.json
 profiles/korean_fantasy/translation_instructions.txt
+profiles/korean_historical/profile.json
+profiles/korean_historical/translation_instructions.txt
 profiles/korean_xianxia/profile.json
 profiles/korean_xianxia/translation_instructions.txt
 profiles/xianxia_xuanhuan/profile.json

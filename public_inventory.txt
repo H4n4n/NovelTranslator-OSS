@@ -11,6 +11,7 @@ README.md
 apply_final_editorial_chapters.py
 apply_normalization_plan.py
 apply_title_resolution_plan.py
+approved_corrections.py
 audit_semantic_completeness.py
 audit_semantic_completeness_all.py
 audit_semantic_completeness_candidates.py
@@ -284,6 +285,7 @@ tests/public_test_support.py
 tests/synthetic_goat_batch_witness.py
 tests/test_apply_normalization_plan.py
 tests/test_apply_title_resolution_plan.py
+tests/test_approved_corrections.py
 tests/test_audit_semantic_completeness.py
 tests/test_audit_semantic_completeness_all.py
 tests/test_audit_semantic_completeness_candidates.py

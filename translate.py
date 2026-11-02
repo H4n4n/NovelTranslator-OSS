@@ -54,6 +54,8 @@ def build_parser():
                         help="Check finished chapters for missing glossary terms and repair them, up to --budget-usd")
     parser.add_argument("--correct-term", nargs=2, metavar=("SOURCE_TERM", "NEW_ENGLISH"),
                         help="Change a glossary term and its past uses at the next audit")
+    parser.add_argument("--apply-corrections", type=Path, metavar="LIST",
+                        help="Apply a list of approved term corrections to finished chapters now, at no cost")
     parser.add_argument("--plan-goat-run", action="store_true", help="Read-only bounded unattended plan")
     parser.add_argument("--authorize-goat-run", action="store_true")
     parser.add_argument("--state-fingerprint")
@@ -119,6 +121,12 @@ def main(argv=None):
             return 2
         add_request(project.data_dir, chinese=args.correct_term[0], new_english=args.correct_term[1])
         print("Queued. The next audit changes the term and corrects past chapters.")
+        return 0
+    if args.apply_corrections:
+        from approved_corrections import apply_corrections, load_corrections
+        summary = apply_corrections(load_novel_project(args.novel, repo_root=args.repo_root),
+                                    load_corrections(args.apply_corrections))
+        print(json.dumps(summary, indent=2))
         return 0
     if args.repair_terms:
         if not args.budget_usd:

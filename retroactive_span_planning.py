@@ -156,6 +156,20 @@ def rule_eligibility(rule, policy, safe_categories):
     return ""
 
 
+def _target_families(text, rules, policy):
+    folded_text = _folded(text)
+    families = [(key, target, span) for key, item in policy.items()
+                for target in item["targets"] if _folded_phrase(target) in folded_text
+                for span in target_spans(text, target, reserve_case_variants=True)]
+    # Include proposed old/new targets in competing families even if the staged
+    # glossary has not installed them yet. Never chain historical corrections.
+    families += [(rule["chinese"], rule[field], span) for rule in rules
+                 for field in ("old_english", "new_english")
+                 if rule[field] and _folded_phrase(rule[field]) in folded_text
+                 for span in target_spans(text, rule[field], reserve_case_variants=True)]
+    return families
+
+
 def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POLICY_VERSION):
     """Return disjoint authorized edits and per-rule decisions, without guessing.
 
@@ -174,26 +188,15 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
     source_claims = _claim_longest_non_overlapping_occurrences(
         source, [(key, item["source_forms"]) for key, item in policy.items()]
     )
-    raw_source_claims = [claim for key, item in policy.items()
-                         for claim in _claim_longest_non_overlapping_occurrences(
-                             source, [(key, item["source_forms"])]
-                         ).get(key, [])]
-    folded_text = _folded(text)
-    families = [(key, target, span) for key, item in policy.items()
-                for target in item["targets"] if _folded_phrase(target) in folded_text
-                for span in target_spans(text, target, reserve_case_variants=True)]
-    # Include proposed old/new targets in competing families even if the staged
-    # glossary has not installed them yet. Never chain historical corrections.
-    families += [(rule["chinese"], rule[field], span) for rule in rules
-                 for field in ("old_english", "new_english")
-                 if rule[field] for span in target_spans(text, rule[field], reserve_case_variants=True)]
+    # Most rules stop before these are read, and an audit plans every chapter many times.
+    raw_source_claims = families = None
     decisions, edits = [], []
     for index, rule in enumerate(rules):
         reason = rule_eligibility(rule, policy, safe_categories)
         decision = {"rule_index": index, "category_eligible":
                     rule["category"] in safe_categories, "status": "skipped"}
         anchors = source_claims.get(rule["chinese"], [])
-        spans = target_spans(text, rule["old_english"]) if rule["old_english"] else []
+        spans = target_spans(text, rule["old_english"]) if rule["old_english"] and rule["old_english"] in text else []
         decision.update(source_owned_count=len(anchors), target_candidate_count=len(spans))
         if not reason and not anchors:
             reason = "source_absent_or_owned_by_longer_identity"
@@ -205,6 +208,11 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
             elif not spans or (not count_match and (len(anchors) != 1 or len(spans) != 1)):
                 reason = "cardinality_requires_manual_review"
         if not reason:
+            if raw_source_claims is None:
+                raw_source_claims = [claim for key, item in policy.items()
+                                     for claim in _claim_longest_non_overlapping_occurrences(
+                                         source, [(key, item["source_forms"])]
+                                     ).get(key, [])]
             if any(other["owner"] != rule["chinese"] and
                    overlaps((anchor["start"], anchor["end"]), (other["start"], other["end"])) and
                    not (anchor["start"] <= other["start"] and other["end"] <= anchor["end"] and
@@ -212,6 +220,8 @@ def plan_chapter(source, before, rules, policy, safe_categories, span_policy=POL
                    for anchor in anchors for other in raw_source_claims):
                 reason = "competing_source_ownership"
         if not reason:
+            if families is None:
+                families = _target_families(text, rules, policy)
             # Reserve case variants as well, to reject competing same-string
             # identities even when their canonical target has different casing.
             competing = [key for key, item in policy.items() if key != rule["chinese"]

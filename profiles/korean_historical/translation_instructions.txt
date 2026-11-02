@@ -52,7 +52,9 @@ OUTPUT
 
 Use formal English where the Korean establishes royal, courtly, diplomatic, or
 military ceremony, and natural casual English where characters speak casually.
-Profanity and crude speech keep their force without being amplified.
+Profanity and crude speech keep their force without being amplified. Spoken
+lines use double quotes; thoughts the source sets in single quotes stay in
+single quotes.
 
 Output only the English reader-facing heading and complete translated prose.
 Do not output Korean source text, Hanja, analysis, notes, glossaries, or

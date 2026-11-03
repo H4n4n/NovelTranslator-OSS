@@ -5,7 +5,7 @@ look; the run flags them for review and keeps going.
 """
 import re
 
-_OPENS_AFTER = frozenset(" \t\r\n([{—–“‘\"")
+_OPENS_AFTER = frozenset(" \t\r\n([{—–“‘\"*_")  # *_ open italics: *'A thought.'*
 _CLOSES_BEFORE = frozenset(" \t\r\n.,!?;:—–…)]}”’")
 
 

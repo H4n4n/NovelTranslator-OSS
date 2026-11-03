@@ -9,6 +9,11 @@ def test_curl_quotes_handles_speech_thoughts_apostrophes_and_cut_off_lines():
                                  "“‘Quoted’ inside” and Jun’s horse.\n“No, I—”\n# Heading")
 
 
+def test_curl_quotes_opens_quotes_inside_italics():
+    text = "*'Damn it. Nothing's going right.'*\n_\"Run!\"_ he heard."
+    assert curl_quotes(text) == "*‘Damn it. Nothing’s going right.’*\n_“Run!”_ he heard."
+
+
 def test_curl_quotes_leaves_curly_text_alone():
     text = "“Long live the King!”\n‘It hurts…’"
     assert curl_quotes(text) == text

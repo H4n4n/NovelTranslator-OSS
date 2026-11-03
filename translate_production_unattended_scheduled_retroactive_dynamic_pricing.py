@@ -38,6 +38,7 @@ from noveltranslator_core import (
     obtain_translation,
     pending_meta_after_commit_qa_failure,
     pending_meta_after_translation_repair,
+    pending_meta_after_typography_normalization,
     pending_matches_committed,
     PRICING_VERSION,
     pricing_snapshot as core_pricing_snapshot,
@@ -75,6 +76,7 @@ from glossary_audit import (
 from provider_retry_policy import is_run_level_stop
 from retroactive_span_planning import OVER_COUNT_REASON
 from noveltranslator_core import atomic_write_bytes
+from chapter_text_checks import curl_quotes, review_flags as chapter_review_flags
 from requested_corrections import (claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit,
                                    is_second_look as audit_is_second_look)
 from review_queue import add_item as add_review_item, read_items as read_review_items, soften_commit_blockers
@@ -4161,6 +4163,18 @@ def process_chapter(chapter_number):
                 api_cost=0,
             )
 
+    curled = curl_quotes(translation)
+    if curled != translation:
+        # Same order as the locked-term repair: metadata first, so an interrupted
+        # write just repeats this free, deterministic change on recovery.
+        meta = pending_meta_after_typography_normalization(
+            meta, [{"repair_type": "curly_quotes", "straight_quotes": translation.count('"') + translation.count("'")}]
+        )
+        save_json(pending_meta_file, meta)
+        translation = curled
+        atomic_write_text(pending_file, translation)
+        log_event("typography_normalization", chapter=chapter_number, stage="local_qa", api_cost=0)
+
     strict_repair = recovery.run("strict_deterministic", lambda: perform_deterministic_strict_terminology_repair(
         chapter_number=chapter_number,
         source_text=chinese_text,
@@ -4611,6 +4625,13 @@ def process_chapter(chapter_number):
     ))
 
     print(f"\nChapter {chapter_number} fully committed.")
+    try:
+        flags = chapter_review_flags(chinese_text, final_file.read_text(encoding="utf-8"),
+                                     ACTIVE_NOVEL_CONFIG.source_language if ACTIVE_NOVEL_CONFIG else "zh")
+    except OSError:
+        flags = []  # Advisory only; the chapter is already committed.
+    for kind, detail in flags:
+        flag_for_review(chapter_number, kind, detail)
     print(f"Glossary accepted: {len(glossary_changes['added'])}")
     print(f"Glossary corrected: {len(glossary_changes['corrected'])}")
     print(f"Glossary contextualized: {len(glossary_changes['contextualized'])}")

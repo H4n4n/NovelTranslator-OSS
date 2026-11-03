@@ -95,6 +95,7 @@ build_title_resolution_plan.py
 catastrophic_completeness_runtime.py
 chapter_glossary_review.py
 chapter_library.py
+chapter_text_checks.py
 chinese_script_normalization.py
 command_code_provider_credentials.py
 command_code_provider_transport.py
@@ -361,6 +362,7 @@ tests/test_build_publication_chapters.py
 tests/test_build_publication_epub.py
 tests/test_chapter_glossary_review.py
 tests/test_chapter_library.py
+tests/test_chapter_text_checks.py
 tests/test_checkpoint_epub.py
 tests/test_ci_split.py
 tests/test_command_code_provider_credentials.py

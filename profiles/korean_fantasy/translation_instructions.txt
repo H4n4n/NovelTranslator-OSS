@@ -33,6 +33,8 @@ Preserve literary titles for named songs and poems and translate their content
 with attention to voice, imagery, rhythm, and meaning. Do not force rhyme at
 the expense of accuracy.
 
+Render sound effects as English onomatopoeia (Boom—, Clang—, Thwack—); never leave a Korean sound effect romanized.
+
 Output only the English reader-facing heading and complete translated prose.
 Do not output Korean source text, analysis, notes, glossaries, or explanations.
 Unexpected residual Korean/Hangul is a commit blocker.

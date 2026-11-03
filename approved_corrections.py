@@ -5,6 +5,8 @@ term, so they skip single-word ranks and terms inside longer names. A list the o
 approved can go further: every whole-word use of the old English, in each chapter whose
 source has the term. Each changed chapter is backed up first, every change is logged
 under output/retroactive_fixes/, and running the same list again changes nothing.
+Audit proofs replay each logged change from its backup, so an audited chapter can be
+corrected without blocking the novel's next start.
 
 The list is JSON: {"replacements": [{"source": ["<source term>", ...], "old": "...", "new": "..."}],
 "glossary": {"<source term>": "<new English>"}}. Glossary entries change with the
@@ -13,9 +15,11 @@ replacements; "glossary" is only for entries the prose doesn't show.
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from noveltranslator_core import atomic_write_bytes, atomic_write_json
 from production_run_lock import production_run_lock
+from retroactive_span_planning import digest
 
 
 def load_corrections(path):
@@ -73,13 +77,15 @@ def apply_corrections(project, corrections, *, log=print):
             text, changes = correct_chapter(sources[chapter], before.decode("utf-8"), corrections["replacements"])
             if not changes:
                 continue
-            (backups / path.name).write_bytes(before)
-            atomic_write_bytes(path, text.encode("utf-8"))
+            # Backup and log first, so a crash never leaves an unlogged edit.
+            atomic_write_bytes(backups / path.name, before)
             record["chapters"][f"{chapter:04d}"] = changes
             atomic_write_json(record_path, record)
+            atomic_write_bytes(path, text.encode("utf-8"))
             log(f"Chapter {chapter}: {len(changes)} changed")
-        glossary = json.loads(project.glossary_file.read_text(encoding="utf-8"))
-        (backups / project.glossary_file.name).write_text(json.dumps(glossary, ensure_ascii=False, indent=2), encoding="utf-8")
+        raw_glossary = project.glossary_file.read_bytes()
+        atomic_write_bytes(backups / project.glossary_file.name, raw_glossary)
+        glossary = json.loads(raw_glossary)
         # Entries whose own source has a corrected term change the same way, like a technique named after its art.
         renamed = {term: correct_chapter(term, entry.get("english") or "", corrections["replacements"])[0]
                    for term, entry in glossary["entries"].items()}
@@ -94,3 +100,50 @@ def apply_corrections(project, corrections, *, log=print):
     epub = rebuild_reader_epub(project, take_lock=True)
     return dict(chapters_changed=len(record["chapters"]), replacements=sum(map(len, record["chapters"].values())),
                 glossary_changed=len(record["glossary"]), record=str(record_path), epub=epub.get("status"))
+
+
+def _replay(text, changes):
+    """The text the logged changes make, or None when they don't fit it exactly."""
+    parts, position = [], 0
+    for change in changes:
+        offset, old = change["offset"], change["old"]
+        if offset < position or text[offset:offset + len(old)] != old:
+            return None
+        parts += [text[position:offset], change["new"]]
+        position = offset + len(old)
+    return "".join(parts) + text[position:]
+
+
+def audit_lineage(retroactive_dir, backup_dir, read):
+    """Each logged correction's backed-up bytes, and its step from those bytes to the corrected ones.
+
+    An audit proof rebuilds old chapters from bytes it can find, and a chapter corrected
+    after its audit keeps its earlier bytes only in the backup. A step counts only when
+    the backup and the logged changes make it exactly, so an unlogged edit still fails.
+    """
+    blobs, steps = {}, {}
+    for path in sorted(Path(retroactive_dir).glob("approved_corrections_*.json")):
+        record = json.loads(read(path))
+        for name, changes in record.get("chapters", {}).items():
+            backup = Path(backup_dir) / "approved_corrections" / str(record.get("utc")) / f"{name}.md"
+            if not backup.is_file():
+                continue
+            raw = read(backup)
+            after = _replay(raw.decode("utf-8"), changes)
+            if after is not None:
+                blobs[digest(raw)] = raw
+                steps.setdefault(digest(raw), set()).add(digest(after.encode("utf-8")))
+    return blobs, steps
+
+
+def reaches(steps, start, target):
+    """Whether logged corrections lead from one chapter digest to another; no step at all counts."""
+    seen, todo = set(), [start]
+    while todo:
+        sha = todo.pop()
+        if sha == target:
+            return True
+        if sha not in seen:
+            seen.add(sha)
+            todo.extend(steps.get(sha, ()))
+    return False

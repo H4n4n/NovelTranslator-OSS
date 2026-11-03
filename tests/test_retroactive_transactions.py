@@ -2576,3 +2576,71 @@ def test_the_quick_presence_check_never_hides_a_competing_rendering():
     for text, phrase in (("The GREAT Hall", "great hall"), ("Stra\u00dfe", "STRASSE"), ("D\u0131ng", "Ding"), ("\u017fword", "Sword")):
         if planning.target_spans(text, phrase, reserve_case_variants=True):
             assert planning._folded_phrase(phrase) in planning._folded(text)
+
+
+# Owner-approved corrections to chapters a periodic audit has already recorded.
+def _as_goat(project, goat=True):
+    """Startup proofs read GOAT progress from disk; the synthetic engine itself has no paid accounting."""
+    progress = json.loads(project.progress_file.read_bytes())
+    progress.pop("provider", None)
+    project.progress_file.write_text(json.dumps({**progress, "provider": "command_code_provider"} if goat else progress), encoding="utf-8")
+
+
+def _corrected_audited_novel(discovery_novel, monkeypatch):
+    import approved_corrections
+    import build_checkpoint_epub
+    import production_periodic_audit_finalization as final
+    from novel_project import NovelProject, NovelConfig, repository_root
+    # Native policy and a real profile, as the startup proof loads them afresh.
+    case = discovery_novel(profile_id="historical_military", native_policy=True,
+                           english={25: "**Han** — a café by the river.\r\n"})
+    e = case.engine
+    final.intent_path(e, 26, 26).unlink()  # Only the finished 1-25 audit remains.
+    project = NovelProject(repository_root(), case.root, NovelConfig.from_dict(json.loads((case.root / "novel.json").read_bytes())))
+    _as_goat(project)
+    monkeypatch.setattr(build_checkpoint_epub, "rebuild_reader_epub", lambda project, take_lock: {"status": "OK"})
+    import contextlib
+    monkeypatch.setattr(approved_corrections, "production_run_lock", lambda root: contextlib.nullcontext())  # The fixture holds it.
+    audited = (e.OUTPUT_DIR / "0001.md").read_bytes()
+    summary = approved_corrections.apply_corrections(project, {"replacements": [
+        {"source": [case.key], "old": "café", "new": "teahouse"}]}, log=lambda _: None)
+    assert summary["chapters_changed"] == 3  # Chapters 1 and 25 are audited; 26 is not yet.
+    corrected = (e.OUTPUT_DIR / "0001.md").read_bytes()
+    assert corrected == audited.replace("café".encode(), b"teahouse") and b"\r\n" in corrected
+    assert next(project.backup_dir.glob("approved_corrections/*/0001.md")).read_bytes() == audited
+    return case, project
+
+
+def test_an_approved_correction_to_an_audited_chapter_keeps_the_novel_startable(discovery_novel, monkeypatch):
+    import production_periodic_audit_finalization as final
+    from production_historical_lineage import verify_audit_obligations
+    from production_uncertain_request_disposition import verified_completed_dispositions
+    case, project = _corrected_audited_novel(discovery_novel, monkeypatch)
+    verify_audit_obligations(project)
+    inventory = {"errors": [], "uncertain": []}
+    assert verified_completed_dispositions(project, inventory) == inventory
+    # The next audit proves the earlier one through the correction before it reserves ownership.
+    result = {"decisions": [], "issues": []}
+    chunking = {"candidate_count": 0, "api_request_count": 0, "candidate_set_hash": canonical_hash(result)}
+    _as_goat(project, False)
+    assert final.finalize_periodic_audit(case.engine, 26, 26, result, case.args[1], chunking)["status"] == "FINALIZED"
+    _as_goat(project)
+    verify_audit_obligations(project)
+
+
+@pytest.mark.parametrize("damage", ["unlogged edit", "log that does not make the chapter", "missing backup"])
+def test_an_unexplained_edit_to_an_audited_chapter_still_blocks(discovery_novel, monkeypatch, damage):
+    from production_historical_lineage import verify_audit_obligations
+    case, project = _corrected_audited_novel(discovery_novel, monkeypatch)
+    record_path = next(project.retroactive_dir.glob("approved_corrections_*.json"))
+    if damage == "unlogged edit":
+        path = case.engine.OUTPUT_DIR / "0002.md"
+        path.write_bytes(path.read_bytes().replace(b"Han met", b"Hann met"))
+    elif damage == "log that does not make the chapter":
+        record = json.loads(record_path.read_bytes())
+        record["chapters"]["0025"][0]["new"] = "coffeehouse"
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+    else:
+        next(project.backup_dir.glob("approved_corrections/*/0025.md")).unlink()
+    with pytest.raises(Exception, match="provenance missing|does not reach current chapter bytes"):
+        verify_audit_obligations(project)

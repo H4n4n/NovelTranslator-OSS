@@ -14,4 +14,6 @@ Do not leave unexplained Hangul or Hanja in reader-facing English unless the sou
 
 Keep names, terminology, capitalization, and formatting internally consistent throughout the chapter.
 
+Render sound effects as English onomatopoeia (Boom—, Clang—, Thwack—); never leave a Korean sound effect romanized.
+
 Return only the translated chapter, including a translated chapter heading when one is present. Do not add translator notes, commentary, analysis, prefaces, afterwords, or Markdown fences.

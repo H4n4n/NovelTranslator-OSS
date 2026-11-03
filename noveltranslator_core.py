@@ -2184,6 +2184,13 @@ def pending_meta_after_strict_terminology_repair(meta, repairs):
     )
 
 
+def pending_meta_after_typography_normalization(meta, repairs):
+    """Invalidate derived work after straight quotes became curly ones."""
+    return _pending_meta_after_text_change(
+        meta, repairs, "deterministic_typography_normalizations"
+    )
+
+
 def _pending_meta_after_text_change(meta, repairs, record_key):
     reset = dict(meta)
     reset["stage"] = "translated"

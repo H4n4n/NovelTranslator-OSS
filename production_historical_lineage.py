@@ -14,6 +14,7 @@ from production_periodic_audit_finalization import (
 )
 import retroactive_transactions as tx
 from historical_reconciliation import proof_traversal, proof_input_scope
+from approved_corrections import audit_lineage, reaches
 
 
 def decoded_text_sha(raw):
@@ -128,6 +129,8 @@ def _blobs(module, intents, *, _inputs=None):
         blobs[tx.digest(raw)] = raw
     from production_standalone_lineage import witnesses, add_blobs
     add_blobs(module, witnesses(module), blobs)
+    # A chapter the owner corrected after its audit keeps its audited bytes in the correction's backup.
+    blobs.update(_corrections(module, read)[0])
     for intent in intents:
         plan = intent["transaction_plan"]
         for item in plan["chapters"]:
@@ -137,6 +140,10 @@ def _blobs(module, intents, *, _inputs=None):
                     raw = read(path)
                     blobs[tx.digest(raw)] = raw
     return blobs
+
+
+def _corrections(module, read):
+    return audit_lineage(module.RETROACTIVE_DIR, module.BACKUP_DIR, read)
 
 
 def verify_audit_obligations(project, *, pending_window=None):
@@ -178,6 +185,7 @@ def verify_audit_obligations(project, *, pending_window=None):
                         "unfinished periodic audit requires exact local finalization")
             return
         blobs = _blobs(module, intents, _inputs=_inputs)
+        steps = _corrections(module, _inputs.read)[1]
         matched = False
         latest = {}
         previous_end = 0
@@ -192,13 +200,13 @@ def verify_audit_obligations(project, *, pending_window=None):
             before, after = _prove_audit(module, intent, blobs, pending=pending,
                                         legacy_completion="historical_proof" not in intent, _inputs=_inputs)
             for number, raw in before.items():
-                require(number not in latest or latest[number] == tx.digest(raw),
+                require(number not in latest or reaches(steps, latest[number], tx.digest(raw)),
                         "disconnected historical audit byte chain")
                 latest[number] = (_inputs.sha(module.OUTPUT_DIR / f"{number:04d}.md") if pending
                                   else tx.digest(after[number]))
             matched |= pending
         require(pending_window is None or matched, "exact local reconciliation intent missing")
-        require(all(_inputs.sha(module.OUTPUT_DIR / f"{number:04d}.md") == sha for number, sha in latest.items()),
+        require(all(reaches(steps, sha, _inputs.sha(module.OUTPUT_DIR / f"{number:04d}.md")) for number, sha in latest.items()),
                 "historical audit chain does not reach current chapter bytes")
 
 
@@ -260,6 +268,7 @@ def verify_disposition_lineage(project, original, *, pending_window=None):
         # Build byte witnesses for unchanged chapters of older audits. Later valid
         # BEFORE backups can witness them even when current prose has moved on.
         blobs = _blobs(module, intents, _inputs=_inputs)
+        steps = _corrections(module, _inputs.read)[1]
         previous_sha, previous_end = None, 0
         for intent, item in candidates:
             window = (intent["start"], intent["end"])
@@ -271,7 +280,7 @@ def verify_disposition_lineage(project, original, *, pending_window=None):
                 require(decoded_text_sha(before[chapter]) == original["translation_sha256"],
                         "disposition decoded-text/BEFORE byte bridge mismatch")
             else:
-                require(item["before_sha256"] == previous_sha, "disconnected or competing historical chain")
+                require(reaches(steps, previous_sha, item["before_sha256"]), "disconnected or competing historical chain")
             previous_sha = item["after_sha256"]
             previous_end = intent["end"]
             if pending:
@@ -279,4 +288,5 @@ def verify_disposition_lineage(project, original, *, pending_window=None):
                 current = tx.digest(_inputs.read(module.OUTPUT_DIR / f"{chapter:04d}.md"))
                 require(current in {item["before_sha256"], item["after_sha256"]}, "pending lineage prose drift")
                 return
-        require(previous_sha == _inputs.sha(module.OUTPUT_DIR / f"{chapter:04d}.md"), "historical chain does not reach current bytes")
+        require(reaches(steps, previous_sha, _inputs.sha(module.OUTPUT_DIR / f"{chapter:04d}.md")),
+                "historical chain does not reach current bytes")

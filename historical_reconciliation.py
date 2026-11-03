@@ -385,6 +385,10 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
         from production_standalone_lineage import witnesses, add_blobs, prove_gap
         standalone = witnesses(module, active_plan=selected["transaction_plan"])
         add_blobs(module, standalone, blobs)
+        # Owner-approved corrections after an audit: their backups and exactly replayed changes.
+        from approved_corrections import audit_lineage, reaches
+        corrected, steps = audit_lineage(module.RETROACTIVE_DIR, module.BACKUP_DIR, read_bytes)
+        blobs.update(corrected)
         policy, evidence, latest, previous_end = {}, [], {}, 0
         consumed = set()
         novel = selected["transaction_plan"]["request"]["novel_id"]
@@ -428,7 +432,7 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
             for item in intent["transaction_plan"]["chapters"]:
                 n = item["chapter"]
                 raw = blobs.get(item["before_sha256"])
-                require(raw is not None and (n not in latest or latest[n] == item["before_sha256"]),
+                require(raw is not None and (n not in latest or reaches(steps, latest[n], item["before_sha256"])),
                         "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
                 before[n] = raw
                 after[n] = tx.transform_bytes(raw, item["edits"])
@@ -459,7 +463,7 @@ def _historical_reservations(module, selected, *, unpublished=False, writer_zero
         for n, sha in latest.items():
             current = (chapter_bytes[n] if chapter_bytes is not None else
                        read_bytes(module.OUTPUT_DIR / f"{n:04d}.md"))
-            require(selected_before.get(n, digest(current)) == sha,
+            require(reaches(steps, sha, selected_before.get(n, digest(current))),
                     "HISTORICAL_OWNERSHIP_BYTE_CHAIN_UNPROVEN")
         return policy, evidence
     except (ProductionIntegrityError, OSError, KeyError, TypeError, ValueError) as exc:

@@ -71,6 +71,7 @@ def test_changed_chapters_are_backed_up_logged_and_a_rerun_changes_nothing(tmp_p
     for n, english in ((1, "The Centurion came."), (2, "Nobody came.")):
         (project.chapter_dir / f"{n:04d}.md").write_text(english, encoding="utf-8")
     corrections = {"glossary": {"塔拜": "Tabai"}, "replacements": REPLACEMENTS}
+    glossary_before = project.glossary_file.read_bytes()
 
     summary = approved_corrections.apply_corrections(project, corrections, log=lambda _: None)
     assert summary["chapters_changed"] == 1 and summary["replacements"] == 1 and summary["glossary_changed"] == 3
@@ -78,6 +79,7 @@ def test_changed_chapters_are_backed_up_logged_and_a_rerun_changes_nothing(tmp_p
     assert entries["百戶所"]["english"] == "Hundred-Household Commander Office" and entries["塔拜"]["english"] == "Tabai"
     assert (project.chapter_dir / "0001.md").read_text(encoding="utf-8") == "The Hundred-Household Commander came."
     assert [path.read_text(encoding="utf-8") for path in project.backup_dir.rglob("0001.md")] == ["The Centurion came."]
+    assert next(project.backup_dir.rglob("glossary.json")).read_bytes() == glossary_before
     record = json.loads(next(project.retroactive_dir.glob("approved_corrections_*.json")).read_text(encoding="utf-8"))
     assert list(record["chapters"]) == ["0001"] and record["glossary"]["百戶"]["old"] == "Centurion"
     entry = json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]["百戶"]

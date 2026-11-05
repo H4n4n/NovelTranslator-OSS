@@ -811,7 +811,7 @@ def test_the_term_audit_fixes_a_rendering_before_any_chapter_uses_it(batch_engin
     provider.audit_answers = {"龙骧营": {"action": "correct", "english": "Dragon Rise Battalion"},
                               "李四": {"action": "reject"}}
     run_all(module)
-    assert provider.count("audit") == 1  # 4 terms fit one chunk; chunks go one at a time
+    assert provider.count("audit") == 1  # 4 terms fit one chunk
     second = next(body for kind, body in provider.sends if kind == "translation" and provider.chapter_of(body) == 2)
     assert "Dragon Rise Battalion" in second["messages"][-1]["content"]
     assert "Dragon Soar Battalion" not in second["messages"][-1]["content"]

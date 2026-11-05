@@ -700,7 +700,7 @@ def _run_consolidation(module, batch):
 def _run_term_audit(module, batch):
     """Audit the settled terms before any chapter is translated with them.
 
-    The periodic audit's prompt and source-backed targets, sent one chunk at a time.
+    The periodic audit's prompt and source-backed targets, its chunks sent together.
     Its corrections, rejections and merges change the settled terms here, so a wrong
     rendering never reaches the batch's chapters. A chunk that fails leaves its terms
     as settled and is flagged; the periodic audit still runs after the chapters are saved.
@@ -730,7 +730,8 @@ def _run_term_audit(module, batch):
         maps[batch.start + number - 1] = ids
         jobs.append((batch.start + number - 1, bt.TERM_AUDIT_KIND, kwargs,
                      _slot(module, batch, bt.TERM_AUDIT_KIND, batch.start + number - 1)))
-    results, stop = _send_all(module, batch, jobs, logical=bt.TERM_AUDIT_KIND, warm_up=False, limit=1) if jobs else ({}, None)
+    # Chunks are independent: each has the same glossary index and its own targets.
+    results, stop = _send_all(module, batch, jobs, logical=bt.TERM_AUDIT_KIND, warm_up=False) if jobs else ({}, None)
     if stop is not None:
         raise stop
     decisions = {}

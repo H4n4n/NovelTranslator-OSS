@@ -115,7 +115,7 @@ chapters are being saved. No batch extends past a trial's last chapter.
 
 **Pre-translation term audit.** Between settling the terms and translating, the batch's
 settled terms go through the periodic audit's own prompt and source-backed targets
-(the same source contexts and chunks of 20), one chunk at a time (`batch_term_audit`).
+(the same source contexts and chunks of 20), all chunks sent together (`batch_term_audit`).
 Its corrections, rejections, contextual renderings and merges change the settled terms,
 so a wrong rendering is fixed before any of the batch's chapters is translated with it,
 not after. A chunk that fails leaves its terms as settled and is flagged. The changes

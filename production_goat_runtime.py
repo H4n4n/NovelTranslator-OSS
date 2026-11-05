@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import math
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -54,6 +55,27 @@ DOMAIN_OPERATIONS = {
     "periodic_audit_semantic_correction": "periodic_audit",
 }
 
+# Batch mode's source-side requests carry an explicit completion ceiling, so the
+# budget reserves their real bound instead of the whole context window. The
+# ceiling is generous: reasoning counts toward it, and 16K was used up by
+# reasoning alone in rehearsal.
+BATCH_AUXILIARY_CEILINGS = {"batch_source_prepass": 64_000, "batch_glossary_decision": 64_000,
+                            "batch_term_audit": 64_000}
+
+
+def _empty_content_as_text(raw):
+    """A batch helper cut off while reasoning returns no text at all.
+
+    Acceptance requires text, so the answer would stay uncounted and block the run.
+    Read it as empty text instead: it is counted, then rejected as unusable.
+    """
+    raw = copy.deepcopy(raw)
+    for choice in raw.get("choices") or []:
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if isinstance(message, dict) and message.get("content") is None:
+            message["content"] = ""
+    return raw
+
 
 class GoatRuntimeError(NonProviderProductionError):
     failure_kind = "control"
@@ -91,10 +113,12 @@ def normalize_production_request(logical, kwargs):
     from benchmark_longitudinal_provider import build_provider_request
     ceiling = request.pop("max_tokens", None)
     extra = request.pop("extra_body", None)
+    batch_ceiling = BATCH_AUXILIARY_CEILINGS.get(logical)
     if ("max_completion_tokens" in request or "reasoning_effort" in request
         or extra not in (None, {"thinking": {"type": "disabled"}})
         or type(ceiling) is not int
-        or (logical != "translation" and ceiling not in domain_intents(logical))):
+        or (batch_ceiling is not None and ceiling != batch_ceiling)
+        or (logical != "translation" and batch_ceiling is None and ceiling not in domain_intents(logical))):
         raise GoatRuntimeError("GOAT caller controls differ from domain request intent")
     wire = build_provider_request(model=COMMAND_CODE_DEEPSEEK_V41_FLASH,
         messages=request.pop("messages", None), max_output_tokens=(
@@ -102,7 +126,7 @@ def normalize_production_request(logical, kwargs):
                 reasoning_effort="low") if logical == "translation" else ceiling),
         reasoning_capability=verified_reasoning_capability(COMMAND_CODE_DEEPSEEK_V41_FLASH),
         reasoning_level="low", request_extras={key: value for key, value in request.items() if key != "model"})
-    if logical != "translation":
+    if logical != "translation" and batch_ceiling is None:
         # Domain output intent is validated above, never a physical GOAT ceiling.
         wire.pop("max_completion_tokens")
     return wire
@@ -134,7 +158,12 @@ def raw_response_record(raw):
 
 
 class GoatBudget:
-    """One invocation's physical-send and G7D credit-equivalent allowance."""
+    """One invocation's physical-send and G7D credit-equivalent allowance.
+
+    Batch mode sends from several threads. Each authorization reserves its own
+    conservative bound until its usage is accounted, so the requests in flight
+    together never exceed what is left.
+    """
     def __init__(self, max_api_calls, max_credit_equivalent_usd):
         if type(max_api_calls) is not int or max_api_calls < 1:
             raise GoatRuntimeError("GOAT physical-send ceiling must be positive")
@@ -146,52 +175,99 @@ class GoatBudget:
         self.max_cost_usd = float(max_credit_equivalent_usd)
         self.api_calls = 0
         self.actual_cost_usd = 0.0
+        self.reserved_usd = 0.0
         self.records = []
         self.response_records = []
         self.pre_send_refusals = []
         self.blocked = False
         self.unaccounted_provider_response = False
+        self._lock = threading.RLock()
+        self._local = threading.local()
+        self._open = []
 
-    @contextmanager
-    def authorize(self, request, started):
+    def request_bound(self, request, started):
+        """The conservative credit-equivalent a request may cost, or None without a reviewed bound."""
         rates = pricing_snapshot(COMMAND_CODE_DEEPSEEK_V41_FLASH, started)
         prompt_upper = len(json.dumps(request, ensure_ascii=False).encode("utf-8")) + 8192
         from production_goat_auxiliary_policy import completion_exposure
+        exposure = completion_exposure(request, prompt_upper=prompt_upper)
+        bound = (exposure["prompt_upper"] * rates["cache_miss_rate_per_million"]
+                 + exposure["completion_upper"] * rates["output_rate_per_million"]) / 1_000_000
+        return {**exposure, "credit_equivalent_upper": bound}
+
+    def remaining_usd(self):
+        with self._lock:
+            return self.max_cost_usd - self.actual_cost_usd - self.reserved_usd
+
+    @contextmanager
+    def authorize(self, request, started):
         try:
-            exposure = completion_exposure(request, prompt_upper=prompt_upper)
+            exposure = self.request_bound(request, started)
         except ValueError as exc:
             self.pre_send_refusals.append({"kind": "authoritative_hard_bound_missing_or_invalid"})
             raise GoatRuntimeError("GOAT uncapped authorization needs architecture review: no reviewed hard bound") from exc
-        bound = (exposure["prompt_upper"] * rates["cache_miss_rate_per_million"]
-                 + exposure["completion_upper"] * rates["output_rate_per_million"]) / 1_000_000
-        if self.blocked or self.api_calls >= self.max_api_calls or bound > self.max_cost_usd - self.actual_cost_usd + 1e-12:
-            self.pre_send_refusals.append({"kind": "deterministic_local_budget_refusal"})
-            raise GoatAllowanceExhausted("GOAT invocation send/credit-equivalent ceiling refuses request")
-        self.authorized_exposure = {**exposure, "credit_equivalent_upper": bound}
-        yield
+        bound = exposure["credit_equivalent_upper"]
+        with self._lock:
+            if (self.blocked or self.api_calls + len(self._open) >= self.max_api_calls
+                    or bound > self.max_cost_usd - self.actual_cost_usd - self.reserved_usd + 1e-12):
+                self.pre_send_refusals.append({"kind": "deterministic_local_budget_refusal"})
+                raise GoatAllowanceExhausted("GOAT invocation send/credit-equivalent ceiling refuses request")
+            reservation = {"exposure": exposure, "record": None, "open": True}
+            self._open.append(reservation)
+            self.reserved_usd += bound
+            self.authorized_exposure = exposure  # The latest authorization, for single-request callers.
+        self._local.reservation = reservation
+        try:
+            yield
+        finally:
+            # A send that returned keeps its reservation until account().
+            if reservation["record"] is None or reservation["record"]["status"] != "started":
+                self._release(reservation)
+
+    def _release(self, reservation):
+        with self._lock:
+            if reservation["open"]:
+                reservation["open"] = False
+                self._open.remove(reservation)
+                self.reserved_usd -= reservation["exposure"]["credit_equivalent_upper"]
+
+    def current_record(self):
+        reservation = getattr(self._local, "reservation", None)
+        return reservation["record"] if reservation else None
 
     def begin(self, digest):
-        self.api_calls += 1
-        self.records.append({"call": self.api_calls, "request_sha256": digest, "status": "started",
-            "authorization_exposure": copy.deepcopy(self.authorized_exposure)})
+        reservation = self._local.reservation
+        with self._lock:
+            self.api_calls += 1
+            record = {"call": self.api_calls, "request_sha256": digest, "status": "started",
+                "authorization_exposure": copy.deepcopy(reservation["exposure"])}
+            self.records.append(record)
+        reservation["record"] = record
 
     def retract(self):
         """A definite provider failure used no allowance, so undo its begin()."""
-        self.api_calls -= 1
-        self.records.pop()
+        reservation = self._local.reservation
+        with self._lock:
+            self.api_calls -= 1
+            self.records.remove(reservation["record"])
+        reservation["record"] = None
 
     def account(self, stats):
-        self.actual_cost_usd += stats["cost_usd"]
-        self.records[-1].update({"status": "success", "stats": copy.deepcopy(stats)})
-        exposure = self.records[-1]["authorization_exposure"]
-        if (stats["prompt_tokens"] > exposure["prompt_upper"]
-            or stats["completion_tokens"] > exposure["completion_upper"]
-            or stats["cost_usd"] > exposure["credit_equivalent_upper"] + 1e-12):
-            self.blocked = True
-            raise GoatRuntimeError("GOAT usage exceeded authorized conservative exposure; architecture review required")
-        if self.actual_cost_usd > self.max_cost_usd + 1e-12:
-            self.blocked = True
-            raise GoatRuntimeError("GOAT accepted usage exceeded credit-equivalent allowance")
+        reservation = self._local.reservation
+        record = reservation["record"]
+        with self._lock:
+            self.actual_cost_usd += stats["cost_usd"]
+            record.update({"status": "success", "stats": copy.deepcopy(stats)})
+            self._release(reservation)
+            exposure = record["authorization_exposure"]
+            if (stats["prompt_tokens"] > exposure["prompt_upper"]
+                or stats["completion_tokens"] > exposure["completion_upper"]
+                or stats["cost_usd"] > exposure["credit_equivalent_upper"] + 1e-12):
+                self.blocked = True
+                raise GoatRuntimeError("GOAT usage exceeded authorized conservative exposure; architecture review required")
+            if self.actual_cost_usd > self.max_cost_usd + 1e-12:
+                self.blocked = True
+                raise GoatRuntimeError("GOAT accepted usage exceeded credit-equivalent allowance")
 
 
 def install_goat_runtime(module, *, provider_client, budget=None, clock=None, batch_context=None):
@@ -256,6 +332,8 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
             return "glossary_review"
         if kind in DOMAIN_OPERATIONS:
             return DOMAIN_OPERATIONS[kind]
+        if kind in BATCH_AUXILIARY_CEILINGS:
+            return kind
         if kind in context_operations:
             return context_operations[kind]
         raise GoatRuntimeError("unmapped GOAT physical operation: " + str(kind))
@@ -412,7 +490,10 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
         recorded = result["response"]
         accounted = False
         try:
-            normalized = normalize_provider_response(recorded["raw_response"], request_identity=transport)
+            raw = recorded["raw_response"]
+            if logical in BATCH_AUXILIARY_CEILINGS:
+                raw = _empty_content_as_text(raw)
+            normalized = normalize_provider_response(raw, request_identity=transport)
             accepted = accept_command_code_response(transport, normalized)
             stats = account_command_code_usage(identity["wire_model"], accepted.usage, recorded["request_started_utc"])
             stats.update(reasoning_usage_diagnostics(completion_tokens=accepted.usage.completion_tokens,
@@ -450,7 +531,7 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                     max_completion_tokens=wire["max_completion_tokens"])
                 from production_goat_cap_recovery import eligible_envelope
                 if diagnostic["status"] != "ok" and not eligible_envelope(envelope, wire, kind=kind):
-                    raise GoatRuntimeError("GOAT translation response rejected: " + diagnostic["status"])
+                    raise GoatResponseRejected("GOAT translation response rejected: " + diagnostic["status"])
                 if diagnostic["status"] != "ok":
                     inspection = effective_inventory()
                     if inspection["errors"] or inspection["uncertain"]:
@@ -492,8 +573,9 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                     # a replay as a new physical attempt or fabricating usage.
                     budget.unaccounted_provider_response = True
                 budget.blocked = True
-                if result["api_called"] and budget.records[-1]["status"] == "started":
-                    budget.records[-1]["status"] = "missing_usage_unaccounted_response"
+                record = budget.current_record()
+                if result["api_called"] and record is not None and record["status"] == "started":
+                    record["status"] = "missing_usage_unaccounted_response"
             raise GoatRuntimeError("GOAT recorded response failed acceptance/accounting; no reissue") from exc
 
     def original_glossary_review(kwargs, metadata, translation):
@@ -654,7 +736,9 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
     module.print = provider_print
     module.client = provider_client
     module.api_key = None
-    module.AUTO_OFF_PEAK_ONLY = False
+    # GOAT has no direct-DeepSeek peak gate, but its rate card halves off-peak, so a
+    # novel may opt in to waiting for off-peak hours (novel.json off_peak_only).
+    module.AUTO_OFF_PEAK_ONLY = bool(getattr(module.ACTIVE_NOVEL_CONFIG, "off_peak_only", False))
     module._chat_request_identity = journal_identity
     module.journaled_chat_request = journaled
     module.goat_original_glossary_review = original_glossary_review
@@ -809,6 +893,6 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
         provider_client = None
 
     state = {"provider_identity": identity, "translation_requests": translation_requests,
-             "budget": budget, "release_transport": release_transport}
+             "budget": budget, "release_transport": release_transport, "clock": clock}
     module._production_goat_runtime = state
     return state

@@ -85,6 +85,7 @@ def build_production_translation_user_prompt(
     continuity_summary: str | None,
     glossary_text_override: str | None = None,
     previous_heading: tuple[str, str] | None = None,
+    previous_source_tail: str | None = None,
 ) -> str:
     """Build the exact transport-independent user prompt for one chapter."""
     source_text = chapter.get("text")
@@ -111,6 +112,13 @@ def build_production_translation_user_prompt(
             "the previous chapter's titled part, keep the same English title and "
             "change only the part number.\n\n"
         )
+    if previous_source_tail:
+        # Batch mode: the previous chapter is translated alongside this one, so
+        # its ending is given in the source language for the opening scene.
+        heading_text = (
+            "END OF THE PREVIOUS CHAPTER (source, for context only; do not translate it):\n\n"
+            f"{previous_source_tail.strip()}\n\n"
+        ) + heading_text
     return f"""
 ESTABLISHED GLOSSARY FOR THIS CHAPTER:
 
@@ -139,6 +147,7 @@ def build_production_translation_messages(
     glossary_text_override: str | None = None,
     context_in_system: bool = False,
     previous_heading: tuple[str, str] | None = None,
+    previous_source_tail: str | None = None,
 ) -> list[dict[str, str]]:
     """Return canonical system/user messages for one production translation."""
     if not isinstance(system_prompt, str) or not system_prompt.strip():
@@ -153,6 +162,7 @@ def build_production_translation_messages(
         continuity_summary=continuity_summary,
         glossary_text_override=glossary_text_override,
         previous_heading=previous_heading,
+        previous_source_tail=previous_source_tail,
     )
     if context_in_system:
         source_at = user.rindex(chapter["text"])
@@ -235,7 +245,7 @@ def filter_refused_marker(data_dir, chapter_number):
 
 def build_translation_request(*, chapter, config, profile, system_prompt, continuity, model, controls,
                               glossary_entries=None, rendered_glossary=None, context_in_system=False,
-                              previous_heading=None):
+                              previous_heading=None, previous_source_tail=None):
     """Legacy operation controls around the shared canonical message builder."""
     return {"model": model, "messages": build_production_translation_messages(chapter,
         system_prompt=system_prompt, chapter_numbering=config.chapter_numbering if config else "global",
@@ -243,4 +253,4 @@ def build_translation_request(*, chapter, config, profile, system_prompt, contin
         target_language=config.target_language if config else None, glossary_entries=glossary_entries or {},
         profile=profile, continuity_summary=continuity.get("summary", ""),
         glossary_text_override=rendered_glossary, context_in_system=context_in_system,
-        previous_heading=previous_heading), **controls}
+        previous_heading=previous_heading, previous_source_tail=previous_source_tail), **controls}

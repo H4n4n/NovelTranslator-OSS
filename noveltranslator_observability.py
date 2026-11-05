@@ -1,6 +1,7 @@
 """Import-safe logging, status, and startup-safety helpers."""
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +31,9 @@ STAT_EVENT_FIELDS = (
 )
 
 
+_EMIT_LOCK = threading.Lock()  # Batch mode logs from several threads.
+
+
 class SafeRunLogger:
     """Append JSONL events while making every logging failure non-fatal."""
 
@@ -53,8 +57,9 @@ class SafeRunLogger:
                 "event": event,
             }
             payload.update({key: value for key, value in fields.items() if value is not None})
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+            line = json.dumps(payload, ensure_ascii=False, default=str) + "\n"
+            with _EMIT_LOCK, self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
             return True
         except Exception:
             return False

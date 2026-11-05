@@ -232,12 +232,13 @@ def test_legacy_process_orders_reviewed_state_before_durable_commit():
         repo_root
         / "translate_production_unattended_scheduled_retroactive_dynamic_pricing.py"
     ).read_text(encoding="utf-8")
-    source = supervised_callback_source(source, "process_chapter", {
+    # process_chapter only wraps this body in the batch commit scope.
+    source = supervised_callback_source(source, "process_single_chapter", {
         'state_checkpoint': ('state', 'run_state_extraction_checkpoint'),
         'glossary_changes': ('reviewed_state', 'finalize_reviewed_chapter_state'),
         'chapter_stats': ('chapter_commit', 'commit_reviewed_chapter'),
     })
-    process = source[source.index("def process_chapter("):]
+    process = source[source.index("def process_single_chapter("):]
 
     state = process.index(
         "state_checkpoint = run_state_extraction_checkpoint("

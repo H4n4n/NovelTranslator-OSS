@@ -207,6 +207,46 @@ class ResidualCJKMicroRepairConfig:
         }
 
 
+def _off_peak_only(value):
+    if not isinstance(value, bool):
+        raise ValueError("novel.json off_peak_only must be boolean")
+    return value
+
+
+@dataclass(frozen=True)
+class BatchModeConfig:
+    """Source-first batch translation (docs/BATCH_MODE.md). Off unless opted in."""
+
+    enabled: bool = False
+    chapters: int = 50
+    max_parallel: int = 32  # 18 full chapters and 32 small requests were measured with no slowdown.
+    terms_only: bool = False  # Rehearsal: read the source and settle terms, then stop; never translate.
+    overlap: bool = False  # Prepare the next batch while this one's chapters are saved.
+
+    @classmethod
+    def from_dict(cls, value):
+        if value is None:
+            return cls()
+        if not isinstance(value, dict):
+            raise ValueError("novel.json batch_mode must be a JSON object")
+        unknown = sorted(set(value) - {"enabled", "chapters", "max_parallel", "terms_only", "overlap"})
+        if unknown:
+            raise ValueError("novel.json batch_mode contains unsupported fields: " + ", ".join(unknown))
+        merged = {**cls().to_dict(), **value}
+        for key in ("enabled", "terms_only", "overlap"):
+            if not isinstance(merged[key], bool):
+                raise ValueError(f"novel.json batch_mode.{key} must be boolean")
+        for key in ("chapters", "max_parallel"):
+            item = merged[key]
+            if not isinstance(item, int) or isinstance(item, bool) or item < 1:
+                raise ValueError(f"novel.json batch_mode.{key} must be a positive integer")
+        return cls(**merged)
+
+    def to_dict(self):
+        return {"enabled": self.enabled, "chapters": self.chapters, "max_parallel": self.max_parallel,
+                "terms_only": self.terms_only, "overlap": self.overlap}
+
+
 @dataclass(frozen=True)
 class NovelConfig:
     id: str
@@ -225,6 +265,8 @@ class NovelConfig:
     glossary_candidate_auto_resolution: GlossaryCandidateAutoResolutionConfig = (
         GlossaryCandidateAutoResolutionConfig()
     )
+    batch_mode: BatchModeConfig = BatchModeConfig()
+    off_peak_only: bool = False  # Command Code runs wait for off-peak pricing.
 
     @classmethod
     def from_dict(cls, value):
@@ -288,6 +330,8 @@ class NovelConfig:
             glossary_candidate_auto_resolution=(
                 glossary_candidate_auto_resolution
             ),
+            batch_mode=BatchModeConfig.from_dict(value.get("batch_mode")),
+            off_peak_only=_off_peak_only(value.get("off_peak_only", False)),
             **strings,
         )
 
@@ -316,6 +360,10 @@ class NovelConfig:
             result["glossary_candidate_auto_resolution"] = (
                 self.glossary_candidate_auto_resolution.to_dict()
             )
+        if self.batch_mode != BatchModeConfig():
+            result["batch_mode"] = self.batch_mode.to_dict()
+        if self.off_peak_only:
+            result["off_peak_only"] = True
         return result
 
 

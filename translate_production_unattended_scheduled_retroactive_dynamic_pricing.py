@@ -4034,6 +4034,20 @@ def skip_glossary_review(chapter_number, meta, pending_meta_file, error):
 
 
 def process_chapter(chapter_number):
+    """A chapter from an unfinished batch commits from its batch (docs/BATCH_MODE.md)."""
+    from batch_runner import batch_commit_scope
+    with batch_commit_scope(globals(), chapter_number):
+        return process_single_chapter(chapter_number)
+
+
+def process_chapter_after_batch_preparation(chapter_number):
+    """Unattended runs prepare a batch first when batch mode is on or a batch is unfinished."""
+    from batch_runner import prepare_batch_if_due
+    prepare_batch_if_due(globals(), chapter_number)
+    return process_chapter(chapter_number)
+
+
+def process_single_chapter(chapter_number):
     chapter_started = time.perf_counter()
     chapter = chapter_map[chapter_number]
     chinese_text = chapter["text"]
@@ -4724,7 +4738,15 @@ def trial_finished(chapter_number):
 
 def run_unattended_production(*, target_chapter=None):
     """Compatibility callable backed by shared lifecycle sequencing."""
+    try:
+        return _run_unattended_lifecycle(target_chapter)
+    finally:
+        # A batch prepared ahead finishes its requests before the run ends.
+        from batch_runner import finish_preparation_ahead
+        finish_preparation_ahead(globals())
 
+
+def _run_unattended_lifecycle(target_chapter):
     return run_unattended_lifecycle(
         progress=progress,
         glossary=glossary,
@@ -4748,7 +4770,8 @@ def run_unattended_production(*, target_chapter=None):
         run_final_audit_if_needed_callback=(
             run_final_audit_if_needed
         ),
-        process_chapter=process_chapter,
+        process_chapter=(process_chapter if target_chapter is not None
+                         else process_chapter_after_batch_preparation),
         log_event=log_event,
         log_error=log_error,
         describe_api_error=describe_api_error,

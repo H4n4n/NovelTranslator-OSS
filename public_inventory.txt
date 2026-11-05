@@ -18,6 +18,9 @@ audit_semantic_completeness_candidates.py
 audit_semantic_integrity.py
 audit_semantic_kinship.py
 auxiliary_response_reconciliation.py
+batch_rehearsal_compare.py
+batch_runner.py
+batch_translation.py
 benchmark_ambiguous_recovery.py
 benchmark_batch.py
 benchmark_blind_review.py
@@ -115,6 +118,7 @@ docs/AUT2_MAIN_INTEGRATION.md
 docs/AUT2_PUBLICATION_FRESHNESS_D1.md
 docs/AUT2_PUBLICATION_REGENERATION.md
 docs/AUTONOMOUS_RECOVERY.md
+docs/BATCH_MODE.md
 docs/DEVELOPMENT_TIPS.md
 docs/G10FG_PAID_EXECUTORS.md
 docs/G10H_BLIND_CORPUS_FREEZE.md
@@ -295,6 +299,7 @@ tests/test_audit_semantic_completeness_candidates.py
 tests/test_audit_semantic_integrity_cli.py
 tests/test_audit_semantic_kinship.py
 tests/test_auxiliary_response_reconciliation.py
+tests/test_batch_mode.py
 tests/test_benchmark_ambiguous_recovery.py
 tests/test_benchmark_batch.py
 tests/test_benchmark_blind_review.py

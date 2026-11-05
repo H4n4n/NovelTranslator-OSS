@@ -43,6 +43,8 @@ STOP_MESSAGES = {
                                   "Check commandcode.ai/usage, then allow the resend."),
     "no_budget": ("This novel has no budget yet.", "Start it with a budget."),
     "writer_busy": ("Another process is already working on this novel.", "Wait for it to finish."),
+    "batch_terms_only": ("The batch's terms are settled. This is a terms-only rehearsal, so nothing was translated.",
+                         "Read data/batch/<first chapter>/settled.json."),
 }
 
 
@@ -59,14 +61,16 @@ def _cost(progress):
 
 
 def _spent(project):
-    """An audit's requests only reach the progress total when the audit finishes."""
+    """An audit's requests only reach the progress total when the audit finishes, and a
+    batch's translations only when each chapter commits."""
+    from batch_runner import uncommitted_batch_cost
     progress = _progress(project)
     start = progress.get("last_audited_chapter", 0) + 1
     unfinished = 0.0
     for path in (project.root / "output" / "audits").glob(f"audit_{start:04d}_*.checkpoint.json"):
         records = json.loads(path.read_text(encoding="utf-8")).get("attempt_records", [])
         unfinished += sum(float((record.get("stats") or {}).get("rate_correct_cost_usd") or 0) for record in records)
-    return _cost(progress) + unfinished
+    return _cost(progress) + unfinished + uncommitted_batch_cost(project.data_dir, progress["last_completed"])
 
 
 def set_budget(project, limit_usd):
@@ -107,6 +111,8 @@ def describe_stop(project, reason=None):
     error = None if reason else last_logged_error(project)
     if error and error.get("error_type") == "GoatProviderStop":
         reason = error.get("error_message")
+    if error and error.get("error_type") == "BatchTermsOnlyStop":
+        reason = "batch_terms_only"
     if reason in STOP_MESSAGES:
         message, action = STOP_MESSAGES[reason]
         return dict(reason=reason, message=message, action=action)
@@ -303,8 +309,8 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
             return dict(status=STOPPED, **describe_stop(project, "writer_busy"))
         if outcome.get("status") == "ALLOWANCE_EXHAUSTED":
             return dict(status=BUDGET_REACHED, message="The rest of the budget is too small for the next request.",
-                        action=f"Add budget to continue. A run keeps up to ${REQUEST_SET_ASIDE_USD:.2f} aside for each request. "
-                               "Most of it isn't spent.")
+                        action=f"Add budget to continue. A run keeps up to ${REQUEST_SET_ASIDE_USD:.2f} aside for each request "
+                               "in flight (a translation or batch request much less). Most of it isn't spent.")
         if _trial_is_finished(project):
             return dict(status=TRIAL_FINISHED, message="The trial chapters are ready to read.",
                         action="Start again to continue the novel.")

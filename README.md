@@ -34,6 +34,9 @@ State output classification and bounded recovery are documented in
 The immutable paid-operation control catalog and translation-saturation design
 are documented in [docs/PRODUCTION_OPERATION_POLICY.md](docs/PRODUCTION_OPERATION_POLICY.md).
 
+Opt-in source-first batch translation (about 50 chapters at once, off by default) is
+documented in [docs/BATCH_MODE.md](docs/BATCH_MODE.md).
+
 AUT-1 recovery behavior, existing automatic routes, and remaining operator-controlled
 boundaries are documented in [Autonomous recovery](docs/AUTONOMOUS_RECOVERY.md).
 

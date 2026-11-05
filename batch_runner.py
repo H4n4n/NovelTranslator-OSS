@@ -709,10 +709,17 @@ def _run_term_audit(module, batch):
     targets = [target for target in plan["candidates"] if target["chinese"] in settled]
     index = module.compact_glossary_index(allowed_source_keys=plan["safe_glossary_keys"], glossary_data={"entries": combined})
     chunks = [targets[at:at + bt.TERM_AUDIT_CHUNK] for at in range(0, len(targets), bt.TERM_AUDIT_CHUNK)]
+    batch_source = "\n".join(module.chapter_map[number]["text"] for number in batch.chapters)
+    inside = set()
+    for target in targets:
+        as_word, inside_count = bt.word_occurrences(target["chinese"], batch_source)
+        if inside_count and inside_count >= bt.INSIDE_WORDS_SHARE * (as_word + inside_count):
+            inside.add(target["chinese"])
     jobs, maps = [], {}
     for number, chunk in enumerate(chunks, 1):
         request, ids = bt.build_term_audit_request(chunk, model=module.MODEL, system_prompt=module.AUDIT_MODEL_PROMPT,
-            glossary_index=index, start=batch.start, end=batch.manifest["end"], chunk_index=number, total_chunks=len(chunks))
+            glossary_index=index, start=batch.start, end=batch.manifest["end"], chunk_index=number, total_chunks=len(chunks),
+            inside_words=inside)
         kwargs = batch.saved_request(f"term_audit_{number:02d}", lambda request=request: request)
         maps[batch.start + number - 1] = ids
         jobs.append((batch.start + number - 1, bt.TERM_AUDIT_KIND, kwargs,

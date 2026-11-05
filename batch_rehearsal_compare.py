@@ -11,11 +11,14 @@ Only for rehearsal copies; it refuses a novels root that is not a rehearsal root
 """
 import argparse
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from novel_project import load_novel_config
+from batch_translation import mentions
+from noveltranslator_core import strict_term_valid_targets
 
 SKIP_COPY = {"logs", ".production.lock", "trial_stop.json", "last_run.json", "run_budget.json"}
 ARMS = ("seq", "batch")
@@ -70,8 +73,29 @@ def renderings(entry):
     return [value for value in values or [] if value]
 
 
+def accepted_forms(entry):
+    """What counts as using a term: the engine's valid strict targets (canonical,
+    accepted inflections, safe plurals), either half of a dual rendering such as
+    "Duke of the North (Herzog Norden)", the singular of a plural rendering, and a
+    form of address without its possessive (Excellency for Your Excellency)."""
+    forms = set()
+    for value in renderings(entry):
+        forms.add(value)
+        dual = re.match(r"^(.*?)\s*\((.*)\)\s*$", value)
+        if dual:
+            forms.update({dual.group(1).strip(), dual.group(2).strip()})
+        if value.endswith("s") and not value.endswith("ss") and len(value) > 4:
+            forms.add(value[:-1])
+        address = re.match(r"^(?:Your|His|Her|Their)\s+(.+)$", value)
+        if address:
+            forms.add(address.group(1))
+    if entry.get("status") != "contextual" and entry.get("english"):
+        forms.update(strict_term_valid_targets(entry))
+    return {form.casefold() for form in forms if form}
+
+
 def term_consistency(novel_root, reference_glossary, start, end, sources):
-    """Of the occurrences of terms first seen in the range, how many use the reference rendering."""
+    """Of the uses of terms first seen in the range, how many use the reference rendering."""
     new_terms = {key: entry for key, entry in reference_glossary.items()
                  if start <= int(entry.get("first_chapter") or 0) <= end and renderings(entry)}
     hits, total, misses = 0, 0, []
@@ -81,10 +105,10 @@ def term_consistency(novel_root, reference_glossary, start, end, sources):
             continue
         text = path.read_text(encoding="utf-8").casefold()
         for key, entry in new_terms.items():
-            if number < int(entry["first_chapter"]) or key not in sources.get(number, ""):
+            if number < int(entry["first_chapter"]) or not mentions(key, sources.get(number, "")):
                 continue
             total += 1
-            if any(value.casefold() in text for value in renderings(entry)):
+            if any(form in text for form in accepted_forms(entry)):
                 hits += 1
             else:
                 misses.append({"chapter": number, "source": key, "expected": renderings(entry)})

@@ -37,7 +37,14 @@ GOAT path: durable request journal, retry policy, budget, pause flag.
      these rules, a batch settled 333 new terms where sequential settled about 80 for
      the same chapters, most of them common words. Before the decision, each candidate
      in most of the batch's chapters is marked `widespread` (usually a common word), and
-     candidates proposed with the same English as another candidate or an existing
+     a Korean key counts only where it starts a word: 각하 ("Your Excellency") inside
+     생각하다 ("to think") is not a use. A key found mostly inside longer words is marked
+     `inside_other_words`, and both the decision and the pre-translation audit are told
+     that a key which is also an ordinary word or a homonym (지배 "rule", 비약 "leap")
+     must be contextual, with the ordinary meaning among its renderings, or rejected, so
+     its English is never forced onto ordinary uses. For an existing glossary,
+     `glossary_homonym_report.py` lists such keys read-only, locked ones first, for the
+     owner to decide. Candidates proposed with the same English as another candidate or an existing
      entry are listed together as likely variants to merge. Keys that differ only by
      spaces are merged locally into one entry, and so are keys settled on exactly the
      same English and category (an existing entry, else the most widespread form).

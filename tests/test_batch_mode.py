@@ -852,3 +852,14 @@ def test_an_alias_merge_after_translation_does_not_rewrite_the_chapter(batch_eng
     assert module.process_chapter_after_batch_preparation(2) is True
     text = (project.chapter_dir / "0002.md").read_text(encoding="utf-8")
     assert "Imperial Guard Camp was renamed" in text and "Of Tang" not in text
+
+
+@pytest.mark.parametrize("batch_engine", [{"final_chapter": 4,
+                                           "batch_mode": BatchModeConfig(enabled=True, chapters=3, max_parallel=4)}],
+                         indirect=True)
+def test_a_short_tail_at_the_end_joins_the_last_batch(batch_engine):
+    project, module, provider, _ = batch_engine
+    for number in (1, 2, 3, 4):
+        assert module.process_chapter_after_batch_preparation(number) is True
+    assert [(item["start"], item["end"]) for item in batch_runner.manifests(project.data_dir)] == [(1, 4)]
+    assert provider.count("other") == 0  # chapter 4 did not fall back to the sequential path

@@ -129,6 +129,12 @@ in its range when that still leaves at least half a batch (with `audit_interval`
 chapters 53–100, then 101–150), so each audit covers whole batches and never lands
 while one is half-saved.
 
+**The last batch.** A batch never extends past the novel's final chapter, so the last one
+is as short as the novel requires. If fewer than 10 chapters (and fewer than a quarter
+batch) would be left after a batch, it takes them too, rather than leaving a short
+batch with the same fixed steps, or one chapter on the sequential path: a novel
+ending at 351 gets 301–351, not 301–350 and then 351 alone.
+
 ## Overlapping batches (`batch_mode.overlap`, opt-in)
 
 Batch B, the next 50 chapters, starts in the background as soon as batch A's terms are

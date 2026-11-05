@@ -32,6 +32,7 @@ from review_queue import add_item as add_review_item
 
 VERSION = 1
 WARM_UP_HEAD_START_SECONDS = 30
+SHORT_TAIL_CHAPTERS = 10  # Fewer chapters than this (and than a quarter batch) left at the end join the last batch.
 # While the next batch is prepared ahead, its requests leave this much of the budget
 # for the batch being saved: an audit request holds about $1.50 aside.
 AHEAD_HEADROOM_USD = 1.50
@@ -513,6 +514,11 @@ def _start_batch(module, batch, config, previous=None):
         boundary = end // interval * interval
         if boundary < end and boundary - chapter_number + 1 >= max(2, config.chapters // 2):
             end = boundary
+    # A few chapters left after this batch would be a short batch of their own, or
+    # one chapter on the sequential path, so this batch takes them too.
+    last = min(module.FINAL_CHAPTER, _trial_last_chapter(module) or 10**9)
+    if end < last and last - end < min(SHORT_TAIL_CHAPTERS, max(2, config.chapters // 4)):
+        end = last
     blocked = _first_unusable_chapter(module, chapter_number, end)
     if blocked is not None:
         end = blocked - 1

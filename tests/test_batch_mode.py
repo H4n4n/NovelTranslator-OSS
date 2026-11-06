@@ -863,3 +863,20 @@ def test_a_short_tail_at_the_end_joins_the_last_batch(batch_engine):
         assert module.process_chapter_after_batch_preparation(number) is True
     assert [(item["start"], item["end"]) for item in batch_runner.manifests(project.data_dir)] == [(1, 4)]
     assert provider.count("other") == 0  # chapter 4 did not fall back to the sequential path
+
+
+@pytest.mark.parametrize("start,expected", [
+    (1, 50), (53, 100), (101, 150),  # on a boundary, or past it by less than half a batch
+    (81, 100),   # between boundaries: end on the next one, so the batches after it line up
+    (99, 100),   # however short
+    (100, 100),  # a boundary chapter alone takes the sequential path
+    (501, 531),  # the last batch takes a short tail
+])
+def test_a_batch_that_starts_between_audits_ends_on_the_next(start, expected):
+    assert batch_runner.batch_end(start, 50, 50, 531) == expected
+
+
+def test_batch_end_without_an_audit_interval_or_with_a_short_one():
+    assert batch_runner.batch_end(81, 50, None, 531) == 130
+    assert batch_runner.batch_end(81, 50, 25, 531) == 125  # the last boundary in range
+    assert batch_runner.batch_end(126, 50, 100, 531) == 175  # no boundary in range

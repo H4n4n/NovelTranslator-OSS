@@ -498,6 +498,28 @@ def _trial_last_chapter(module):
     return trial["after_chapter"] if trial else None
 
 
+def batch_end(start, size, audit_interval, last):
+    """The last chapter of a batch that starts at `start`.
+
+    A batch ends on a periodic-audit boundary, so each audit covers whole batches and
+    the next batch starts from audited terms. When the batch starts on a boundary, it
+    ends on the last one in its range if that still leaves half a batch. When it starts
+    between boundaries (the novel was translated one by one up to there, or a chapter
+    with its own paid translation came first), it ends on the next one even if that is
+    short, so the batches after it line up; a boundary chapter on its own takes the
+    sequential path (end == start). A few chapters left after the batch join it.
+    """
+    end = min(start + size - 1, last)
+    if isinstance(audit_interval, int) and audit_interval > 0:
+        boundary = end // audit_interval * audit_interval
+        aligned = (start - 1) % audit_interval == 0
+        if start <= boundary < end and (not aligned or boundary - start + 1 >= max(2, size // 2)):
+            end = boundary
+    if end < last and last - end < min(SHORT_TAIL_CHAPTERS, max(2, size // 4)):
+        end = last
+    return end
+
+
 def _start_batch(module, batch, config, previous=None):
     """Write a new batch's manifest; False when the range is too short for a batch.
 
@@ -506,19 +528,8 @@ def _start_batch(module, batch, config, previous=None):
     last heading, all known before the previous batch's chapters are saved.
     """
     chapter_number = int(batch.dir.name)
-    end = min(chapter_number + config.chapters - 1, module.FINAL_CHAPTER, _trial_last_chapter(module) or 10**9)
-    # End on a periodic-audit boundary when that leaves at least half a batch, so each
-    # audit covers whole batches and never lands while one is half-saved.
-    interval = getattr(module, "AUDIT_INTERVAL", None)
-    if isinstance(interval, int) and interval > 0:
-        boundary = end // interval * interval
-        if boundary < end and boundary - chapter_number + 1 >= max(2, config.chapters // 2):
-            end = boundary
-    # A few chapters left after this batch would be a short batch of their own, or
-    # one chapter on the sequential path, so this batch takes them too.
     last = min(module.FINAL_CHAPTER, _trial_last_chapter(module) or 10**9)
-    if end < last and last - end < min(SHORT_TAIL_CHAPTERS, max(2, config.chapters // 4)):
-        end = last
+    end = batch_end(chapter_number, config.chapters, getattr(module, "AUDIT_INTERVAL", None), last)
     blocked = _first_unusable_chapter(module, chapter_number, end)
     if blocked is not None:
         end = blocked - 1

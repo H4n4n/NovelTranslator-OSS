@@ -124,6 +124,18 @@ the backstop for problems across batches, queued corrections and retroactive fix
 the rehearsal, the periodic audits of a batch glossary corrected 5 terms and merged 7
 variants that the batch decision had let through.
 
+**Periodic audit chunks go out together.** With the GOAT provider, in batch mode or
+sequential, each periodic audit sends the first request of all its chunks at once, up to
+16 in flight (`AUDIT_CHUNKS_IN_FLIGHT` in `production_goat_runtime.py`; 1 sends them one
+by one). Each lands in the fixed journal slot the audit would use anyway, and the audit
+then works through its chunks in order and replays those answers, so its checkpoint and
+the paid evidence the end-of-book check re-proves are the same as one by one. Repairs and
+corrections still go one at a time. If a chunk's answer is cut off and the chunk splits,
+the answers already fetched for later chunks were asked with the old chunk count and go
+unused; they are counted in the novel's cost (`audit_chunk_answer_unused` in the log).
+No audit chunk split in 978 chunks so far. A book's final audit of 954 terms (66 chunks)
+took 22.5 minutes one by one.
+
 **Batches end on audit boundaries.** A batch ends at the last periodic-audit boundary
 in its range when that still leaves at least half a batch (with `audit_interval` 50,
 chapters 53–100, then 101–150), so each audit covers whole batches and never lands

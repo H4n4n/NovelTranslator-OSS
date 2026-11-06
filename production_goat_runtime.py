@@ -6,9 +6,11 @@ client construction here.
 """
 import copy
 import hashlib
+import inspect
 import json
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -37,6 +39,9 @@ from production_provider_contract import PROVIDER_COMMAND_CODE, COMMAND_CODE_DEE
 from provider_retry_policy import DefiniteProviderFailure, send_with_retries
 
 # PR140 domain operations retain their fixed domain-owned journal paths.
+# A periodic audit's chunks are independent requests; this many go out at once (1: one by one).
+AUDIT_CHUNKS_IN_FLIGHT = 16
+
 DOMAIN_OPERATIONS = {
     "strict_terminology_micro_repair": "terminology_repair",
     "strict_terminology_micro_repair_correction": "terminology_repair",
@@ -810,6 +815,52 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                     audit_request_scope.pop()
         return AuditCallback(build_request=builder, bind_request=bind_audit_request, send_request=None)
 
+    def send_audit_chunks_together(builder, plans, sent):
+        """Send each chunk's first audit request into its fixed slot, several at a time.
+
+        The audit loop then replays them in order, so its checkpoint is the same as when
+        it sends them one by one. A stop (budget, provider, pause) only ends this early:
+        the loop meets the same journal state and handles it as it always does.
+        """
+        chapter = stack[-1][1]
+        source = module.chapter_map[chapter]["text"]
+        jobs = []
+        for plan in plans:
+            request = builder(*plan["args"])
+            binding = bind_audit_request(request, plan["record"], plan["args"][-1])
+            kind = "context_periodic_audit_" + build_provider_request_identity(
+                request_body=normalize_production_request("periodic_audit", request)).request_sha256
+            jobs.append((kind, request, binding))
+        print(f"Audit: sending {len(jobs)} chunks together, up to {AUDIT_CHUNKS_IN_FLIGHT} at a time")
+
+        def send(job):
+            kind, request, binding = job
+            context_operations[kind] = "periodic_audit"
+            result = journaled(kind, chapter, source, request, journal_path=binding["journal_path"],
+                               outer_binding=binding["identity"]["auxiliary_domain_binding"])
+            return binding, result["response"]
+
+        stopped = threading.Event()
+        def guarded(job):
+            if stopped.is_set():
+                return None
+            try:
+                return send(job)
+            except BaseException as exc:
+                stopped.set()
+                module.log_event("audit_chunks_together_stopped", stage="glossary_audit",
+                                 error_type=type(exc).__name__, error_message=str(exc)[:300])
+                return None
+        with ThreadPoolExecutor(max_workers=AUDIT_CHUNKS_IN_FLIGHT) as pool:
+            try:
+                for outcome in pool.map(guarded, jobs):
+                    if outcome is not None:
+                        binding, envelope = outcome
+                        sent[binding["journal_path"]] = (binding["identity"]["operation_id"], envelope["stats"])
+            except BaseException:
+                stopped.set()  # Ctrl+C: requests in flight finish and are recorded; no new ones start.
+                raise
+
     def journal_owned_audit(*args, **kwargs):
         forwarded = dict(kwargs)
         for name in ("request_chunk", "repair_chunk", "correct_semantic_chunk"):
@@ -817,7 +868,21 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
             builder = getattr(callback, "build_request", None)
             if callable(builder):
                 forwarded[name] = wrap_audit_callback(callback, builder)
-        return original_chunked_audit(*args, **forwarded)
+        sent = {}
+        builder = getattr(kwargs.get("request_chunk"), "build_request", None)
+        if (AUDIT_CHUNKS_IN_FLIGHT > 1 and callable(builder)
+                and "prefetch" in inspect.signature(original_chunked_audit).parameters):
+            forwarded["prefetch"] = lambda plans: send_audit_chunks_together(builder, plans, sent)
+        run = original_chunked_audit(*args, **forwarded)
+        used = {record.get("transport_binding", {}).get("journal_path")
+                for record in run["checkpoint"]["attempt_records"]}
+        from pathlib import Path
+        for path, (operation_id, stats) in sent.items():
+            if path not in used:
+                # A chunk split after its answer was cut off, so this answer went unused. It was paid for.
+                module.account_residual_cjk_micro_repair(operation_id, stats)
+                module.log_event("audit_chunk_answer_unused", stage="glossary_audit", journal=Path(path).name)
+        return run
 
     module.run_chunked_audit = journal_owned_audit
     from auxiliary_response_reconciliation import (

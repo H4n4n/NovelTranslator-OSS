@@ -148,3 +148,39 @@ def test_only_a_current_format_backup_can_be_an_orphan(tmp_path):
         (tmp_path / name / "chapters_before").mkdir(parents=True)
         (tmp_path / name / "chapters_before" / "0001.md").write_text("x", encoding="utf-8")
     assert [path.name for path in orphan_transaction_backups(tmp_path, {known})] == [f"retroactive_{orphan}"]
+
+
+def _checkpoint(module):
+    return json.loads(module.periodic_audit_checkpoint_path(376, 400).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("incident", ["audit"], indirect=True)
+def test_audit_chunks_sent_together_replay_in_order(capsys, incident):
+    project, module, result, stats, chunking = incident
+    assert "sending 3 chunks together" in capsys.readouterr().out
+    records = _checkpoint(module)["attempt_records"]
+    # The checkpoint is the one the one-by-one loop writes: chunk order, first attempts.
+    assert [(r["chunk_id"], r["kind"], r["attempt"], r["lifecycle"]) for r in records] == [
+        (f"c000{n}", "audit", 1, "validated") for n in (1, 2, 3)]
+    approved = plan(project)
+    assert approved["provider_calls_required"] == 0
+    assert len(approved["state_binding"]["proof"]["journals"]) == 3
+    assert execute(project, approved)["status"] == "FINALIZED"
+
+
+@pytest.mark.parametrize("incident", ["split_together"], indirect=True)
+def test_split_after_chunks_sent_together_counts_the_unused_answers(incident):
+    project, module, result, stats, chunking = incident
+    checkpoint = _checkpoint(module)
+    assert any(c["status"] == "split" for c in checkpoint["chunks"])
+    used = {r["transport_binding"]["journal_path"] for r in checkpoint["attempt_records"]}
+    journals = [json.loads(p.read_text(encoding="utf-8")) for p in module.PAID_REQUEST_JOURNAL_DIR.glob("*.json")]
+    unused = [j for j in journals if j["operation_kind"].startswith("context_periodic_audit_")
+              and not any(Path(u).name.endswith(j["operation_kind"] + ".json") for u in used)]
+    # Chunks 2 and 3 went out with "of 3"; after chunk 1 split they are asked again "of 4".
+    assert len(unused) == 2 and chunking["api_request_count"] == 5
+    accounted = json.loads(project.progress_file.read_bytes())["accounted_api_operation_ids"]
+    assert all(j["operation_id"] in accounted for j in unused)
+    approved = plan(project)
+    assert approved["provider_calls_required"] == 0
+    assert execute(project, approved)["status"] == "FINALIZED"

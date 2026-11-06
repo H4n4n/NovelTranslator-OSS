@@ -1,6 +1,8 @@
 """Synthetic 376–400 incident, exact paid replay and publication crash proofs."""
 import copy
 import json
+import re
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace as NS, FunctionType
 
@@ -114,9 +116,20 @@ def incident(tmp_path, monkeypatch, request):
     module.STATE_EXTRACTION_POLICY = acquisition.STATE_EXTRACTION_POLICY
     physical_fixture_sends = []
     prior_candidates = []
+    # These modes script what the first send gets, so their chunks go one by one.
+    ordered = fixture_mode in {"json_repair", "semantic_correction", "split"}
+    if ordered:
+        import production_goat_runtime
+        monkeypatch.setattr(production_goat_runtime, "AUDIT_CHUNKS_IN_FLIGHT", 1)
+    sends_lock = threading.Lock()
     def create(**wire):
-        physical_fixture_sends.append(wire)
+        with sends_lock:
+            physical_fixture_sends.append(wire)
+            sent = len(physical_fixture_sends)
         prompt = wire["messages"][-1]["content"]
+        chunk = re.search(r"AUDIT CHUNK: (\d+) of (\d+)", prompt)
+        # Chunks sent together arrive in any order: a chunk's usage follows its number.
+        slot = sent if ordered or not chunk else int(chunk.group(1))
         if "AUDIT TARGETS:\n" in prompt:
             candidates = json.loads(prompt.split("AUDIT TARGETS:\n")[1].split("\nSTRUCTURED FAMILY CONTEXT:")[0])
             prior_candidates[:] = candidates
@@ -126,7 +139,9 @@ def incident(tmp_path, monkeypatch, request):
             action="correct" if t["source_key"] == "有榮山" else "keep",
             english="Mount Yourong" if t["source_key"] == "有榮山" else t["english"], notes="fixture") for t in candidates], issues=["fixture issue"]), ensure_ascii=False)
         finish = "stop"
-        if len(physical_fixture_sends) == 1:
+        if fixture_mode == "split_together" and chunk and chunk.groups() == ("1", "3"):
+            content, finish = "{truncated", "length"
+        if sent == 1 and ordered:
             if fixture_mode == "json_repair": content = "{malformed"
             if fixture_mode == "semantic_correction":
                 parsed = json.loads(content); parsed["decisions"][0]["action"] = ""; content = json.dumps(parsed)
@@ -134,7 +149,7 @@ def incident(tmp_path, monkeypatch, request):
         elif fixture_mode == "semantic_correction" and "AUTHORIZED FIELDS BY CANDIDATE" in prompt:
             content = '{"decisions":[{"candidate_id":"c01","action":"keep"}]}'
         counts = [(18017, 10183, 9220), (18420, 11414, 10565), (14277, 1701, 1436)] + [(20, 10, 4)] * 4
-        p, c, r = counts[len(physical_fixture_sends) - 1]
+        p, c, r = counts[slot - 1]
         return NS(id=f"synthetic-{len(physical_fixture_sends)}", model=provider_identity("command_code_provider", "v41-flash")["wire_model"],
             choices=[NS(finish_reason=finish, message=NS(content=content))],
             usage=NS(prompt_tokens=p, completion_tokens=c, total_tokens=p+c,
@@ -142,7 +157,7 @@ def incident(tmp_path, monkeypatch, request):
     # Context ownership is installed on the real call_periodic_audit entry point.
     module.run_periodic_audit = module.call_periodic_audit
     module._RUNTIME_INITIALIZED = True  # Disposable manually hydrated state only.
-    install_goat_runtime(module, provider_client=NS(chat=NS(completions=NS(create=create))), budget=GoatBudget(6, 10), clock=CLOCK)
+    install_goat_runtime(module, provider_client=NS(chat=NS(completions=NS(create=create))), budget=GoatBudget(10 if fixture_mode == "split_together" else 6, 10), clock=CLOCK)
     audit_result, stats, chunking = module.run_periodic_audit(376, 400)
     if fixture_mode in {"audit", "relative"}:
         assert len(physical_fixture_sends) == 3

@@ -419,3 +419,23 @@ def test_unattended_runner_remains_stable_compatibility_callable(
         assert observed["describe_local_error"] is module.describe_non_provider_error
     finally:
         sys.modules.pop(name, None)
+
+
+def test_whole_history_step_flags_instead_of_stopping(monkeypatch, tmp_path):
+    import historical_reconciliation
+    name, module = _import_inert_production(monkeypatch, tmp_path)
+    try:
+        flags = []
+        module.audit_history = {"audits": [{"historical_reconciliation": {}}]}
+        module.FINAL_CHAPTER = 9
+        monkeypatch.setattr(module, "flag_for_review", lambda chapter, kind, detail: flags.append((chapter, kind)))
+        report = {"status": "CHECKED", "audits_with_earlier_prompt": ["0001_0005"]}
+        monkeypatch.setattr(historical_reconciliation, "save_final_consistency", lambda _module: report)
+        assert module.run_whole_history_consistency() is report
+        assert flags == [(9, "whole_history_earlier_audit_prompt")]
+        # A term repair edits chapters outside the audit history the report replays.
+        (tmp_path / "output" / "term_repairs").mkdir(parents=True)
+        assert module.run_whole_history_consistency()["status"] == "SKIPPED_TERM_REPAIRS"
+        assert flags[-1] == (9, "whole_history_skipped")
+    finally:
+        sys.modules.pop(name, None)

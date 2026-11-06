@@ -141,3 +141,34 @@ def test_aut2_final_whole_history_and_publication_stale_are_independent_of_tail(
     assert report["scope"] == "whole_committed_history"
     assert report["examined_chapters"] == 400
     assert "有榮山" not in json.dumps(report, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("incident", ["mixed"], indirect=True)
+def test_whole_history_notes_audits_sent_with_an_earlier_prompt(incident, monkeypatch):
+    import historical_reconciliation as history
+    from goat_periodic_audit_finalize_plan import audit_prompt_changed, checkpoint_proof
+    project, module, result, stats, chunking = incident
+    execute(project)
+    current = local_module(project)
+    def at_audit_start():
+        # The report checks each audit from the state it started with.
+        intent = final.load_intent(current, 376, 400)
+        detached = NS(**vars(current))
+        for key, name in (("glossary", "glossary"), ("progress", "progress"), ("issues", "issues_data"), ("history", "audit_history")):
+            setattr(detached, name, copy.deepcopy(intent["baseline"][key]))
+        return detached
+    assert "audits_with_earlier_prompt" not in history.final_consistency_report(current)
+    assert not audit_prompt_changed(at_audit_start(), 376, 400)
+    # A later engine rewords the audit prompt: the paid requests can no longer be rebuilt.
+    monkeypatch.setattr(current, "AUDIT_PROMPT", current.AUDIT_PROMPT + " A later rule.")
+    assert audit_prompt_changed(at_audit_start(), 376, 400)
+    with pytest.raises(RuntimeError, match="identity drift"):
+        checkpoint_proof(at_audit_start(), 376, 400)
+    before = snapshot(project)
+    report = history.final_consistency_report(current)
+    assert "0376_0400" in report["audits_with_earlier_prompt"]
+    assert report["examined_chapters"] == 400 and snapshot(project) == before
+    # Different candidates are still drift, whatever the prompt.
+    targets = current.audit_targets
+    monkeypatch.setattr(current, "audit_targets", lambda *a, **k: (lambda t, i: (t[1:], i))(*targets(*a, **k)))
+    assert not audit_prompt_changed(at_audit_start(), 376, 400)

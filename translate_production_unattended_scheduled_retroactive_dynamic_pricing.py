@@ -4725,9 +4725,19 @@ def run_whole_history_consistency():
         # Audits from before this evidence existed can't be reproved, and the book is already finished.
         flag_for_review(FINAL_CHAPTER, "whole_history_skipped", "Older audits lack the evidence for the whole-book report.")
         return {"status": "SKIPPED_OLDER_AUDITS", "deferred_chapters": []}
+    if (AUDIT_DIR.parent / "term_repairs").is_dir():
+        # A term repair changes chapters outside the audit history, with its own backups and log.
+        flag_for_review(FINAL_CHAPTER, "whole_history_skipped", "Term repairs changed chapters outside the audit history.")
+        return {"status": "SKIPPED_TERM_REPAIRS", "deferred_chapters": []}
     from types import SimpleNamespace
     from historical_reconciliation import save_final_consistency
-    return save_final_consistency(SimpleNamespace(**globals()))
+    report = save_final_consistency(SimpleNamespace(**globals()))
+    if report.get("audits_with_earlier_prompt"):
+        # The audit prompt has changed since these audits; their paid requests can't be re-proved.
+        flag_for_review(FINAL_CHAPTER, "whole_history_earlier_audit_prompt",
+                        "Audits " + ", ".join(report["audits_with_earlier_prompt"]) + " were sent with an earlier "
+                        "audit prompt, so their paid requests were not re-proved. Everything else was checked.")
+    return report
 
 
 def trial_finished(chapter_number):

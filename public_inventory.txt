@@ -165,6 +165,7 @@ full_pipeline_periodic_audit_recovery.py
 glossary_audit.py
 glossary_candidate_auto_resolution.py
 glossary_candidate_resolution.py
+glossary_homonym_report.py
 glossary_integrity.py
 goat_accounting_migration_execute.py
 goat_accounting_migration_plan.py
@@ -409,6 +410,7 @@ tests/test_g7p_stage1_aux_subrequest_compat.py
 tests/test_glossary_audit.py
 tests/test_glossary_candidate_auto_resolution.py
 tests/test_glossary_candidate_resolution.py
+tests/test_glossary_hygiene.py
 tests/test_glossary_integrity.py
 tests/test_goat_accounting_epoch_migration.py
 tests/test_goat_batch_plan.py

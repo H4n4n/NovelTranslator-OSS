@@ -82,22 +82,40 @@ def runtime_identity(project):
                 runtime_manifest=manifest, runtime_sha256=canonical_sha256(manifest))
 
 
-def checkpoint_proof(module, start, end):
-    """Prove paid leaves locally using native GOAT or the installed recorded experiment owner."""
-    from experimental_goat_audit_proof import owner_for
-    owner = owner_for(module)
-    cp_path = module.periodic_audit_checkpoint_path(start, end)
-    checkpoint = read_json(cp_path)
+def _checkpoint_identity(module, start, end):
+    checkpoint = read_json(module.periodic_audit_checkpoint_path(start, end))
     targets, integrity = module.audit_targets(start, end, glossary_data=module.glossary, return_integrity=True)
     config = audit.AuditChunkConfig(max_candidates=module.MAX_AUDIT_CANDIDATES_PER_CHUNK,
         max_serialized_chars=module.MAX_AUDIT_CHUNK_SERIALIZED_CHARS)
     index = module.compact_glossary_index(allowed_source_keys=integrity["safe_glossary_keys"], glossary_data=module.glossary)
     context = hashlib.sha256((module.AUDIT_PROMPT + "\n" + index).encode()).hexdigest()
     candidate_hash = audit.audit_candidate_set_hash(targets, config, context)
-    require(checkpoint.get("status") == "completed" and checkpoint.get("schema_version") == audit.AUDIT_CHECKPOINT_SCHEMA_VERSION
-            and checkpoint.get("policy_version") == config.policy_version and checkpoint.get("config") == asdict(config)
-            and checkpoint.get("candidate_set_hash") == candidate_hash
-            and checkpoint.get("audit_window") == dict(start_chapter=start, end_chapter=end), "completed audit checkpoint identity drift")
+    same_frame = (checkpoint.get("status") == "completed" and checkpoint.get("schema_version") == audit.AUDIT_CHECKPOINT_SCHEMA_VERSION
+                  and checkpoint.get("policy_version") == config.policy_version and checkpoint.get("config") == asdict(config)
+                  and checkpoint.get("audit_window") == dict(start_chapter=start, end_chapter=end))
+    return checkpoint, targets, integrity, config, index, context, candidate_hash, same_frame
+
+
+def audit_prompt_changed(module, start, end):
+    """True when a completed audit matches its candidates exactly but was sent with an earlier audit prompt.
+
+    The prompt is part of the checkpoint's hash and of every paid request's hash,
+    and the request journal keeps only hashes, so such an audit's paid requests
+    can't be rebuilt and re-proved. Anything else that differs is still drift.
+    """
+    checkpoint, targets, _, _, _, _, candidate_hash, same_frame = _checkpoint_identity(module, start, end)
+    leaf_ids = [i for c in checkpoint.get("chunks", []) if c.get("status") != "split" for i in c.get("candidate_ids", [])]
+    return (same_frame and checkpoint.get("candidate_set_hash") != candidate_hash
+            and len(leaf_ids) == len(set(leaf_ids)) and set(leaf_ids) == {t["candidate_id"] for t in targets})
+
+
+def checkpoint_proof(module, start, end):
+    """Prove paid leaves locally using native GOAT or the installed recorded experiment owner."""
+    from experimental_goat_audit_proof import owner_for
+    owner = owner_for(module)
+    cp_path = module.periodic_audit_checkpoint_path(start, end)
+    checkpoint, targets, integrity, config, index, context, candidate_hash, same_frame = _checkpoint_identity(module, start, end)
+    require(same_frame and checkpoint.get("candidate_set_hash") == candidate_hash, "completed audit checkpoint identity drift")
     leaves = [c for c in checkpoint["chunks"] if c["status"] != "split"]
     require(leaves and all(c["status"] == "completed" for c in leaves), "audit leaves are not completed")
     ids = [t["candidate_id"] for t in sorted(targets, key=lambda t: t["chinese"])]

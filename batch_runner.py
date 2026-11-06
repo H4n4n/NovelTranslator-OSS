@@ -32,6 +32,7 @@ from review_queue import add_item as add_review_item
 
 VERSION = 1
 WARM_UP_HEAD_START_SECONDS = 30
+SHORT_TAIL_CHAPTERS = 10  # Fewer chapters than this (and than a quarter batch) left at the end join the last batch.
 # While the next batch is prepared ahead, its requests leave this much of the budget
 # for the batch being saved: an audit request holds about $1.50 aside.
 AHEAD_HEADROOM_USD = 1.50
@@ -513,6 +514,11 @@ def _start_batch(module, batch, config, previous=None):
         boundary = end // interval * interval
         if boundary < end and boundary - chapter_number + 1 >= max(2, config.chapters // 2):
             end = boundary
+    # A few chapters left after this batch would be a short batch of their own, or
+    # one chapter on the sequential path, so this batch takes them too.
+    last = min(module.FINAL_CHAPTER, _trial_last_chapter(module) or 10**9)
+    if end < last and last - end < min(SHORT_TAIL_CHAPTERS, max(2, config.chapters // 4)):
+        end = last
     blocked = _first_unusable_chapter(module, chapter_number, end)
     if blocked is not None:
         end = blocked - 1
@@ -694,7 +700,7 @@ def _run_consolidation(module, batch):
 def _run_term_audit(module, batch):
     """Audit the settled terms before any chapter is translated with them.
 
-    The periodic audit's prompt and source-backed targets, sent one chunk at a time.
+    The periodic audit's prompt and source-backed targets, its chunks sent together.
     Its corrections, rejections and merges change the settled terms here, so a wrong
     rendering never reaches the batch's chapters. A chunk that fails leaves its terms
     as settled and is flagged; the periodic audit still runs after the chapters are saved.
@@ -709,15 +715,23 @@ def _run_term_audit(module, batch):
     targets = [target for target in plan["candidates"] if target["chinese"] in settled]
     index = module.compact_glossary_index(allowed_source_keys=plan["safe_glossary_keys"], glossary_data={"entries": combined})
     chunks = [targets[at:at + bt.TERM_AUDIT_CHUNK] for at in range(0, len(targets), bt.TERM_AUDIT_CHUNK)]
+    batch_source = "\n".join(module.chapter_map[number]["text"] for number in batch.chapters)
+    inside = set()
+    for target in targets:
+        as_word, inside_count = bt.word_occurrences(target["chinese"], batch_source)
+        if inside_count and inside_count >= bt.INSIDE_WORDS_SHARE * (as_word + inside_count):
+            inside.add(target["chinese"])
     jobs, maps = [], {}
     for number, chunk in enumerate(chunks, 1):
         request, ids = bt.build_term_audit_request(chunk, model=module.MODEL, system_prompt=module.AUDIT_MODEL_PROMPT,
-            glossary_index=index, start=batch.start, end=batch.manifest["end"], chunk_index=number, total_chunks=len(chunks))
+            glossary_index=index, start=batch.start, end=batch.manifest["end"], chunk_index=number, total_chunks=len(chunks),
+            inside_words=inside)
         kwargs = batch.saved_request(f"term_audit_{number:02d}", lambda request=request: request)
         maps[batch.start + number - 1] = ids
         jobs.append((batch.start + number - 1, bt.TERM_AUDIT_KIND, kwargs,
                      _slot(module, batch, bt.TERM_AUDIT_KIND, batch.start + number - 1)))
-    results, stop = _send_all(module, batch, jobs, logical=bt.TERM_AUDIT_KIND, warm_up=False, limit=1) if jobs else ({}, None)
+    # Chunks are independent: each has the same glossary index and its own targets.
+    results, stop = _send_all(module, batch, jobs, logical=bt.TERM_AUDIT_KIND, warm_up=False) if jobs else ({}, None)
     if stop is not None:
         raise stop
     decisions = {}

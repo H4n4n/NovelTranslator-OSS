@@ -1213,8 +1213,15 @@ def run_chunked_audit(
     context_fingerprint: str = "",
     supersede_incompatible_policy: bool = False,
     glossary_entries: Mapping[str, Mapping[str, Any]] | None = None,
+    prefetch: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run or resume an audit, persisting each validated candidate chunk."""
+    """Run or resume an audit, persisting each validated candidate chunk.
+
+    prefetch, when given, receives the exact first attempt of every chunk not yet
+    sent (its attempt record and request arguments) before the chunks are worked
+    through in order. A transport can send them together into the same slots the
+    loop below then replays, so the checkpoint is the same either way.
+    """
     config = config or AuditChunkConfig()
     config.validate()
     all_glossary_keys = tuple(all_glossary_keys)
@@ -1342,9 +1349,9 @@ def run_chunked_audit(
             raise AuditCheckpointMismatch("unsupported audit reconciliation outcome")
 
 
-    def begin_attempt(
-        pending: dict[str, Any], metadata: Mapping[str, Any], kind: str,
-        attempt: int, operation_id: str, callback, args,
+    def new_attempt_record(
+        pending: Mapping[str, Any], metadata: Mapping[str, Any], kind: str,
+        attempt: int, operation_id: str,
     ) -> dict[str, Any]:
         record = {
             "chunk_id": pending["chunk_id"],
@@ -1357,6 +1364,13 @@ def run_chunked_audit(
         }
         record["request_metadata"] = copy.deepcopy(dict(metadata))
         record["request_metadata"]["candidate_set_hash"] = candidate_hash
+        return record
+
+    def begin_attempt(
+        pending: dict[str, Any], metadata: Mapping[str, Any], kind: str,
+        attempt: int, operation_id: str, callback, args,
+    ) -> dict[str, Any]:
+        record = new_attempt_record(pending, metadata, kind, attempt, operation_id)
         prepare = getattr(callback, "prepare", None)
         if callable(prepare):
             record["transport_binding"] = prepare(record, request_args(record, args))
@@ -1415,6 +1429,64 @@ def run_chunked_audit(
         persist_checkpoint()
         return parsed_value, None, None
 
+    def chunk_request(pending: Mapping[str, Any]):
+        """The request candidates and metadata for one chunk's audit attempt."""
+        chunk_candidates = [
+            candidate_by_id[candidate_id] for candidate_id in pending["candidate_ids"]
+        ]
+        model_id_map = (
+            build_model_candidate_id_map(pending["candidate_ids"])
+            if explicit_candidate_identity else None
+        )
+        request_candidates = (
+            model_facing_candidates(chunk_candidates, model_id_map)
+            if model_id_map is not None
+            else [copy.deepcopy(dict(item)) for item in chunk_candidates]
+        )
+        model_family_context = []
+        for internal_id, request_candidate in zip(
+            pending["candidate_ids"], request_candidates
+        ):
+            context = copy.deepcopy(family_by_candidate_id[internal_id])
+            if model_id_map is not None:
+                context["candidate_id"] = model_id_map.internal_to_alias[internal_id]
+            request_candidate.update({
+                "source_key": context["source_key"],
+                "family_id": context["family_id"],
+                "family_root": context["family_root"],
+                "alias_of": context["alias_of"],
+            })
+            model_family_context.append(context)
+        metadata = {
+            "chunk_id": pending["chunk_id"],
+            "chunk_index": _leaf_chunks(checkpoint["chunks"]).index(pending) + 1,
+            "total_chunks": len(_leaf_chunks(checkpoint["chunks"])),
+            "audit_window": checkpoint["audit_window"],
+            "candidate_ids": list(pending["candidate_ids"]),
+            "model_candidate_ids": (
+                list(model_id_map.alias_to_internal) if model_id_map else []
+            ),
+            "model_id_transport_version": (
+                MODEL_CANDIDATE_ID_TRANSPORT_VERSION if model_id_map else "legacy"
+            ),
+            "family_policy": AUDIT_FAMILY_POLICY_VERSION,
+            "family_context": model_family_context,
+        }
+        return model_id_map, request_candidates, model_family_context, metadata
+
+    if prefetch is not None:
+        fresh = [chunk for chunk in _leaf_chunks(checkpoint["chunks"])
+                 if chunk.get("status") == "pending" and not chunk.get("attempts")
+                 and latest_record(chunk["chunk_id"], "audit") is None]
+        plans = []
+        for chunk in fresh:
+            _, request_candidates, _, metadata = chunk_request(chunk)
+            record = new_attempt_record(chunk, metadata, "audit", 1,
+                _audit_attempt_operation_id(candidate_hash, chunk["chunk_id"], 1, "audit"))
+            plans.append({"record": record, "args": request_args(record, (request_candidates, metadata))})
+        if len(plans) > 1:
+            prefetch(plans)
+
     while True:
         pending = next(
             (
@@ -1465,47 +1537,7 @@ def run_chunked_audit(
                 "resumed": resumed,
             }
 
-        chunk_candidates = [
-            candidate_by_id[candidate_id] for candidate_id in pending["candidate_ids"]
-        ]
-        model_id_map = (
-            build_model_candidate_id_map(pending["candidate_ids"])
-            if explicit_candidate_identity else None
-        )
-        request_candidates = (
-            model_facing_candidates(chunk_candidates, model_id_map)
-            if model_id_map is not None
-            else [copy.deepcopy(dict(item)) for item in chunk_candidates]
-        )
-        model_family_context = []
-        for internal_id, request_candidate in zip(
-            pending["candidate_ids"], request_candidates
-        ):
-            context = copy.deepcopy(family_by_candidate_id[internal_id])
-            if model_id_map is not None:
-                context["candidate_id"] = model_id_map.internal_to_alias[internal_id]
-            request_candidate.update({
-                "source_key": context["source_key"],
-                "family_id": context["family_id"],
-                "family_root": context["family_root"],
-                "alias_of": context["alias_of"],
-            })
-            model_family_context.append(context)
-        metadata = {
-            "chunk_id": pending["chunk_id"],
-            "chunk_index": _leaf_chunks(checkpoint["chunks"]).index(pending) + 1,
-            "total_chunks": len(_leaf_chunks(checkpoint["chunks"])),
-            "audit_window": checkpoint["audit_window"],
-            "candidate_ids": list(pending["candidate_ids"]),
-            "model_candidate_ids": (
-                list(model_id_map.alias_to_internal) if model_id_map else []
-            ),
-            "model_id_transport_version": (
-                MODEL_CANDIDATE_ID_TRANSPORT_VERSION if model_id_map else "legacy"
-            ),
-            "family_policy": AUDIT_FAMILY_POLICY_VERSION,
-            "family_context": model_family_context,
-        }
+        model_id_map, request_candidates, model_family_context, metadata = chunk_request(pending)
 
         audit_record = latest_record(pending["chunk_id"], "audit")
         if (

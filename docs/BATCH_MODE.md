@@ -37,7 +37,14 @@ GOAT path: durable request journal, retry policy, budget, pause flag.
      these rules, a batch settled 333 new terms where sequential settled about 80 for
      the same chapters, most of them common words. Before the decision, each candidate
      in most of the batch's chapters is marked `widespread` (usually a common word), and
-     candidates proposed with the same English as another candidate or an existing
+     a Korean key counts only where it starts a word: 각하 ("Your Excellency") inside
+     생각하다 ("to think") is not a use. A key found mostly inside longer words is marked
+     `inside_other_words`, and both the decision and the pre-translation audit are told
+     that a key which is also an ordinary word or a homonym (지배 "rule", 비약 "leap")
+     must be contextual, with the ordinary meaning among its renderings, or rejected, so
+     its English is never forced onto ordinary uses. For an existing glossary,
+     `glossary_homonym_report.py` lists such keys read-only, locked ones first, for the
+     owner to decide. Candidates proposed with the same English as another candidate or an existing
      entry are listed together as likely variants to merge. Keys that differ only by
      spaces are merged locally into one entry, and so are keys settled on exactly the
      same English and category (an existing entry, else the most widespread form).
@@ -108,7 +115,7 @@ chapters are being saved. No batch extends past a trial's last chapter.
 
 **Pre-translation term audit.** Between settling the terms and translating, the batch's
 settled terms go through the periodic audit's own prompt and source-backed targets
-(the same source contexts and chunks of 20), one chunk at a time (`batch_term_audit`).
+(the same source contexts and chunks of 20), all chunks sent together (`batch_term_audit`).
 Its corrections, rejections, contextual renderings and merges change the settled terms,
 so a wrong rendering is fixed before any of the batch's chapters is translated with it,
 not after. A chunk that fails leaves its terms as settled and is flagged. The changes
@@ -117,10 +124,28 @@ the backstop for problems across batches, queued corrections and retroactive fix
 the rehearsal, the periodic audits of a batch glossary corrected 5 terms and merged 7
 variants that the batch decision had let through.
 
+**Periodic audit chunks go out together.** With the GOAT provider, in batch mode or
+sequential, each periodic audit sends the first request of all its chunks at once, up to
+16 in flight (`AUDIT_CHUNKS_IN_FLIGHT` in `production_goat_runtime.py`; 1 sends them one
+by one). Each lands in the fixed journal slot the audit would use anyway, and the audit
+then works through its chunks in order and replays those answers, so its checkpoint and
+the paid evidence the end-of-book check re-proves are the same as one by one. Repairs and
+corrections still go one at a time. If a chunk's answer is cut off and the chunk splits,
+the answers already fetched for later chunks were asked with the old chunk count and go
+unused; they are counted in the novel's cost (`audit_chunk_answer_unused` in the log).
+No audit chunk split in 978 chunks so far. A book's final audit of 954 terms (66 chunks)
+took 22.5 minutes one by one.
+
 **Batches end on audit boundaries.** A batch ends at the last periodic-audit boundary
 in its range when that still leaves at least half a batch (with `audit_interval` 50,
 chapters 53–100, then 101–150), so each audit covers whole batches and never lands
 while one is half-saved.
+
+**The last batch.** A batch never extends past the novel's final chapter, so the last one
+is as short as the novel requires. If fewer than 10 chapters (and fewer than a quarter
+batch) would be left after a batch, it takes them too, rather than leaving a short
+batch with the same fixed steps, or one chapter on the sequential path: a novel
+ending at 351 gets 301–351, not 301–350 and then 351 alone.
 
 ## Overlapping batches (`batch_mode.overlap`, opt-in)
 

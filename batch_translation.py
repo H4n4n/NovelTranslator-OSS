@@ -90,6 +90,12 @@ any novel of the genre uses (knight, king, kingdom, monster, mana), a one-time
 description. Frequency is not a reason to keep a term: a word in nearly every chapter
 is usually ordinary vocabulary. "widespread": true marks such candidates; accept one
 only if this novel uses it as the name of one specific thing.
+A key that is also an ordinary word or a homonym (지배 "rule", 비약 "leap", 약조
+"promise", 삭풍 "north wind", 대전 "great war") must not force the term's English onto
+its ordinary uses: make it contextual with the ordinary meaning among the approved
+renderings, or reject it. "inside_other_words": true marks a key found mostly inside
+longer words (각하 inside 생각하다 "to think"); reject it unless the examples show it
+used on its own as the term.
 Candidates listed with "same_english_as" were proposed with the same English as other
 candidates or existing entries; they usually name the same thing in different forms.
 Accept the most common form and merge the others into it, unless they are different
@@ -122,6 +128,25 @@ Return ONLY JSON:
  "continuity":""}
 Return exactly one decision per candidate id, with its source copied exactly.
 """.strip()
+
+
+HANGUL_SYLLABLE = "\uac00-\ud7a3"
+INSIDE_WORDS_SHARE = 0.5  # A key found mostly inside longer words (각하 in 생각하다) is rarely the term.
+
+
+def word_occurrences(key, text):
+    """(as a word, inside another word) counts. A Korean key used as a word starts
+    one: it is not preceded by another Hangul syllable. Other scripts have no word
+    boundaries in the source, so every occurrence counts as a word."""
+    if not re.match(f"[{HANGUL_SYLLABLE}]", key or ""):
+        return text.count(key), 0
+    inside = len(re.findall(f"(?<=[{HANGUL_SYLLABLE}])" + re.escape(key), text))
+    return text.count(key) - inside, inside
+
+
+def mentions(key, text):
+    """Whether the source uses the key as a word, not only inside longer words."""
+    return word_occurrences(key, text)[0] > 0
 
 
 def base_form(key):
@@ -224,12 +249,15 @@ def consolidate_candidates(sheets, sources, existing):
                 group["examples"].append(term["sentence"])
     result = []
     for key, group in groups.items():
-        present = [number for number in chapters if key in sources[number]]
+        counts = {number: word_occurrences(key, sources[number]) for number in chapters}
+        present = [number for number in chapters if counts[number][0]]
         if not present:
             continue
         group["first_chapter"] = present[0]
         group["chapters_present"] = len(present)
-        group["occurrences"] = sum(sources[number].count(key) for number in present)
+        group["occurrences"] = sum(counts[number][0] for number in present)
+        inside = sum(counts[number][1] for number in chapters)
+        group["inside_other_words"] = inside >= INSIDE_WORDS_SHARE * (inside + group["occurrences"])
         group["proposals"].sort(key=lambda item: (-len(item["chapters"]), item["chapters"][0]))
         group["disputed"] = len(group["proposals"]) > 1
         group["widespread"] = (len(chapters) >= WIDESPREAD_MIN_CHAPTERS
@@ -361,6 +389,7 @@ def build_decision_request(groups, *, model, policy, established_glossary, chang
                                   "chapters": item["chapters"][:8]} for item in group["proposals"]],
                    "examples": group["examples"],
                    **({"widespread": True} if group.get("widespread") else {}),
+                   **({"inside_other_words": True} if group.get("inside_other_words") else {}),
                    **({"same_english_as": group["same_english_as"]} if group.get("same_english_as") else {}),
                    **({"contains": group["contains"]} if group.get("contains") else {})}
                   for group in groups]
@@ -602,7 +631,7 @@ def renderings(entry):
 
 def terms_in_source(source, settled):
     return [key for key, entry in settled.items()
-            if len(key) >= MIN_KEY_CHARS and key in source and renderings(entry)]
+            if len(key) >= MIN_KEY_CHARS and mentions(key, source) and renderings(entry)]
 
 
 def term_misses(translation, source, settled):
@@ -668,22 +697,29 @@ def review_for_candidates(candidates, settled, existing_keys, candidate_id):
     return {"decisions": decisions, "issues": []}
 
 
-def build_term_audit_request(targets, *, model, system_prompt, glossary_index, start, end, chunk_index, total_chunks):
+def build_term_audit_request(targets, *, model, system_prompt, glossary_index, start, end, chunk_index, total_chunks,
+                             inside_words=()):
     """The periodic audit's request, for batch terms before any chapter uses them.
 
     Returns (request, {short id: source key}). Targets come from the periodic audit's
-    own source-backed plan, so they carry the same source contexts.
+    own source-backed plan, so they carry the same source contexts. `inside_words`
+    are keys found mostly inside longer words.
     """
     ids = {f"c{index:02d}": target["chinese"] for index, target in enumerate(targets, 1)}
     shown = [{"candidate_id": short, "source_key": target["chinese"], "family_id": target["chinese"],
               "family_root": target.get("alias_of") or target["chinese"], "alias_of": target.get("alias_of", ""),
               "english": target.get("english", ""), "approved_renderings": target.get("approved_renderings", []),
               "category": target.get("category", ""), "status": target.get("status", "provisional"),
-              "notes": target.get("notes", ""), "contexts": target.get("contexts", [])}
+              "notes": target.get("notes", ""), "contexts": target.get("contexts", []),
+              **({"inside_other_words": True} if target["chinese"] in inside_words else {})}
              for short, target in zip(ids, targets)]
     user = (f"AUDIT RANGE: Chapters {start}-{end}\n"
             f"AUDIT CHUNK: {chunk_index} of {total_chunks}\n"
             "These terms were settled for a batch of chapters that is not translated yet.\n"
+            "A key that is also an ordinary word or a homonym must not force the term's English onto its\n"
+            "ordinary uses: make it contextual with the ordinary meaning among the approved renderings, or\n"
+            "reject it. inside_other_words marks a key found mostly inside longer words; reject it unless\n"
+            "the contexts show it used on its own as the term.\n"
             "Return exactly one decision for every supplied target in this chunk, identified\n"
             "only by its exact request-local candidate_id. Valid IDs for this request are:\n"
             f"{', '.join(ids)}\n"

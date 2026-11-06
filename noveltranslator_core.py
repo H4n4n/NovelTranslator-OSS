@@ -706,6 +706,10 @@ def strict_term_valid_targets(entry):
         if isinstance(item, str) and item
     )
     candidates.extend(automatic_strict_term_inflections(entry))
+    # Chapters are saved with curly quotes, so "Prince's Palace" appears as
+    # "Prince’s Palace". Either apostrophe is the same term.
+    candidates.extend([candidate.replace("'", "’") for candidate in candidates if "'" in candidate]
+                      + [candidate.replace("’", "'") for candidate in candidates if "’" in candidate])
     result = []
     seen = set()
     for candidate in candidates:

@@ -1379,7 +1379,7 @@ def final_consistency_report(module, *, _inputs=None):
     standalone = witnesses(module)
     add_blobs(module, standalone, blobs)
     reservations, lineage, consumed = {}, [], set()
-    latest, history_rules, previous_end, evidence = {}, [], 0, []
+    latest, history_rules, previous_end, evidence, prompt_changed = {}, [], 0, [], []
     for intent in intents:
         if standalone:
             prove_gap(module, standalone, previous_end, intent["baseline"]["history"]["audits"],
@@ -1393,10 +1393,15 @@ def final_consistency_report(module, *, _inputs=None):
         require(file_sha(module.periodic_audit_checkpoint_path(intent["start"], intent["end"])) == intent["checkpoint_sha256"],
                 "AUDIT_CHECKPOINT_DRIFT")
         if detached.progress.get("provider") == "command_code_provider" and intent["chunking"].get("candidate_count", 0):
-            from goat_periodic_audit_finalize_plan import checkpoint_proof
-            paid = checkpoint_proof(detached, intent["start"], intent["end"])
-            require(paid["audit_result"] == intent["audit_result"] and paid["audit_stats"] == intent["audit_stats"],
-                    "PAID_AUDIT_EVIDENCE_DRIFT")
+            from goat_periodic_audit_finalize_plan import audit_prompt_changed, checkpoint_proof
+            if audit_prompt_changed(detached, intent["start"], intent["end"]):
+                # Sent with an earlier audit prompt: its paid requests can't be rebuilt, so
+                # only they go unproved. Everything below is still checked for this audit.
+                prompt_changed.append(f"{intent['start']:04d}_{intent['end']:04d}")
+            else:
+                paid = checkpoint_proof(detached, intent["start"], intent["end"])
+                require(paid["audit_result"] == intent["audit_result"] and paid["audit_stats"] == intent["audit_stats"],
+                        "PAID_AUDIT_EVIDENCE_DRIFT")
         checkpoint = module.BACKUP_DIR / f"checkpoint_{intent['end']:04d}"
         for key, path in state_paths(module).items():
             require(read_object(checkpoint / path.name) == intent["post"][key], "AUDIT_CHECKPOINT_BACKUP_DRIFT")
@@ -1489,7 +1494,7 @@ def final_consistency_report(module, *, _inputs=None):
         rows.append({"chapter": n, "english_sha256": digest(raw),
                      "source_sha256": digest(source.encode("utf-8")), "decisions": decisions})
     deferred = sum(any(d["outcome"] == "deferred" for d in row["decisions"]) for row in rows)
-    return {"revision": REVISION, "scope": "final_whole_committed_history",
+    report = {"revision": REVISION, "scope": "final_whole_committed_history",
             "audit_boundary": boundary, "novel_id": (module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"),
             "glossary_revision_sha256": canonical_hash(module.glossary),
             "source_inventory_sha256": canonical_hash(inventory),
@@ -1505,6 +1510,9 @@ def final_consistency_report(module, *, _inputs=None):
             "status": "CHECKED_WITH_DEFERRALS" if deferred else "CHECKED",
             "semantic_rereview": "NOT_PERFORMED", "publication_status": "NOT_VERIFIED",
             "provider_calls": 0}
+    if prompt_changed:
+        report["audits_with_earlier_prompt"] = prompt_changed
+    return report
 
 
 def save_final_consistency(module):

@@ -139,7 +139,10 @@ took 22.5 minutes one by one.
 **Batches end on audit boundaries.** A batch ends at the last periodic-audit boundary
 in its range when that still leaves at least half a batch (with `audit_interval` 50,
 chapters 53–100, then 101–150), so each audit covers whole batches and never lands
-while one is half-saved.
+while one is half-saved. A batch that starts between boundaries ends on the next one
+however short, so the batches after it line up: a novel translated one by one to chapter
+80 gets 81–100, then 101–150, not 81–130 and every audit mid-batch. A boundary chapter
+on its own (a batch starting at 100) takes the sequential path.
 
 **The last batch.** A batch never extends past the novel's final chapter, so the last one
 is as short as the novel requires. If fewer than 10 chapters (and fewer than a quarter

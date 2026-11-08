@@ -433,9 +433,31 @@ def test_whole_history_step_flags_instead_of_stopping(monkeypatch, tmp_path):
         monkeypatch.setattr(historical_reconciliation, "save_final_consistency", lambda _module: report)
         assert module.run_whole_history_consistency() is report
         assert flags == [(9, "whole_history_earlier_audit_prompt")]
+        # A history the report can't replay goes on the review list; the book is finished.
+        from production_failure_classification import ProductionIntegrityError
+        def unproven(_module):
+            raise ProductionIntegrityError("AUT2: HISTORICAL_BEFORE_WITNESS_MISSING")
+        monkeypatch.setattr(historical_reconciliation, "save_final_consistency", unproven)
+        assert module.run_whole_history_consistency()["status"] == "UNPROVEN"
+        assert flags[-1] == (9, "whole_history_unproven")
         # A term repair edits chapters outside the audit history the report replays.
         (tmp_path / "output" / "term_repairs").mkdir(parents=True)
         assert module.run_whole_history_consistency()["status"] == "SKIPPED_TERM_REPAIRS"
         assert flags[-1] == (9, "whole_history_skipped")
+    finally:
+        sys.modules.pop(name, None)
+
+
+def test_audit_publication_waits_for_batches_prepared_ahead(monkeypatch, tmp_path):
+    import batch_runner
+    import production_periodic_audit_finalization as final
+    name, module = _import_inert_production(monkeypatch, tmp_path)
+    try:
+        order = []
+        monkeypatch.setattr(batch_runner, "finish_preparation_ahead", lambda m: order.append("ahead finished"))
+        monkeypatch.setattr(final, "finalize_periodic_audit", lambda *a: order.append("published") or {"ok": True})
+        assert module.finalize_periodic_audit(1, 50, {}, {}, {}) == {"ok": True}
+        # A batch writing its requests during the proof made the run stop with PROOF_INPUT_NAMESPACE_CHANGED.
+        assert order == ["ahead finished", "published"]
     finally:
         sys.modules.pop(name, None)

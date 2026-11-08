@@ -3194,6 +3194,10 @@ def finalize_periodic_audit(start_chapter, end_chapter, audit_result, audit_stat
     """Local-only publication seam shared with completed-audit recovery."""
     from types import SimpleNamespace
     from production_periodic_audit_finalization import finalize_periodic_audit as finalize
+    # Publishing proves the novel's files did not change while it reads them. A batch
+    # prepared ahead writes its requests and answers meanwhile, so it finishes first.
+    from batch_runner import finish_preparation_ahead
+    finish_preparation_ahead(globals())
     return finalize(SimpleNamespace(**globals()), start_chapter, end_chapter, audit_result, audit_stats, chunking)
 
 
@@ -4731,7 +4735,14 @@ def run_whole_history_consistency():
         return {"status": "SKIPPED_TERM_REPAIRS", "deferred_chapters": []}
     from types import SimpleNamespace
     from historical_reconciliation import save_final_consistency
-    report = save_final_consistency(SimpleNamespace(**globals()))
+    try:
+        report = save_final_consistency(SimpleNamespace(**globals()))
+    except ProductionIntegrityError as exc:
+        # Every chapter is committed and audited by now, so this read-only report
+        # protects nothing: a history it can't replay (for example chapters edited by
+        # an approved correction or quote fix) goes on the review list.
+        flag_for_review(FINAL_CHAPTER, "whole_history_unproven", f"The whole-book report could not replay the history: {exc}")
+        return {"status": "UNPROVEN", "deferred_chapters": [], "reason": str(exc)}
     if report.get("audits_with_earlier_prompt"):
         # The audit prompt has changed since these audits; their paid requests can't be re-proved.
         flag_for_review(FINAL_CHAPTER, "whole_history_earlier_audit_prompt",

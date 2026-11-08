@@ -18,7 +18,7 @@ from pathlib import Path
 
 from novel_project import load_novel_config
 from batch_translation import mentions
-from noveltranslator_core import strict_term_valid_targets
+from noveltranslator_core import strict_term_present_forms
 
 SKIP_COPY = {"logs", ".production.lock", "trial_stop.json", "last_run.json", "run_budget.json"}
 ARMS = ("seq", "batch")
@@ -90,7 +90,7 @@ def accepted_forms(entry):
         if address:
             forms.add(address.group(1))
     if entry.get("status") != "contextual" and entry.get("english"):
-        forms.update(strict_term_valid_targets(entry))
+        forms.update(strict_term_present_forms(entry))
     return {form.casefold() for form in forms if form}
 
 

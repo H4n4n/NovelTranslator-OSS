@@ -706,10 +706,6 @@ def strict_term_valid_targets(entry):
         if isinstance(item, str) and item
     )
     candidates.extend(automatic_strict_term_inflections(entry))
-    # Chapters are saved with curly quotes, so "Prince's Palace" appears as
-    # "Prince’s Palace". Either apostrophe is the same term.
-    candidates.extend([candidate.replace("'", "’") for candidate in candidates if "'" in candidate]
-                      + [candidate.replace("’", "'") for candidate in candidates if "’" in candidate])
     result = []
     seen = set()
     for candidate in candidates:
@@ -719,6 +715,25 @@ def strict_term_valid_targets(entry):
         seen.add(key)
         result.append(candidate)
     return tuple(result)
+
+
+def strict_term_present_forms(entry):
+    """The forms that count as the term being present in a saved chapter.
+
+    Chapters are saved with curly quotes, so "Prince's Palace" appears as
+    "Prince’s Palace": either apostrophe is the same term. Only presence checks
+    use this. strict_term_valid_targets stays as it was, because audits save
+    correction plans and prompts built from it, and replay them exactly.
+    """
+    targets = strict_term_valid_targets(entry)
+    variants = [t.replace("'", "’") for t in targets if "'" in t] + [t.replace("’", "'") for t in targets if "’" in t]
+    seen = {t.casefold() for t in targets}
+    extra = []
+    for variant in variants:
+        if variant.casefold() not in seen:
+            seen.add(variant.casefold())
+            extra.append(variant)
+    return targets + tuple(extra)
 
 
 def _parse_repair_localization_anchors(entry):
@@ -1427,7 +1442,7 @@ def _strict_occurrence_inventory(
             "automatic_inflections": automatic_inflections,
         }
         source_phrases.append((chinese_term, source_forms))
-        accepted_targets = strict_term_valid_targets(entry)
+        accepted_targets = strict_term_present_forms(entry)
         if accepted_targets:
             target_phrases.append((chinese_term, accepted_targets))
     declared_owners = declared_nested_strict_source_owner_items(

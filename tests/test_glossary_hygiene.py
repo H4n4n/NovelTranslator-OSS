@@ -5,7 +5,8 @@ import json
 import batch_translation as bt
 import batch_rehearsal_compare as rehearsal
 from glossary_homonym_report import as_markdown, homonym_report
-from noveltranslator_core import locked_high_priority_term_violations, strict_term_valid_targets
+from noveltranslator_core import (locked_high_priority_term_violations, strict_term_present_forms,
+                                  strict_term_valid_targets)
 from test_controlled_trial_plan import _empty_project
 
 
@@ -50,7 +51,10 @@ def test_strict_qa_accepts_either_apostrophe():
         assert locked_high_priority_term_violations("그들은 왕자궁에 도착했다.", text, entries, ("location",)) == []
     assert locked_high_priority_term_violations("그들은 왕자궁에 도착했다.", "They reached the palace.",
                                                 entries, ("location",))
-    assert set(strict_term_valid_targets(entries["왕자궁"])) == {"Prince's Palace", "Prince\u2019s Palace"}
+    assert set(strict_term_present_forms(entries["왕자궁"])) == {"Prince's Palace", "Prince\u2019s Palace"}
+    # Audits save correction plans and prompts built from these forms and replay them exactly,
+    # so they stay as they were: the curly form is only accepted where presence is checked.
+    assert strict_term_valid_targets(entries["왕자궁"]) == ("Prince's Palace",)
 
 
 def test_rehearsal_measure_accepts_the_forms_a_chapter_really_uses():

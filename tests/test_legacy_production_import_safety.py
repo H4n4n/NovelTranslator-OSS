@@ -433,6 +433,13 @@ def test_whole_history_step_flags_instead_of_stopping(monkeypatch, tmp_path):
         monkeypatch.setattr(historical_reconciliation, "save_final_consistency", lambda _module: report)
         assert module.run_whole_history_consistency() is report
         assert flags == [(9, "whole_history_earlier_audit_prompt")]
+        # A history the report can't replay goes on the review list; the book is finished.
+        from production_failure_classification import ProductionIntegrityError
+        def unproven(_module):
+            raise ProductionIntegrityError("AUT2: HISTORICAL_BEFORE_WITNESS_MISSING")
+        monkeypatch.setattr(historical_reconciliation, "save_final_consistency", unproven)
+        assert module.run_whole_history_consistency()["status"] == "UNPROVEN"
+        assert flags[-1] == (9, "whole_history_unproven")
         # A term repair edits chapters outside the audit history the report replays.
         (tmp_path / "output" / "term_repairs").mkdir(parents=True)
         assert module.run_whole_history_consistency()["status"] == "SKIPPED_TERM_REPAIRS"

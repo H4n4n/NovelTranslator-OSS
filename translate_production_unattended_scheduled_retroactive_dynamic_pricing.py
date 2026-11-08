@@ -4735,7 +4735,14 @@ def run_whole_history_consistency():
         return {"status": "SKIPPED_TERM_REPAIRS", "deferred_chapters": []}
     from types import SimpleNamespace
     from historical_reconciliation import save_final_consistency
-    report = save_final_consistency(SimpleNamespace(**globals()))
+    try:
+        report = save_final_consistency(SimpleNamespace(**globals()))
+    except ProductionIntegrityError as exc:
+        # Every chapter is committed and audited by now, so this read-only report
+        # protects nothing: a history it can't replay (for example chapters edited by
+        # an approved correction or quote fix) goes on the review list.
+        flag_for_review(FINAL_CHAPTER, "whole_history_unproven", f"The whole-book report could not replay the history: {exc}")
+        return {"status": "UNPROVEN", "deferred_chapters": [], "reason": str(exc)}
     if report.get("audits_with_earlier_prompt"):
         # The audit prompt has changed since these audits; their paid requests can't be re-proved.
         flag_for_review(FINAL_CHAPTER, "whole_history_earlier_audit_prompt",

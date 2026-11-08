@@ -455,7 +455,12 @@ def _join_ahead(module, chapter_number=None):
 
 
 def finish_preparation_ahead(module):
-    """At the end of a run: start no new batch, and let those in flight finish, so no request is left unanswered."""
+    """Let the batches prepared ahead finish, starting no new one meanwhile.
+
+    At the end of a run, so no request is left unanswered; and before an audit is
+    published, which proves the novel's files did not change while it read them.
+    New batches can start again afterwards.
+    """
     if not any(_AHEAD_RUNS.values()):
         return
     module = _module(module)

@@ -3194,6 +3194,10 @@ def finalize_periodic_audit(start_chapter, end_chapter, audit_result, audit_stat
     """Local-only publication seam shared with completed-audit recovery."""
     from types import SimpleNamespace
     from production_periodic_audit_finalization import finalize_periodic_audit as finalize
+    # Publishing proves the novel's files did not change while it reads them. A batch
+    # prepared ahead writes its requests and answers meanwhile, so it finishes first.
+    from batch_runner import finish_preparation_ahead
+    finish_preparation_ahead(globals())
     return finalize(SimpleNamespace(**globals()), start_chapter, end_chapter, audit_result, audit_stats, chunking)
 
 

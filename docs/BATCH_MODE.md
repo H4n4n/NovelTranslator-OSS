@@ -136,6 +136,13 @@ unused; they are counted in the novel's cost (`audit_chunk_answer_unused` in the
 No audit chunk split in 978 chunks so far. A book's final audit of 954 terms (66 chunks)
 took 22.5 minutes one by one.
 
+Each request in flight holds its worst-case cost aside (up to $1.50 for an audit chunk),
+so a small budget fits only a few at once. The next chunk then waits for one to finish;
+the early sends end only when nothing is in flight and the next chunk still doesn't fit,
+and the audit sends the rest itself, which stops cleanly at the budget. Before this, the
+first refusal ended the early sends: tyrant_king_gojong's final audit (156 chunks, $10.50
+left) sent 12 together and the other 143 one by one, 44 minutes.
+
 **Batches end on audit boundaries.** A batch ends at the last periodic-audit boundary
 in its range when that still leaves at least half a batch (with `audit_interval` 50,
 chapters 53–100, then 101–150), so each audit covers whole batches and never lands

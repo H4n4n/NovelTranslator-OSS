@@ -184,3 +184,24 @@ def test_split_after_chunks_sent_together_counts_the_unused_answers(incident):
     approved = plan(project)
     assert approved["provider_calls_required"] == 0
     assert execute(project, approved)["status"] == "FINALIZED"
+
+
+@pytest.mark.parametrize("incident", ["audit"], indirect=True)
+def test_audit_chunks_sent_together_are_in_flight_at_once(incident):
+    project, module, result, stats, chunking = incident
+    assert module._fixture_in_flight["peak"] == 3
+
+
+@pytest.mark.parametrize("incident", ["tight_budget"], indirect=True)
+def test_a_tight_budget_paces_audit_chunks_instead_of_ending_the_early_sends(capsys, incident):
+    project, module, result, stats, chunking = incident
+    assert "sending 3 chunks together" in capsys.readouterr().out
+    # Only one chunk's worst case fits, so they go one after another, all through the early sends.
+    assert module._fixture_in_flight["peak"] == 1
+    assert "audit_chunks_together_stopped" not in module._fixture_events
+    records = _checkpoint(module)["attempt_records"]
+    assert [(r["chunk_id"], r["attempt"], r["lifecycle"]) for r in records] == [
+        (f"c000{n}", 1, "validated") for n in (1, 2, 3)]
+    approved = plan(project)
+    assert approved["provider_calls_required"] == 0
+    assert execute(project, approved)["status"] == "FINALIZED"

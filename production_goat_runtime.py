@@ -10,7 +10,8 @@ import inspect
 import json
 import math
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -840,25 +841,59 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                                outer_binding=binding["identity"]["auxiliary_domain_binding"])
             return binding, result["response"]
 
-        stopped = threading.Event()
-        def guarded(job):
-            if stopped.is_set():
-                return None
+        def fits(job):
+            """A chunk starts only when its worst-case cost still fits what the budget has left."""
+            if budget is None:
+                return True
+            if budget.blocked:
+                return False
             try:
-                return send(job)
-            except BaseException as exc:
-                stopped.set()
-                module.log_event("audit_chunks_together_stopped", stage="glossary_audit",
-                                 error_type=type(exc).__name__, error_message=str(exc)[:300])
-                return None
+                started = clock().astimezone(timezone.utc).isoformat()
+                bound = budget.request_bound(normalize_production_request("periodic_audit", job[1]), started)
+            except ValueError:
+                return True  # authorize() refuses it with the precise reason
+            return (budget.remaining_usd() >= bound["credit_equivalent_upper"]
+                    and budget.api_calls + len(budget._open) < budget.max_api_calls)
+
+        def stop_sending(exc):
+            module.log_event("audit_chunks_together_stopped", stage="glossary_audit",
+                             error_type=type(exc).__name__, error_message=str(exc)[:300])
+
+        # Each request in flight holds its worst-case cost aside, up to $1.50 for an audit
+        # chunk, so a small budget fits only a few at once. The next chunk waits for one
+        # to finish rather than ending the early sends; the loop sends what is left.
+        queue, running, stopped = deque(jobs), {}, False
         with ThreadPoolExecutor(max_workers=AUDIT_CHUNKS_IN_FLIGHT) as pool:
             try:
-                for outcome in pool.map(guarded, jobs):
-                    if outcome is not None:
-                        binding, envelope = outcome
-                        sent[binding["journal_path"]] = (binding["identity"]["operation_id"], envelope["stats"])
+                while queue or running:
+                    while queue and not stopped and len(running) < AUDIT_CHUNKS_IN_FLIGHT:
+                        if not fits(queue[0]):
+                            if not running:
+                                stopped = True
+                                stop_sending(GoatAllowanceExhausted("budget left is too small for the next audit chunk"))
+                            break
+                        job = queue.popleft()
+                        running[pool.submit(send, job)] = job
+                    if not running:
+                        break
+                    done, _ = wait(running, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        job = running.pop(future)
+                        try:
+                            binding, envelope = future.result()
+                        except GoatAllowanceExhausted as exc:
+                            if running and not stopped:
+                                queue.appendleft(job)  # Another request held the room; retry when it ends.
+                            else:
+                                stopped = True
+                                stop_sending(exc)
+                        except Exception as exc:
+                            stopped = True
+                            stop_sending(exc)
+                        else:
+                            sent[binding["journal_path"]] = (binding["identity"]["operation_id"], envelope["stats"])
             except BaseException:
-                stopped.set()  # Ctrl+C: requests in flight finish and are recorded; no new ones start.
+                queue.clear()  # Ctrl+C: requests in flight finish and are recorded; no new ones start.
                 raise
 
     def journal_owned_audit(*args, **kwargs):

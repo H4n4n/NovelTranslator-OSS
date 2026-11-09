@@ -111,7 +111,8 @@ def incident(tmp_path, monkeypatch, request):
     # Fresh numeric combiner for install_goat_runtime (avoid wrapping twice).
     module.combine_stats = acquisition.combine_stats
     module.RUN_LOGGER = NS(emit=lambda *a, **k: None)
-    module.log_event = lambda *a, **k: None
+    module._fixture_events = []
+    module.log_event = lambda event, *a, **k: module._fixture_events.append(event)
     module.AUTO_OFF_PEAK_ONLY = False
     module.STATE_EXTRACTION_POLICY = acquisition.STATE_EXTRACTION_POLICY
     physical_fixture_sends = []
@@ -122,10 +123,28 @@ def incident(tmp_path, monkeypatch, request):
         import production_goat_runtime
         monkeypatch.setattr(production_goat_runtime, "AUDIT_CHUNKS_IN_FLIGHT", 1)
     sends_lock = threading.Lock()
+    in_flight = {"now": 0, "peak": 0}
+    module._fixture_in_flight = in_flight
+    if fixture_mode == "tight_budget":
+        # Each audit chunk may cost up to $1 and $1.50 is left: one fits at a time.
+        from production_goat_runtime import GoatBudget as _Budget
+        bound = _Budget.request_bound
+        monkeypatch.setattr(_Budget, "request_bound",
+                            lambda self, request, started: {**bound(self, request, started), "credit_equivalent_upper": 1.0})
     def create(**wire):
         with sends_lock:
             physical_fixture_sends.append(wire)
             sent = len(physical_fixture_sends)
+            in_flight["now"] += 1
+            in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
+        try:
+            return _create(wire, sent)
+        finally:
+            with sends_lock:
+                in_flight["now"] -= 1
+    def _create(wire, sent):
+        import time
+        time.sleep(0.05)  # Long enough for requests sent together to overlap.
         prompt = wire["messages"][-1]["content"]
         chunk = re.search(r"AUDIT CHUNK: (\d+) of (\d+)", prompt)
         # Chunks sent together arrive in any order: a chunk's usage follows its number.
@@ -157,7 +176,7 @@ def incident(tmp_path, monkeypatch, request):
     # Context ownership is installed on the real call_periodic_audit entry point.
     module.run_periodic_audit = module.call_periodic_audit
     module._RUNTIME_INITIALIZED = True  # Disposable manually hydrated state only.
-    install_goat_runtime(module, provider_client=NS(chat=NS(completions=NS(create=create))), budget=GoatBudget(10 if fixture_mode == "split_together" else 6, 10), clock=CLOCK)
+    install_goat_runtime(module, provider_client=NS(chat=NS(completions=NS(create=create))), budget=GoatBudget(10 if fixture_mode == "split_together" else 6, 1.5 if fixture_mode == "tight_budget" else 10), clock=CLOCK)
     audit_result, stats, chunking = module.run_periodic_audit(376, 400)
     if fixture_mode in {"audit", "relative"}:
         assert len(physical_fixture_sends) == 3

@@ -173,13 +173,45 @@ def build_plan(request, chapters, chapter_map):
     return plan
 
 
+def _with_both_apostrophes(request):
+    """The request with every ownership target also in its other apostrophe form."""
+    policy = request.get("ownership_policy") if isinstance(request, dict) else None
+    if not isinstance(policy, dict):
+        return request
+    widened = {}
+    for key, item in policy.items():
+        targets = item.get("targets") if isinstance(item, dict) else None
+        if not isinstance(targets, list):
+            return request
+        forms = set(targets)
+        forms.update(t.replace("'", "’") for t in targets if "'" in t)
+        forms.update(t.replace("’", "'") for t in targets if "’" in t)
+        widened[key] = {**item, "targets": sorted(forms)}
+    return {**request, "ownership_policy": widened}
+
+
+def same_request(saved, rebuilt):
+    """Whether a saved plan's request is the one rebuilt now.
+
+    Plans saved between PR #50 and PR #52 listed each ownership target in both
+    apostrophe forms ("Xi'an" and "Xi’an"); PR #52 went back to one. Such a plan
+    still matches when its targets are the rebuilt ones plus their other forms and
+    everything else is identical. Its own saved edits are what gets replayed.
+    """
+    if saved == rebuilt:
+        return True
+    return (isinstance(saved, dict) and saved.get("ownership_policy") is not None
+            and saved == _with_both_apostrophes(saved)
+            and _with_both_apostrophes(rebuilt) == saved)
+
+
 def validate_plan(plan, request, chapter_map):
     identity = {key: value for key, value in plan.items() if key != "transaction_id"}
     if (plan.get("schema_version") != SCHEMA_VERSION or
             plan.get("policy_version") not in SPAN_POLICIES or
             plan.get("policy_version") != span_policy_of(request) or
             canonical_hash(identity) != plan.get("transaction_id") or
-            plan.get("request") != request):
+            not same_request(plan.get("request"), request)):
         raise RetroactiveBlocked("immutable retroactive plan/input identity mismatch")
     if [item["chapter"] for item in plan["chapters"]] != request["committed_chapters"]:
         raise RetroactiveBlocked("retroactive committed chapter inventory mismatch")

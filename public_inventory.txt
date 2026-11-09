@@ -98,6 +98,7 @@ build_title_resolution_plan.py
 catastrophic_completeness_runtime.py
 chapter_glossary_review.py
 chapter_library.py
+chapter_review.py
 chapter_text_checks.py
 chinese_script_normalization.py
 command_code_provider_credentials.py
@@ -119,6 +120,7 @@ docs/AUT2_PUBLICATION_FRESHNESS_D1.md
 docs/AUT2_PUBLICATION_REGENERATION.md
 docs/AUTONOMOUS_RECOVERY.md
 docs/BATCH_MODE.md
+docs/CHAPTER_REVIEW.md
 docs/DEVELOPMENT_TIPS.md
 docs/G10FG_PAID_EXECUTORS.md
 docs/G10H_BLIND_CORPUS_FREEZE.md
@@ -368,6 +370,7 @@ tests/test_build_publication_chapters.py
 tests/test_build_publication_epub.py
 tests/test_chapter_glossary_review.py
 tests/test_chapter_library.py
+tests/test_chapter_review.py
 tests/test_chapter_text_checks.py
 tests/test_checkpoint_epub.py
 tests/test_ci_split.py

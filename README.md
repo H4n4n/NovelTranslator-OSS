@@ -37,6 +37,10 @@ are documented in [docs/PRODUCTION_OPERATION_POLICY.md](docs/PRODUCTION_OPERATIO
 Opt-in source-first batch translation (about 50 chapters at once, off by default) is
 documented in [docs/BATCH_MODE.md](docs/BATCH_MODE.md).
 
+A paid, read-only review of finished chapters against their source (`chapter_review.py`),
+which writes a report and a list of fixes for `--apply-corrections`, is documented in
+[docs/CHAPTER_REVIEW.md](docs/CHAPTER_REVIEW.md).
+
 AUT-1 recovery behavior, existing automatic routes, and remaining operator-controlled
 boundaries are documented in [Autonomous recovery](docs/AUTONOMOUS_RECOVERY.md).
 

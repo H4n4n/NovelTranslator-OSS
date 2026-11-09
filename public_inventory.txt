@@ -482,6 +482,7 @@ tests/test_production_state_extraction_checkpoint.py
 tests/test_production_state_recovery.py
 tests/test_production_translation_recovery.py
 tests/test_production_translation_request.py
+tests/test_proof_inputs_append_only.py
 tests/test_prospective_strict_qa.py
 tests/test_proven_stage_cleanup.py
 tests/test_provider_model_identity_runtime.py

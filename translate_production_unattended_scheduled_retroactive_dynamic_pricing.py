@@ -3194,11 +3194,20 @@ def finalize_periodic_audit(start_chapter, end_chapter, audit_result, audit_stat
     """Local-only publication seam shared with completed-audit recovery."""
     from types import SimpleNamespace
     from production_periodic_audit_finalization import finalize_periodic_audit as finalize
-    # Publishing proves the novel's files did not change while it reads them. A batch
-    # prepared ahead writes its requests and answers meanwhile, so it finishes first.
-    from batch_runner import finish_preparation_ahead
-    finish_preparation_ahead(globals())
-    return finalize(SimpleNamespace(**globals()), start_chapter, end_chapter, audit_result, audit_stats, chunking)
+    # Publishing proves the novel's files did not change while it reads them. Files a
+    # batch prepared ahead adds meanwhile are allowed (historical_reconciliation), so it
+    # keeps translating. If the files still changed, the batches ahead finish and the
+    # publication, which resumes from its durable intent, is tried once more.
+    try:
+        return finalize(SimpleNamespace(**globals()), start_chapter, end_chapter, audit_result, audit_stats, chunking)
+    except ProductionIntegrityError as exc:
+        if "PROOF_INPUT_NAMESPACE_CHANGED" not in str(exc):
+            raise
+        from batch_runner import finish_preparation_ahead
+        log_event("audit_publication_retry", stage="glossary_audit", audit_start_chapter=start_chapter,
+                  audit_end_chapter=end_chapter, reason="PROOF_INPUT_NAMESPACE_CHANGED")
+        finish_preparation_ahead(globals())
+        return finalize(SimpleNamespace(**globals()), start_chapter, end_chapter, audit_result, audit_stats, chunking)
 
 
 def run_periodic_audit(

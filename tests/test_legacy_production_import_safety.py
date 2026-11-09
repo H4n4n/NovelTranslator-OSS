@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import types
 import uuid
 
 import openai
@@ -448,16 +449,51 @@ def test_whole_history_step_flags_instead_of_stopping(monkeypatch, tmp_path):
         sys.modules.pop(name, None)
 
 
-def test_audit_publication_waits_for_batches_prepared_ahead(monkeypatch, tmp_path):
+def _publication(monkeypatch, tmp_path, outcomes):
     import batch_runner
     import production_periodic_audit_finalization as final
     name, module = _import_inert_production(monkeypatch, tmp_path)
+    events = []
+    module.RUN_LOGGER = types.SimpleNamespace(emit=lambda event, **fields: events.append(event))
+    order = []
+    monkeypatch.setattr(batch_runner, "finish_preparation_ahead", lambda m: order.append("ahead finished"))
+
+    def finalize(*args):
+        order.append("published")
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(final, "finalize_periodic_audit", finalize)
+    return name, module, order
+
+
+def test_audit_publication_does_not_wait_for_batches_prepared_ahead(monkeypatch, tmp_path):
+    name, module, order = _publication(monkeypatch, tmp_path, [{"ok": True}])
     try:
-        order = []
-        monkeypatch.setattr(batch_runner, "finish_preparation_ahead", lambda m: order.append("ahead finished"))
-        monkeypatch.setattr(final, "finalize_periodic_audit", lambda *a: order.append("published") or {"ok": True})
         assert module.finalize_periodic_audit(1, 50, {}, {}, {}) == {"ok": True}
-        # A batch writing its requests during the proof made the run stop with PROOF_INPUT_NAMESPACE_CHANGED.
-        assert order == ["ahead finished", "published"]
+        assert order == ["published"]  # The batch ahead keeps translating meanwhile.
+    finally:
+        sys.modules.pop(name, None)
+
+
+def test_a_changed_namespace_waits_for_batches_ahead_and_publishes_once_more(monkeypatch, tmp_path):
+    from production_failure_classification import ProductionIntegrityError
+    name, module, order = _publication(monkeypatch, tmp_path,
+                                       [ProductionIntegrityError("AUT2: PROOF_INPUT_NAMESPACE_CHANGED"), {"ok": True}])
+    try:
+        assert module.finalize_periodic_audit(1, 50, {}, {}, {}) == {"ok": True}
+        assert order == ["published", "ahead finished", "published"]
+    finally:
+        sys.modules.pop(name, None)
+
+
+def test_other_publication_failures_are_not_retried(monkeypatch, tmp_path):
+    from production_failure_classification import ProductionIntegrityError
+    name, module, order = _publication(monkeypatch, tmp_path, [ProductionIntegrityError("AUT2: PROOF_INPUT_BYTES_CHANGED")])
+    try:
+        with pytest.raises(ProductionIntegrityError, match="BYTES_CHANGED"):
+            module.finalize_periodic_audit(1, 50, {}, {}, {})
+        assert order == ["published"]
     finally:
         sys.modules.pop(name, None)

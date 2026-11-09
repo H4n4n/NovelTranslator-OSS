@@ -63,6 +63,13 @@ class _ProofInputs:
         self.files = {}
         self.directories = {}
         self.plans = {}
+        self.absent = set()
+        # Folders a batch prepared ahead adds files to while an audit is proved: its
+        # requests and answers, and backups of chapters it translates again. No proof
+        # lists them; it reads named files only, so a file it never read or looked for
+        # cannot change its result. A removed file, or one it looked for, still fails.
+        self.append_only = {(self.root / "data" / "provider_request_journal").absolute(),
+                            (self.paths["BACKUP_DIR"] / "superseded_translations").absolute()}
         self.active = True
         # Namespace observations are revalidated as well as captured bytes.
         # No negative file lookup can become a reusable proof input.
@@ -139,8 +146,19 @@ class _ProofInputs:
         path = Path(path)
         if not path.is_file():
             _proof_plain(path)
+            self.absent.add(path.absolute())
             return ""
         return self._entry(path)[1]
+
+    def _only_unread_additions(self, path, before, after):
+        """Files added to an append-only folder that this traversal never read or looked for."""
+        if not before <= after:
+            return False
+        added = {path / name for name in after - before}
+        inside = any(path == folder or path.is_relative_to(folder) for folder in self.append_only)
+        new_folder = path == self.paths["BACKUP_DIR"] and {p.name for p in added} <= {"superseded_translations"}
+        return ((inside or new_folder)
+                and not any(p in self.absent or p in self.files for p in added))
 
     def read_json(self, path):
         return json.loads(self.read(path))
@@ -170,7 +188,8 @@ class _ProofInputs:
             if fresh != raw or sha256(fresh).hexdigest() != digest:
                 raise ProductionIntegrityError("AUT2: PROOF_INPUT_BYTES_CHANGED")
         for path, names in self.directories.items():
-            if frozenset(p.name for p in _proof_plain(path).iterdir()) != names:
+            fresh = frozenset(p.name for p in _proof_plain(path).iterdir())
+            if fresh != names and not self._only_unread_additions(path, names, fresh):
                 raise ProductionIntegrityError("AUT2: PROOF_INPUT_NAMESPACE_CHANGED")
         self.check_module(module)
 
@@ -180,6 +199,7 @@ class _ProofInputs:
         self.directories.clear()
         self.plans.clear()
         self.checked.clear()
+        self.absent.clear()
 
 
 @contextmanager

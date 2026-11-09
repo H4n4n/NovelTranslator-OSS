@@ -171,7 +171,9 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
                 originals[number] = _inputs.read(backup)
             else:
                 originals[number] = current
-        require(_inputs.build_plan(request, originals, module.chapter_map) == plan, "retroactive deterministic plan mismatch")
+        # validate_plan accepted the saved request: equal to the rebuilt one, or saved with
+        # both apostrophe forms between PR #50 and PR #52. Its edits must follow from it.
+        require(_inputs.build_plan(plan["request"], originals, module.chapter_map) == plan, "retroactive deterministic plan mismatch")
     else:
         require(not state_path.exists() and not result_path.exists()
                 and not list(directory.glob(f"{slot}.reconcile.*.json")), "retroactive evidence lacks original plan")
@@ -194,6 +196,8 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
             known = {read_json(p).get("transaction_id") for p in directory.glob("*.plan.json")}
             require(not orphan_transaction_backups(module.BACKUP_DIR, known),
                     "orphan historical backup without immutable plan")
+        if intent and tx.same_request(expected_plan["request"], request):
+            request = expected_plan["request"]  # An intent saved with both apostrophe forms.
         plan = _inputs.build_plan(request, originals, module.chapter_map)
     if intent:
         require(plan == expected_plan, "retroactive plan differs from immutable audit intent")

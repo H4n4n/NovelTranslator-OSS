@@ -188,6 +188,42 @@ def test_plans_made_under_the_first_rule_stay_valid():
         tx.validate_plan(new, request, chapter_map)
 
 
+def _apostrophe_requests():
+    data = glossary(**{"宮": {"english": "Prince's Palace", "category": "location"}})
+    request = dict(novel_id="x", audit_label="a", through_chapter=1, rules=normalized_rules([rule("宮", "Prince's Palace", "Royal Palace", "location")]),
+                   ownership_policy=ownership_policy(data), safe_categories=sorted(RETROACTIVE_SAFE_CATEGORIES),
+                   committed_chapters=[1], span_policy=COUNT_MATCH_POLICY_VERSION)
+    saved = copy.deepcopy(request)  # As PR #50 saved it: each target in both apostrophe forms.
+    saved["ownership_policy"]["宮"]["targets"] = sorted({"Prince's Palace", "Prince’s Palace"})
+    return request, saved
+
+
+def test_a_plan_saved_with_both_apostrophe_forms_still_validates():
+    request, saved = _apostrophe_requests()
+    chapter_map = {1: {"text": "宮"}}
+    old = tx.build_plan(saved, {1: "The Prince’s Palace burned.".encode("utf-8")}, chapter_map)
+    assert request["ownership_policy"] != saved["ownership_policy"]
+    tx.validate_plan(old, request, chapter_map)
+    assert tx.same_request(saved, request) and tx.same_request(request, request)
+
+
+@pytest.mark.parametrize("change", ["other_target", "one_direction_only", "rules"])
+def test_only_the_other_apostrophe_form_is_forgiven(change):
+    request, saved = _apostrophe_requests()
+    if change == "other_target":
+        saved["ownership_policy"]["宮"]["targets"].append("Palace of the Prince")
+    elif change == "one_direction_only":
+        request["ownership_policy"]["宮"]["targets"] = ["Prince's Palace", "Prince’s Palace"]
+        saved["ownership_policy"]["宮"]["targets"] = ["Prince's Palace"]
+    else:
+        saved["rules"] = normalized_rules([rule("宮", "Prince's Palace", "Old Palace", "location")])
+    chapter_map = {1: {"text": "宮"}}
+    plan_ = tx.build_plan(saved, {1: b"The Prince's Palace burned."}, chapter_map)
+    assert not tx.same_request(saved, request)
+    with pytest.raises(tx.RetroactiveBlocked):
+        tx.validate_plan(plan_, request, chapter_map)
+
+
 def _authoritative_fixture(root, data, chapter_map, last, novel="synthetic"):
     """Public disposable canonical state; never fabricate a guard/report token."""
     state = {"glossary": data, "progress": dict(completed=list(range(1, last + 1)),

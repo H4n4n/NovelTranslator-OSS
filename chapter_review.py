@@ -66,6 +66,9 @@ class ReviewStop(RuntimeError):
     definite_no_response = True
 
 
+ALLOWANCE_REFUSAL = "GoatAllowanceExhausted"
+
+
 def sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -180,9 +183,15 @@ def word_edges(raw, old, new):
     return prefix + old, prefix + new + suffix if prefix or suffix else new
 
 
-def build_candidates(kept, sources, raws):
-    """Turn kept findings into a dry-run-checked --apply-corrections list."""
+def build_candidates(kept, sources, raws, entries=None, triaged=None):
+    """Turn kept findings into a dry-run-checked --apply-corrections list.
+
+    With `triaged` (a list), each accepted replacement is also appended with its local triage:
+    'dialogue_split', 'locked_term:<key>', or None when it needs judging.
+    """
+    from review_triage import triage
     replacements, refused = [], []
+    triaged = [] if triaged is None else triaged
     for item in kept:
         chapter = item["chapter"]
         raw = raws[chapter]
@@ -208,6 +217,7 @@ def build_candidates(kept, sources, raws):
             refused.append({**item, "refused": "the same English has another fix"})
             continue
         replacements.append(replacement)
+        triaged.append((replacement, triage(item, sources[chapter], entries or {})))
     return replacements, refused
 
 
@@ -384,7 +394,8 @@ def write_report(run_dir, records, candidates, refused, summary):
     lines = [f"# Chapter review: {summary['novel']} chapters {summary['chapters']}", "",
              f"- Reviewed: {summary['reviewed']} chapters, {summary['calls']} new requests, "
              f"${summary['cost_usd']:.4f} this run (replays cost nothing)",
-             f"- Candidates: {len(candidates)} ready for `--apply-corrections`, {len(refused)} refused, "
+             f"- Candidates: {len(candidates)} ready for `--apply-corrections` ({summary.get('mechanical', 0)} mechanical,"
+             f" {summary.get('to_judge', 0)} to judge), {len(refused)} refused, "
              f"{sum(len(r['dropped']) for r in records)} findings dropped", ""]
     if summary.get("not_reviewed"):
         lines += ["## Not reviewed", ""] + [f"- Chapter {c}: {why}" for c, why in summary["not_reviewed"]] + [""]
@@ -448,18 +459,39 @@ def review_novel(project, client, budget, *, first, last, run_name=None, paralle
             f"({record['status']}, ${record['cost_usd']:.4f})")
         return chapter, record, None
 
-    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        for chapter, record, problem in pool.map(one, range(first, last + 1)):
+    waiting = list(range(first, last + 1))
+    while waiting:
+        # Requests in flight reserve their worst-case cost; a chapter refused only because those
+        # reservations filled the cap goes again once they settle, until a round makes no progress.
+        with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+            results = list(pool.map(one, waiting))
+        retry = [chapter for chapter, record, problem in results
+                 if record is None and str(problem).startswith(ALLOWANCE_REFUSAL)]
+        for chapter, record, problem in results:
             if record is not None:
                 records[chapter] = record
-            else:
+            elif chapter not in retry:
                 not_reviewed.append((chapter, problem))
+        if retry and len(retry) < len(waiting):
+            log(f"{len(retry)} chapter(s) waited for budget room; sending them now.")
+            waiting = retry
+        else:
+            not_reviewed += [(c, p) for c, r, p in results if c in retry]
+            waiting = []
+    not_reviewed.sort()
     ordered = [records[number] for number in sorted(records)]
     kept = [item for record in ordered for item in record["kept"]]
-    candidates, refused = build_candidates(kept, sources, raws)
-    atomic_write_json(run_dir / f"candidates_{first:04d}_{last:04d}.json", {"replacements": candidates})
+    triaged = []
+    candidates, refused = build_candidates(kept, sources, raws, entries, triaged)
+    label = f"{first:04d}_{last:04d}"
+    atomic_write_json(run_dir / f"candidates_{label}.json", {"replacements": candidates})
+    mechanical = [r for r, kind in triaged if kind]
+    to_judge = [r for r, kind in triaged if not kind]
+    atomic_write_json(run_dir / f"candidates_{label}_mechanical.json", {"replacements": mechanical})
+    atomic_write_json(run_dir / f"candidates_{label}_to_judge.json", {"replacements": to_judge})
     summary = dict(novel=project.config.id, chapters=f"{first}-{last}", reviewed=len(ordered), calls=sender.calls,
-                   cost_usd=round(sender.cost_usd, 6), candidates=len(candidates), refused=len(refused),
+                   cost_usd=round(sender.cost_usd, 6), candidates=len(candidates),
+                   mechanical=len(mechanical), to_judge=len(to_judge), refused=len(refused),
                    dropped=sum(len(r["dropped"]) for r in ordered), not_reviewed=not_reviewed,
                    report=str(run_dir / "report.md"), candidates_file=str(run_dir / f"candidates_{first:04d}_{last:04d}.json"))
     write_report(run_dir, ordered, candidates, refused, summary)

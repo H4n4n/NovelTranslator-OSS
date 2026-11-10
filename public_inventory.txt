@@ -272,6 +272,7 @@ resolve_glossary_candidate_conflict.py
 retroactive_span_planning.py
 retroactive_transactions.py
 review_queue.py
+review_triage.py
 run_production_engine.py
 runtime_hardening_smoke.py
 scripts/guard_allowlist.py
@@ -498,6 +499,7 @@ tests/test_qa_runtime_wrapper_reinstallation.py
 tests/test_reader_epub.py
 tests/test_real_core_pending_provenance.py
 tests/test_retroactive_transactions.py
+tests/test_review_triage.py
 tests/test_rogue_first_prince_source.py
 tests/test_rolling_continuity.py
 tests/test_runtime_hardening_smoke.py

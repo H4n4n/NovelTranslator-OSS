@@ -14,7 +14,7 @@ python chapter_review.py --novel <id> --chapters 11-50 --budget-usd 2
 |---|---|---|
 | `--chapters` | required | One chapter or a range; only committed chapters are read |
 | `--budget-usd` | required | The most this run may spend |
-| `--parallel` | 32 | Chapters reviewed at once |
+| `--parallel` | 150 | Chapters reviewed at once |
 | `--reasoning` | `high` | `low` is faster and cheaper, `high` catches more |
 | `--no-verify` | off | Skip the second request that checks the findings |
 | `--run` | the range | Folder name under `output/review/` |

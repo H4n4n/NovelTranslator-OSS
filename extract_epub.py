@@ -1848,18 +1848,7 @@ def build_parser():
     return parser
 
 
-def configure_cli_text_streams():
-    """Keep Unicode extraction reports printable on legacy Windows consoles."""
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if not callable(reconfigure):
-            continue
-        try:
-            reconfigure(encoding="utf-8", errors="backslashreplace")
-        except (AttributeError, OSError, ValueError):
-            # A redirected or test-owned stream may not permit reconfiguration.
-            # Reporting still follows its existing behavior in that environment.
-            continue
+from cli_text_streams import configure_cli_text_streams  # noqa: E402  (kept importable from here)
 
 
 def main(argv=None):

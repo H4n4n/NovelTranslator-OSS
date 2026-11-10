@@ -370,6 +370,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    from cli_text_streams import configure_cli_text_streams
+    configure_cli_text_streams()
     try:
         result = build_goat_periodic_audit_finalize_plan(args.novel, repo_root=args.repo_root,
             start_chapter=args.start_chapter, end_chapter=args.end_chapter)

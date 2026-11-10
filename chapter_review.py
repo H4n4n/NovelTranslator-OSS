@@ -482,6 +482,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    from cli_text_streams import configure_cli_text_streams
+    configure_cli_text_streams()
     if args.budget_usd <= 0:
         print("Give the most this review may spend with --budget-usd.")
         return 2

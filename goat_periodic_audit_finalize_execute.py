@@ -48,6 +48,8 @@ def execute_goat_periodic_audit_finalize(novel_id, *, repo_root, start_chapter, 
 
 
 def main(argv=None):
+    from cli_text_streams import configure_cli_text_streams
+    configure_cli_text_streams()
     parser = build_parser()
     parser.add_argument("--expected-state-fingerprint", required=True)
     parser.add_argument("--approval-token", required=True)

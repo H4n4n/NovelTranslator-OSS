@@ -405,7 +405,7 @@ def write_report(run_dir, records, candidates, refused, summary):
     (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def review_novel(project, client, budget, *, first, last, run_name=None, parallel=32, reasoning="high",
+def review_novel(project, client, budget, *, first, last, run_name=None, parallel=150, reasoning="high",
                  verify=True, sleep=time.sleep, clock=lambda: datetime.now(timezone.utc), log=print):
     """Review committed chapters first..last; returns the run summary."""
     progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
@@ -472,7 +472,7 @@ def build_parser():
     parser.add_argument("--novel", required=True)
     parser.add_argument("--chapters", required=True, help="a chapter or a range such as 11-50")
     parser.add_argument("--budget-usd", type=float, required=True, help="the most this run may spend")
-    parser.add_argument("--parallel", type=int, default=32)
+    parser.add_argument("--parallel", type=int, default=150)
     parser.add_argument("--reasoning", choices=("low", "high"), default="high")
     parser.add_argument("--no-verify", action="store_true", help="skip the second request that checks findings")
     parser.add_argument("--run", help="name of the review folder under output/review (default: the range)")

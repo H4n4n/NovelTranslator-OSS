@@ -101,6 +101,7 @@ chapter_library.py
 chapter_review.py
 chapter_text_checks.py
 chinese_script_normalization.py
+cli_text_streams.py
 command_code_provider_credentials.py
 command_code_provider_transport.py
 committed_qa_provenance.py
@@ -374,6 +375,7 @@ tests/test_chapter_review.py
 tests/test_chapter_text_checks.py
 tests/test_checkpoint_epub.py
 tests/test_ci_split.py
+tests/test_cli_text_streams.py
 tests/test_command_code_provider_credentials.py
 tests/test_command_code_provider_transport.py
 tests/test_commandcode_orchestration_config.py

@@ -188,6 +188,14 @@ request with no recorded answer blocks the shared budget, as it does in a sequen
 so the whole run stops cleanly and the request gets its one recorded resend on the next
 start. When a run ends, no new batch starts and the run waits for those in flight.
 
+Publishing a periodic audit proves the novel's files did not change while it read them.
+A batch prepared ahead keeps translating meanwhile: the proof allows files it adds to the
+request journal and to `backup/superseded_translations/`, which no proof lists, as long as
+the proof never read or looked for them. Anything else that changes, or a removed file,
+still fails the proof; the run then lets the batches ahead finish and publishes once more
+from the audit's durable intent. (Waiting for them every time, as PR #52 did, cost about
+half an hour per audit on 15k-character chapters.)
+
 In the first overlap rehearsal the next batch started only after the previous one had
 translated, which saved just the 5-minute audit per batch (52 minutes for 98 chapters).
 Starting after the term audit instead is expected to bring the steady state from about

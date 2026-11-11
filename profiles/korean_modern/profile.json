@@ -1,0 +1,113 @@
+{
+  "id": "korean_modern",
+  "display_name": "Korean Modern",
+  "description": "Korean modern-day fiction (business, finance, regression, school, sports, politics) with real companies, people, and places, workplace titles, family and kinship terms, and money.",
+  "translation_policy": {
+    "style": [
+      "Natural, readable contemporary English faithful to the Korean source.",
+      "Preserve narrator voice, humor, characterization, hierarchy, and shifts between boardroom, family, school, street, and media registers.",
+      "Keep Korean relationships and workplace hierarchy clear in English without exoticizing them."
+    ],
+    "terminology_preservation_rules": [
+      "Keep characters, companies, organizations, workplace titles, forms of address, kinship terms, and recurring business or legal terms stable.",
+      "Keep each character's gender stable: he/she and him/her follow the character, never a guess.",
+      "Distinguish named companies, funds, and products from ordinary vocabulary and reject generic objects, actions, and one-off descriptions."
+    ],
+    "pinyin_preference": "Do not apply Chinese pinyin policy to Korean. Korean names follow the glossary; new Korean names use the common spellings readers know (Lee, Park, Choi, Yoon, Kim), surname first, with a hyphen between the syllables of a given name. Real people, companies, places, products, and events keep their established English names. Chinese names use pinyin, Japanese names use Hepburn without long-vowel marks, Western names keep their original spelling.",
+    "semantic_translation_preference": "Translate workplace titles and institutions into standard English (회장 Chairman, 부회장 Vice Chairman, 사장 President, 실장 Chief, 부장 Manager); keep kinship and familiar address that English readers of Korean fiction already know, such as hyung and oppa, as the glossary has them."
+  },
+  "auxiliary_policy": {
+    "terminology_distinctions": [
+      "Names follow the glossary; new Korean names use common spellings (Lee, Park, Choi, Yoon), surname first, given name hyphenated.",
+      "Real people, companies, places, products, and events keep their established English names.",
+      "Workplace titles take standard English renderings; a title with a surname is 'Chief Ha', 'Manager Kim'.",
+      "He/she follows the character's gender in the glossary; when the Korean leaves the subject out, take it from context.",
+      "Money keeps the source currency (won, dollars, yen) and the source's figures."
+    ]
+  },
+  "glossary": {
+    "allowed_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "title",
+      "real person",
+      "company",
+      "organization",
+      "government body",
+      "political party",
+      "school",
+      "team",
+      "location",
+      "product",
+      "event",
+      "specialized recurring term"
+    ],
+    "high_priority_categories": [
+      "character",
+      "alias",
+      "form of address",
+      "title",
+      "real person",
+      "company",
+      "organization",
+      "government body",
+      "political party",
+      "team"
+    ],
+    "review_priorities": [
+      "Character names exactly as the glossary has them, and each character's gender in pronouns.",
+      "Workplace titles and forms of address, including kinship terms.",
+      "Companies, organizations, government bodies, parties, schools, teams, and locations.",
+      "Real people, products, and events under their established English names.",
+      "Reject generic vocabulary, ordinary objects, and one-off descriptions."
+    ],
+    "retroactive_safe_categories": [
+      "character",
+      "alias",
+      "title",
+      "real person",
+      "company",
+      "organization",
+      "government body",
+      "political party",
+      "school",
+      "team",
+      "location",
+      "product",
+      "event",
+      "specialized recurring term"
+    ],
+    "long_phrase_categories": [
+      "company",
+      "organization",
+      "government body",
+      "political party",
+      "event",
+      "specialized recurring term"
+    ],
+    "low_value_category_words": {
+      "product": ["ordinary product", "common item"],
+      "location": ["ordinary room", "generic building"],
+      "specialized recurring term": ["ordinary duty", "daily work", "generic action"]
+    }
+  },
+  "capitalization": {
+    "style": "capitalize_every_word",
+    "formal_named_categories": [
+      "product",
+      "event"
+    ]
+  },
+  "audit": {
+    "priorities": [
+      "Character name consistency with the glossary.",
+      "Each character's gender in he/she and him/her.",
+      "Workplace titles, forms of address, and kinship terms.",
+      "Companies, organizations, government bodies, parties, teams, and locations.",
+      "Real people, products, and events under established English names.",
+      "Register consistency across boardroom, family, school, and casual scenes.",
+      "Residual Hangul, Hanja, or other source script in reader-facing English."
+    ]
+  }
+}

@@ -252,6 +252,8 @@ profiles/korean_fantasy/profile.json
 profiles/korean_fantasy/translation_instructions.txt
 profiles/korean_historical/profile.json
 profiles/korean_historical/translation_instructions.txt
+profiles/korean_modern/profile.json
+profiles/korean_modern/translation_instructions.txt
 profiles/korean_xianxia/profile.json
 profiles/korean_xianxia/translation_instructions.txt
 profiles/xianxia_xuanhuan/profile.json
@@ -436,6 +438,7 @@ tests/test_goat_state_policy_migration.py
 tests/test_goat_state_terminal_recovery.py
 tests/test_goat_unattended.py
 tests/test_goat_unbounded_auxiliary_policy.py
+tests/test_korean_modern_profile.py
 tests/test_korean_plain_hwa_heading.py
 tests/test_korean_xianxia_profile.py
 tests/test_legacy_production_import_safety.py

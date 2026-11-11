@@ -39,6 +39,19 @@ It reads only, so it can run while a translation is going.
      Each is tied to source words found in that chapter, preferably in no other, written with
      the chapter file's line endings, grown to whole words, and dry-run so it changes its own
      chapter exactly once and no other chapter.
+   - `candidates_<first>_<last>_mechanical.json` and `..._to_judge.json`: the same fixes split by
+     a local check (`review_triage.py`). Mechanical ones only move a quotation into its own
+     paragraph, or swap a short phrase for a locked glossary term's English that the chapter's
+     source uses. Everything else (meaning, omissions, unlocked terms, style) is to judge.
+
+## Applying the results
+
+1. Skim `..._mechanical.json` and apply it. On ruler_of_the_martial_world, checkers agreed with
+   93% of these (277 of 297); the rest were style calls such as "Jongnam" for "the Jongnam Sect".
+2. Judge `..._to_judge.json` (a person, or cheaper model checkers given `translation_addendum.txt`
+   and the glossary), then apply what survives. That is about 80% of the findings: most review
+   fixes are meaning fixes that need judging.
+3. Run the startup check (`production_path_preflight.py`) after applying.
 
 ## Safety and cost
 
@@ -47,9 +60,11 @@ It reads only, so it can run while a translation is going.
   production. Rerunning the same command costs nothing for chapters already reviewed.
 - Definite provider errors are retried with backoff and logged.
 - Each request reserves its worst case (an explicit completion ceiling) before it is sent,
-  so the requests in flight together never pass `--budget-usd`. A refused chapter is listed
-  as not reviewed and is reviewed on the next run.
-- `pause.flag` and the novel's `off_peak_only` hold every request, as in a translation run.
+  so the requests in flight together never pass `--budget-usd`. A chapter refused only
+  because the reservations in flight filled the cap goes again once they settle, in the same
+  run, until a round makes no progress; then it is listed as not reviewed for the next run.
+- `pause.flag` and the novel's `off_peak_only` hold every request, as in a translation run, and
+  the run says which one it is waiting for. Remove `pause.flag` to review a paused novel.
 - It writes only under `output/review/`.
 
 A chapter whose English changed since its review is reviewed again; if its journal was

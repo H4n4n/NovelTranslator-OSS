@@ -184,3 +184,35 @@ def test_ranges_and_answers_are_parsed_strictly():
     with pytest.raises(ValueError):
         chapter_review.parse_range("50-11")
     assert chapter_review.parse_json("```json\n{\"findings\": []}\n```") == {"findings": []}
+
+
+class SlowFirstFind(FakeClient):
+    """Holds chapter 1's find request open long enough for chapter 2 to try to start."""
+
+    def create(self, **wire):
+        import time
+        if "[S1] 제 1 장" in wire["messages"][1]["content"] and wire["messages"][0]["content"] != chapter_review.VERIFY_PROMPT:
+            time.sleep(0.5)
+        return super().create(**wire)
+
+
+def test_a_chapter_refused_only_for_reserved_budget_goes_again_when_room_frees(tmp_path):
+    logs = []
+    novel = project(tmp_path)
+    budget = GoatBudget(20, 0.04)  # Room for one find reservation at a time, not two.
+    summary = chapter_review.review_novel(novel, SlowFirstFind(findings={1: [ZHANG]}), budget, first=1, last=2,
+                                          clock=OFF_PEAK, log=logs.append, parallel=2)
+    assert summary["not_reviewed"] == [] and summary["reviewed"] == 2
+    assert any("waited for budget room" in line for line in logs)
+
+
+def test_candidates_are_split_into_mechanical_and_to_judge(tmp_path):
+    split = {"kind": "rule", "s": 2, "e": 2, "source": "검을 들어라", "english": "“Raise your sword.”",
+             "fix": "“Raise your sword,” he said.", "why": "speaker"}  # Rewords, so it needs judging too.
+    keep_both = {"all": [{"id": 1, "verdict": "keep", "why": "real"}, {"id": 2, "verdict": "keep", "why": "real"}]}
+    _, summary = run(tmp_path, FakeClient(findings={1: [ZHANG, split]}, verdicts=keep_both))
+    run_dir = (tmp_path / "novel" / "output" / "review" / "0001_0002")
+    mechanical = json.loads((run_dir / "candidates_0001_0002_mechanical.json").read_text(encoding="utf-8"))["replacements"]
+    to_judge = json.loads((run_dir / "candidates_0001_0002_to_judge.json").read_text(encoding="utf-8"))["replacements"]
+    assert mechanical == [] and sorted(c["new"] for c in to_judge) == ["He stepped back two zhang.", "“Raise your sword,” he said."]
+    assert summary["mechanical"] == 0 and summary["to_judge"] == 2

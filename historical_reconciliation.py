@@ -499,6 +499,26 @@ def _reserve_policy(policy, extra):
 
 
 
+def ownership_clash_details(vetoed):
+    """Which planned edits an earlier publication's owned text vetoes, and how to resolve it.
+
+    The reason code stays first, so callers that match it keep working.
+    """
+    if not vetoed:
+        return ""
+    groups = {}
+    for chapter, edit in vetoed:
+        key = (edit.get("source_identity"), edit.get("old_text"), edit.get("replacement"))
+        groups.setdefault(key, []).append(chapter)
+    lines = [f"{source}: '{old}' -> '{new}' in chapter(s) {', '.join(str(n) for n in sorted(set(chapters)))}"
+             f" ({len(chapters)} place(s))" for (source, old, new), chapters in sorted(groups.items(), key=str)]
+    return (": an earlier audit owns this text, so this audit's change to it is refused. "
+            + "; ".join(lines)
+            + ". If the new English is right, apply it with translate.py --apply-corrections (source term, old"
+              " and new English), then finish this audit with goat_periodic_audit_finalize_plan.py and"
+              " goat_periodic_audit_finalize_execute.py. Otherwise keep the old English and review the glossary entry.")
+
+
 WRITER_AUTHORIZATION_REVISION = "historical-writer-authorization-v1"
 
 
@@ -756,11 +776,13 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
         writer_zero_send=True, chapter_bytes=recovery_before, _inputs=_inputs)
     reserved = copy.deepcopy(request["ownership_policy"])
     _reserve_policy(reserved, reservations)
+    vetoed = []
     for item in plan["chapters"]:
         edits, _ = plan_chapter(module.chapter_map[item["chapter"]]["text"], originals[item["chapter"]],
                                request["rules"], reserved, request["safe_categories"], span_policy_of(request))
         # A reservation is a veto, never a replacement plan or new source anchor.
-        require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
+        vetoed += [(item["chapter"], edit) for edit in item["edits"] if edit not in edits]
+    require(not vetoed, "HISTORICAL_OWNERSHIP_RESERVATION" + ownership_clash_details(vetoed))
     known_plans = [plan]
     for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
         known_plans.append(audit_intent(module, path, _inputs=_inputs)["transaction_plan"])

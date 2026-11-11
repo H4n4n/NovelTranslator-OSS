@@ -87,3 +87,36 @@ def test_changed_chapters_are_backed_up_logged_and_a_rerun_changes_nothing(tmp_p
 
     again = approved_corrections.apply_corrections(project, corrections, log=lambda _: None)
     assert again["chapters_changed"] == 0 and again["glossary_changed"] == 0
+
+
+def test_an_unfinished_audit_keeps_its_glossary_and_a_rerun_after_it_applies_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_checkpoint_epub, "rebuild_reader_epub", lambda project, take_lock: {"status": "OK"})
+    root = tmp_path / "novel"
+    (root / "output" / "chapters").mkdir(parents=True)
+    (root / "output" / "audits").mkdir()
+    (root / "data").mkdir()
+    project = SimpleNamespace(root=root, chapter_dir=root / "output" / "chapters", backup_dir=root / "backup",
+                              retroactive_dir=root / "output" / "retroactive_fixes", progress_file=root / "data" / "progress.json",
+                              chapters_file=root / "data" / "chapters.json", glossary_file=root / "data" / "glossary.json")
+    atomic_write_json(project.chapters_file, [dict(chapter=1, text="百戶")])
+    atomic_write_json(project.progress_file, dict(last_completed=1, last_audited_chapter=0))
+    atomic_write_json(project.glossary_file, {"entries": {"百戶": dict(english="Centurion", category="rank", status="provisional")}})
+    (project.chapter_dir / "0001.md").write_text("The Centurion came.", encoding="utf-8")
+    checkpoint = root / "output" / "audits" / "audit_0001_0001.checkpoint.json"
+    checkpoint.write_text("{}", encoding="utf-8")
+    glossary_before = project.glossary_file.read_bytes()
+    corrections = {"replacements": REPLACEMENTS[:1]}
+
+    summary = approved_corrections.apply_corrections(project, corrections, log=lambda _: None)
+    assert summary["chapters_changed"] == 1 and summary["glossary_changed"] == 0 and summary["glossary_deferred"] == 1
+    assert project.glossary_file.read_bytes() == glossary_before
+    assert (project.chapter_dir / "0001.md").read_text(encoding="utf-8") == "The Hundred-Household Commander came."
+    record = json.loads(next(project.retroactive_dir.glob("approved_corrections_*.json")).read_text(encoding="utf-8"))
+    assert record["glossary"] == {} and record["glossary_deferred"]["audit"] == "0001_0001"
+
+    checkpoint.unlink()
+    atomic_write_json(project.progress_file, dict(last_completed=1, last_audited_chapter=1))
+    again = approved_corrections.apply_corrections(project, corrections, log=lambda _: None)
+    assert again["chapters_changed"] == 0 and again["glossary_changed"] == 1
+    entry = json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]["百戶"]
+    assert entry["english"] == "Hundred-Household Commander" and entry["status"] == "locked"

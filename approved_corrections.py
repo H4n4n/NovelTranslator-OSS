@@ -60,6 +60,16 @@ def correct_chapter(source, text, replacements):
     return pattern.sub(replace, text), changes
 
 
+def unfinished_audit(project, progress):
+    """The label of an audit that has paid answers but isn't published yet, or None."""
+    start = progress.get("last_audited_chapter", 0) + 1
+    audits = project.root / "output" / "audits"
+    for pattern in (f"audit_{start:04d}_*.checkpoint.json", f"audit_{start:04d}_*.finalization.json"):
+        for path in sorted(audits.glob(pattern)):
+            return path.name.split(".", 1)[0][len("audit_"):]
+    return None
+
+
 def apply_corrections(project, corrections, *, log=print):
     from build_checkpoint_epub import rebuild_reader_epub
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -89,17 +99,30 @@ def apply_corrections(project, corrections, *, log=print):
         # Entries whose own source has a corrected term change the same way, like a technique named after its art.
         renamed = {term: correct_chapter(term, entry.get("english") or "", corrections["replacements"])[0]
                    for term, entry in glossary["entries"].items()}
+        changed = {}
         for term, english in {**renamed, **corrections.get("glossary", {})}.items():
             entry = glossary["entries"].get(term)
-            if entry is None or entry.get("english") == english:
-                continue
-            record["glossary"][term] = {"old": entry.get("english"), "new": english}
-            entry.update(english=english, status="locked", notes=f"Owner-approved correction, {stamp[:8]}.")
-        atomic_write_json(project.glossary_file, glossary)
+            if entry is not None and entry.get("english") != english:
+                changed[term] = {"old": entry.get("english"), "new": english}
+        waiting = unfinished_audit(project, progress)
+        if waiting and changed:
+            # An unfinished audit's paid answers are bound to the glossary it read; changing
+            # an entry would make them unusable. The prose is corrected; the audit owns the glossary.
+            record["glossary_deferred"] = dict(audit=waiting, entries=changed)
+            log(f"Glossary left unchanged while audit {waiting} is unfinished ({len(changed)} entr"
+                f"{'y' if len(changed) == 1 else 'ies'}). Run the same list again after it publishes.")
+        else:
+            for term, change in changed.items():
+                record["glossary"][term] = change
+                glossary["entries"][term].update(english=change["new"], status="locked",
+                                                 notes=f"Owner-approved correction, {stamp[:8]}.")
+            atomic_write_json(project.glossary_file, glossary)
         atomic_write_json(record_path, record)
     epub = rebuild_reader_epub(project, take_lock=True)
     return dict(chapters_changed=len(record["chapters"]), replacements=sum(map(len, record["chapters"].values())),
-                glossary_changed=len(record["glossary"]), record=str(record_path), epub=epub.get("status"))
+                glossary_changed=len(record["glossary"]),
+                glossary_deferred=len(record.get("glossary_deferred", {}).get("entries", {})),
+                record=str(record_path), epub=epub.get("status"))
 
 
 def _replay(text, changes):

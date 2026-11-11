@@ -469,7 +469,7 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
         authorization = writer_authorization(module, proof["plan"], selected=intent)
     except ProductionIntegrityError as exc:
         if proof["existing"] and "HISTORICAL_OWNERSHIP_RESERVATION" in str(exc):
-            raise AuditFinalizationBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: HISTORICAL_OWNERSHIP_RESERVATION") from exc
+            raise AuditFinalizationBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: " + str(exc).split("AUT2: ", 1)[-1]) from exc
         raise
     if not finalized:
         from production_run_lock import production_run_lock

@@ -449,6 +449,7 @@ tests/test_novel_runner.py
 tests/test_novels_root.py
 tests/test_observability.py
 tests/test_operator_preflight.py
+tests/test_ownership_clash_details.py
 tests/test_pending_provider_completion_gate.py
 tests/test_pending_recovery_execute.py
 tests/test_pending_recovery_plan.py

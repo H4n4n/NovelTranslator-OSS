@@ -304,7 +304,7 @@ def execute_retroactive_transaction(*, novel_id, audit_label, through_chapter,
         authorization = writer_authorization(context, planned)
     except ProductionIntegrityError as exc:
         if path.exists() and "HISTORICAL_OWNERSHIP_RESERVATION" in str(exc):
-            raise RetroactiveBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: HISTORICAL_OWNERSHIP_RESERVATION") from exc
+            raise RetroactiveBlocked("IMMUTABLE_PLAN_POLICY_CONFLICT: " + str(exc).split("AUT2: ", 1)[-1]) from exc
         raise
     authorization_path = plain(directory / f"{slot}.authorization.json")
     if authorization_path.exists() and read_object(authorization_path) != authorization:

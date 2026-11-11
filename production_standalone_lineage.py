@@ -269,11 +269,14 @@ def prove_gap(module, values, after_audit, history, blobs, latest, policy, linea
         require(tx.build_plan(request, before, module.chapter_map) == plan, "ORIGINAL_SOURCE_SPANS_UNPROVEN")
         reserved = copy.deepcopy(request["ownership_policy"])
         _reserve_policy(reserved, policy)
+        vetoed = []
         for item in plan["chapters"]:
             edits, _ = plan_chapter(module.chapter_map[item["chapter"]]["text"], before[item["chapter"]],
                                     request["rules"], reserved, request["safe_categories"],
                                     span_policy_of(request))
-            require(all(edit in edits for edit in item["edits"]), "HISTORICAL_OWNERSHIP_RESERVATION")
+            vetoed += [(item["chapter"], edit) for edit in item["edits"] if edit not in edits]
+        from historical_reconciliation import ownership_clash_details
+        require(not vetoed, "HISTORICAL_OWNERSHIP_RESERVATION" + ownership_clash_details(vetoed))
         proof = dict(revision=WRITER_AUTHORIZATION_REVISION, plan_sha256=canonical_hash(plan),
             accepted_change_sha256=canonical_hash({"standalone_exact_policy": request["ownership_policy"]}),
             historical_evidence_sha256=canonical_hash(writer_evidence_files(module, lineage)),

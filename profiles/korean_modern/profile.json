@@ -41,6 +41,7 @@
       "location",
       "product",
       "event",
+      "technique",
       "specialized recurring term"
     ],
     "high_priority_categories": [
@@ -95,8 +96,7 @@
   "capitalization": {
     "style": "capitalize_every_word",
     "formal_named_categories": [
-      "product",
-      "event"
+      "technique"
     ]
   },
   "audit": {

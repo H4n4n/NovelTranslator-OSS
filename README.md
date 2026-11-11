@@ -105,6 +105,9 @@ Available profiles:
 - `korean_xianxia`: Korean cultivation/xianxia fantasy with stable realms,
   stages, sects, techniques, artifacts, formations, pills, Dao concepts, Laws,
   Intents, Domains, Tribulations, and calibrated Korean-name handling.
+- `korean_modern`: Korean modern-day fiction (business, finance, school, sports,
+  politics) with real people and companies under established English names,
+  workplace titles, kinship terms, money, and stable character genders.
 
 A novel selects its reusable profile in `novel.json`:
 

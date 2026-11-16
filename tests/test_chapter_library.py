@@ -200,3 +200,22 @@ def test_supplement_pending_recovery_uses_production_index(tmp_path):
     )
     assert recovered["translation"] == "PAID SUPPLEMENT"
     assert generation_calls == []
+
+
+def test_untitled_reset_chapter_gets_bare_local_heading():
+    # A TXT source can split an over-long untitled stretch; that unit's heading line is blank.
+    chapter = reset_unit(65, 65, None, "")
+    chapter["heading"] = ""
+    label = source_prompt_heading(
+        chapter, "spine_sequential", source_language="ko", target_language="en"
+    )
+    assert "READER-FACING LOCAL IDENTITY: Chapter 65" in label
+    assert "the source gives this chapter no title" in label
+    assert "The heading is exactly Chapter 65, with no title" in label
+
+
+def test_reset_chapter_without_heading_field_is_still_refused():
+    chapter = reset_unit(3, 3, 1)
+    chapter.pop("heading")
+    with pytest.raises(ValueError, match="authoritative source heading"):
+        source_prompt_heading(chapter, "spine_sequential")

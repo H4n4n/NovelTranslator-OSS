@@ -144,7 +144,7 @@ def source_prompt_heading(
     if chapter_numbering != CHAPTER_NUMBERING_SPINE_SEQUENTIAL:
         return f"CHAPTER {production_index}"
     source_heading = chapter.get("heading")
-    if not isinstance(source_heading, str) or not source_heading.strip():
+    if not isinstance(source_heading, str):
         raise ValueError("reset-numbered chapter lacks an authoritative source heading")
     local_start = chapter.get("local_chapter_start")
     local_end = chapter.get("local_chapter_end")
@@ -156,6 +156,17 @@ def source_prompt_heading(
         local_identity = f"Chapter {local_start}"
     else:
         local_identity = f"Chapters {local_start}-{local_end}"
+    if not source_heading.strip():
+        # A source that gives this chapter no title (a long stretch split at a scene break).
+        return (
+            f"PRODUCTION UNIT {production_index} "
+            "(INTERNAL CONTROL INDEX; NEVER USE IN OUTPUT HEADING)\n\n"
+            f"READER-FACING LOCAL IDENTITY: {local_identity}\n"
+            "SOURCE HEADING/TITLE TO TRANSLATE: none (the source gives this chapter no title)\n"
+            "OUTPUT HEADING REQUIREMENTS:\n"
+            f"- The heading is exactly {local_identity}, with no title; do not invent one.\n"
+            f"- Never substitute production unit {production_index} for the local identity."
+        )
 
     source_language = (
         source_language.strip()

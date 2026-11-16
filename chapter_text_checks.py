@@ -1,6 +1,7 @@
-"""Free local checks on a translated chapter: curly quotes, romanized sound effects, dropped dialogue.
+"""Free local checks on a translated chapter: curly quotes, romanized sound effects, dropped
+dialogue, and a chapter that looks cut off.
 
-curl_quotes rewrites straight quotes before commit. The other two only find things worth a
+curl_quotes rewrites straight quotes before commit. The others only find things worth a
 look; the run flags them for review and keeps going.
 """
 import re
@@ -86,9 +87,43 @@ def missing_dialogue_lines(source, english):
     return max(0, dialogue_line_count(source) - dialogue_line_count(english))
 
 
+# English characters per source character, spaces not counted. Measured on 3,200 committed
+# chapters: each novel's median is 2.2-2.4 for Korean and 3.2-3.4 for Chinese, and a
+# complete chapter stays within about 15% of it.
+_ENGLISH_PER_SOURCE_CHAR = {"ko": 2.3, "zh": 3.3}
+_CUT_OFF_MIN_SOURCE_CHARS = 500
+
+
+def _size(text):
+    return len("".join(text.split())), sum(1 for line in text.splitlines() if line.strip())
+
+
+def cut_off_detail(source, english, source_language):
+    """Why the English looks shorter than a whole translation of the source, or None.
+
+    A model sometimes stops early and still reports a normal finish. Much too short is
+    enough on its own; a little too short counts only when paragraphs are missing as well,
+    because a complete chapter can run 10% short when its paragraphs are all there.
+    """
+    typical = _ENGLISH_PER_SOURCE_CHAR.get((source_language or "").lower()[:2])
+    source_chars, source_paragraphs = _size(source)
+    if typical is None or source_chars < _CUT_OFF_MIN_SOURCE_CHARS:
+        return None
+    english_chars, english_paragraphs = _size(english)
+    length = english_chars / (source_chars * typical)
+    paragraphs = english_paragraphs / source_paragraphs
+    if length < 0.80 or (length < 0.90 and paragraphs < 0.90):
+        return (f"The English is {length:.0%} of the usual length for this source, with {english_paragraphs} "
+                f"paragraphs for the source's {source_paragraphs}; the chapter may be cut off.")
+    return None
+
+
 def review_flags(source, english, source_language):
     """(kind, detail) pairs for the review list. Never blocks a commit."""
     flags = []
+    cut_off = cut_off_detail(source, english, source_language)
+    if cut_off:
+        flags.append(("possible_cut_off", cut_off))
     sounds = romanized_sound_lines(english)
     if sounds:
         flags.append(("romanized_sound_effect", "Sound effects left in romanized Korean: " + "; ".join(sounds[:5])))

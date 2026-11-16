@@ -162,8 +162,7 @@ The audit used tracked Python writer searches and AST call inventories:
 | `full_pipeline_periodic_audit_recovery._restore_baseline` | Experiment-owned legacy snapshot restore; new span transactions are preserved and verified |
 | `migrate_single_novel` / experimental track preparation | Copy into newly staged isolated project roots; do not edit existing production prose |
 | Finalization, normalization, title/publication/editorial writers | Write derived `final/` corpora, not production `output/chapters/` |
-| `inspect_chapter` | Writes source inspection text under `output/inspection/` |
-| `translate_pilot`, `benchmark_more_chapters`, older `translate_production*` variants, `backup/` copies, `translate_production_before_*` | Historical standalone/pilot/snapshot paths, outside the maintained launcher; unchanged |
+| `benchmark_more_chapters`, `backup/` copies | Historical standalone/snapshot paths, outside the maintained launcher; unchanged. The pilot script, `inspect_chapter` and the older `translate_production*` copies were removed from the tree and remain in git history (last present in 43528f9) |
 
 Validation uses synthetic disposable chapter copies only. No real historical
 production prose, live glossary, frozen experiment evidence, or paid Chapter

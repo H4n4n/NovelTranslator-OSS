@@ -22,6 +22,8 @@ POLICY_VERSION = "owned-single-span-v1"
 COUNT_MATCH_POLICY_VERSION = "owned-count-match-v2"
 SPAN_POLICIES = (POLICY_VERSION, COUNT_MATCH_POLICY_VERSION)
 OVER_COUNT_REASON = "more_target_spans_than_source_anchors"
+# An audit's change to text an earlier audit wrote: left as it is and flagged for review.
+RESERVED_SKIP_REASON = "earlier_audit_owns_text"
 SCHEMA_VERSION = 1
 TARGET_FIELDS = ("english", "approved_renderings", "accepted_inflections",
                  "repair_aliases", "aliases")

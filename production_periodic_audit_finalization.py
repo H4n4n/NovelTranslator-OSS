@@ -124,7 +124,7 @@ def chapter_manifest(module, *, _inputs=None):
 
 
 @proof_traversal
-def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None, _include_before_bytes=False, _inputs=None):
+def transaction_proof(module, start, end, baseline_glossary, staged, changes, *, chapter_bytes=None, _include_before_bytes=False, reserved_skips=None, _inputs=None):
     """Pure PR155 proof, including original plan regeneration from BEFORE bytes."""
     file_sha, read_json = _inputs.sha, _inputs.read_json
     novel = module.ACTIVE_NOVEL_CONFIG.id if module.ACTIVE_NOVEL_CONFIG else "legacy_single_novel"
@@ -144,6 +144,8 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
     intent = load_intent(module, start, end, _inputs=_inputs)
     request = tx.with_span_policy(request, read_json(path) if path.exists()
                                   else intent["transaction_plan"] if intent else None)
+    if reserved_skips and intent is None and not path.exists():
+        request["reserved_skips"] = reserved_skips  # Only a new audit's first plan; saved ones keep theirs.
     current_cache = {}
     def current_bytes(number):
         if number not in current_cache:
@@ -285,7 +287,7 @@ def transaction_proof(module, start, end, baseline_glossary, staged, changes, *,
 
 
 @proof_traversal
-def prepare_finalization(module, start, end, audit_result, audit_stats, chunking, *, timestamp=0, chapter_bytes=None, _inputs=None):
+def prepare_finalization(module, start, end, audit_result, audit_stats, chunking, *, timestamp=0, chapter_bytes=None, reserved_skips=None, _inputs=None):
     """Detached validation; this function never creates a transaction or writes."""
     file_sha = _inputs.sha
     baseline = dict(glossary=copy.deepcopy(module.glossary), progress=copy.deepcopy(module.progress),
@@ -318,7 +320,7 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     candidate["last_audited_chapter"] = end
     staged = copy.deepcopy(baseline["glossary"])
     changes = module.apply_periodic_audit(start, end, audit_result, glossary_data=staged)
-    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes, _include_before_bytes=True, _inputs=_inputs)
+    proof = transaction_proof(module, start, end, baseline["glossary"], staged, changes, chapter_bytes=chapter_bytes, _include_before_bytes=True, reserved_skips=reserved_skips, _inputs=_inputs)
     # Existing immutable intents retain their exact replay semantics. New audits
     # bind a source-safe full-range discovery report to the outer transaction.
     from historical_reconciliation import impact_report
@@ -423,7 +425,18 @@ def finalize_periodic_audit(module, start, end, audit_result, audit_stats, chunk
                     "audit finalization paid-evidence drift")
         intent = prepare_finalization(module, start, end, audit_result, audit_stats, chunking,
                                       timestamp=publication_timestamp(module, start, end))
-        writer_authorization(module, intent["transaction_plan"], selected=intent, unpublished=True)
+        try:
+            writer_authorization(module, intent["transaction_plan"], selected=intent, unpublished=True)
+        except ProductionIntegrityError as exc:
+            skips = getattr(exc, "reserved_skips", None)
+            if not skips:
+                raise
+            # An earlier audit owns some of the text this audit would change. Refusing those
+            # places protects them; stopping the whole publication protects nothing more. The
+            # plan is made again without them, proven again, and the run flags them for review.
+            intent = prepare_finalization(module, start, end, audit_result, audit_stats, chunking,
+                                          timestamp=publication_timestamp(module, start, end), reserved_skips=skips)
+            writer_authorization(module, intent["transaction_plan"], selected=intent, unpublished=True)
         record_path = module.AUDIT_DIR / f"audit_{start:04d}_{end:04d}.json"
         require(not record_path.exists(), "audit record exists without proven intent")
         intent["intent_sha256"] = canonical_sha256(intent)

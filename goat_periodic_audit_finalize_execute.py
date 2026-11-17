@@ -44,6 +44,8 @@ def execute_goat_periodic_audit_finalize(novel_id, *, repo_root, start_chapter, 
             model_selection="v41-flash", provider_selection="command_code_provider")
         if preflight["status"] != "PASS":
             raise RuntimeError("strict preflight blocks after local audit finalization: " + str(preflight["errors"]))
+        from novel_runner import record_if_complete
+        record_if_complete(project)  # A finished final audit completes the novel.
         return result
 
 

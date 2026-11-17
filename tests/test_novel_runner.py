@@ -93,6 +93,21 @@ def test_finished_book_is_complete_with_its_budget_used_up(tmp_path, monkeypatch
     assert novel_runner.run_novel("fixture", repo_root=tmp_path)["status"] == novel_runner.COMPLETE
 
 
+def test_record_if_complete_replaces_an_earlier_stop_only_when_finished(tmp_path, monkeypatch):
+    project = novel(tmp_path, count=2)
+    fake_runtime(project, monkeypatch, tmp_path)
+    path = project.data_dir / "last_run.json"
+    stopped = {"status": novel_runner.STOPPED, "reader_epub": "BUILT", "message": "The run stopped."}
+    path.write_text(json.dumps(stopped), encoding="utf-8")
+    assert novel_runner.record_if_complete(project) is None  # Nothing translated yet.
+    assert json.loads(path.read_text(encoding="utf-8")) == stopped
+    assert novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)["status"] == novel_runner.COMPLETE
+    path.write_text(json.dumps(stopped), encoding="utf-8")
+    result = novel_runner.record_if_complete(project)
+    assert result["status"] == novel_runner.COMPLETE and result["reader_epub"] == "BUILT"
+    assert json.loads(path.read_text(encoding="utf-8")) == result
+
+
 def test_requests_in_an_unfinished_audit_count_against_the_budget(tmp_path):
     project = novel(tmp_path, count=2)
     novel_runner.set_budget(project, 1.0)

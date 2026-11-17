@@ -163,6 +163,23 @@ def test_bad_key_stops_with_actionable_message(tmp_path, monkeypatch):
     assert journal["status"] == "planned"
 
 
+def test_stop_message_ignores_errors_from_earlier_runs(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    project = novel(tmp_path, count=3)
+    project.logs_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    old = {"timestamp_utc": (now - timedelta(days=1)).isoformat(), "event": "error",
+           "error_type": "GoatProviderStop", "error_message": "provider_key_or_credit", "stage": "translation"}
+    log = project.logs_dir / "run_earlier.jsonl"
+    log.write_text(json.dumps(old) + "\n", encoding="utf-8")
+    assert novel_runner.describe_stop(project)["reason"] == "provider_key_or_credit"
+    stale = novel_runner.describe_stop(project, since=now)
+    assert stale["reason"] == "unexpected_stop" and "no error was logged" in stale["message"], stale
+    fresh = dict(old, timestamp_utc=(now + timedelta(seconds=1)).isoformat())
+    log.write_text(json.dumps(old) + "\n" + json.dumps(fresh) + "\n", encoding="utf-8")
+    assert novel_runner.describe_stop(project, since=now)["reason"] == "provider_key_or_credit"
+
+
 def test_pause_flag_returns_paused(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     fake_runtime(project, monkeypatch, tmp_path)

@@ -19,6 +19,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shards", type=int, required=True)
     parser.add_argument("--shard", type=int, required=True)
+    parser.add_argument("--junitxml", help="also write per-test times here (outside the checkout)")
     args = parser.parse_args(argv)
     modules = split_tests.shards(args.shards)[args.shard]
     if not modules:
@@ -34,6 +35,8 @@ def main(argv=None):
     for node in deselect:
         cmd += ["--deselect", node]
     cmd += ["--", "-q", "-p", "no:cacheprovider", *modules]
+    if args.junitxml:
+        cmd.append("--junitxml=" + args.junitxml)
     return subprocess.call(cmd, cwd=split_tests.REPO)
 
 

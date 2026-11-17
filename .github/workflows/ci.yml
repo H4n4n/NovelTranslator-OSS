@@ -101,7 +101,17 @@ jobs:
         run: python -m compileall -q .
 
       - name: Run test shard
-        run: python scripts/run_ci_shard.py --shards 4 --shard ${{ matrix.shard }}
+        run: python scripts/run_ci_shard.py --shards 4 --shard ${{ matrix.shard }} --junitxml "${{ runner.temp }}/junit-shard-${{ matrix.shard }}.xml"
+
+      # Per-test times, for refreshing scripts/split_tests.py (see scripts/ci_test_times.py).
+      - name: Upload test times
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-times-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/junit-shard-${{ matrix.shard }}.xml
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Assert tracked source cleanliness
         if: always()

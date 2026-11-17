@@ -87,7 +87,6 @@ benchmark_model_config.py
 benchmark_more_chapters.py
 benchmark_novel.py
 benchmark_sample_plan.py
-benchmark_thinking_high.py
 build_checkpoint_epub.py
 build_finalization_corpus.py
 build_normalization_inventory.py
@@ -184,7 +183,6 @@ goat_state_policy_migration_plan.py
 goat_state_terminal_recovery_execute.py
 goat_state_terminal_recovery_plan.py
 historical_reconciliation.py
-inspect_chapter.py
 list_novels.py
 migrate_single_novel.py
 model_candidate_ids.py
@@ -291,7 +289,6 @@ source_language_filter.py
 status_project.py
 strict_terminology_repair.py
 term_repair.py
-test_api.py
 tests/ci_exclusions.json
 tests/conftest.py
 tests/goat_audit_finalization_support.py
@@ -527,20 +524,7 @@ tests/test_ui_api.py
 tests/test_uncertain_request_disposition.py
 tests/zero_provider_validation.py
 translate.py
-translate_pilot.py
-translate_production.py
-translate_production_before_dynamic_pricing.py
-translate_production_before_glossary_filter.py
-translate_production_before_json_fix.py
-translate_production_before_retroactive.py
-translate_production_before_unattended.py
-translate_production_unattended.py
-translate_production_unattended_scheduled.py
-translate_production_unattended_scheduled_before_ch69_fix.py
-translate_production_unattended_scheduled_fixed.py
-translate_production_unattended_scheduled_retroactive.py
 translate_production_unattended_scheduled_retroactive_dynamic_pricing.py
-translate_production_unattended_scheduled_technique_case.py
 translation_completeness.py
 translation_model_config.py
 translation_model_runtime.py

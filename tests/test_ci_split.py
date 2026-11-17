@@ -43,3 +43,14 @@ def test_new_test_file_is_picked_up_without_other_changes(tmp_path):
     (tmp_path / "tests" / "test_brand_new.py").write_text("x = 2\n", encoding="utf-8")
     flat = [m for shard in split_tests.shards(3, tmp_path) for m in shard]
     assert sorted(flat) == ["tests/test_brand_new.py", "tests/test_old.py"]
+
+
+def test_measured_files_exist_and_shards_are_even():
+    assert set(split_tests.MEASURED_SECONDS) <= _all_modules()  # a renamed file would silently lose its time
+
+    def seconds(module):
+        return split_tests.MEASURED_SECONDS.get(module) or (
+            (REPO / module).stat().st_size / split_tests.UNMEASURED_BYTES_PER_SECOND)
+
+    loads = [sum(seconds(m) for m in shard) for shard in split_tests.shards(4)]
+    assert max(loads) < 1.25 * sum(loads) / 4

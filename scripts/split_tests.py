@@ -8,42 +8,46 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 EXCLUSIONS = REPO / "tests" / "ci_exclusions.json"
-# Seconds each file took in a full local run on 2026-11-16, for the files that took 10 seconds or more.
-# To refresh: download a CI run's test-times-shard-N artifacts and run scripts/ci_test_times.py on them.
+# Seconds each file took on CI, the median of three runs on main on 2026-11-17, for the files that took
+# 10 seconds or more. Single runs vary a lot: one runner can be twice as slow as another.
+# To refresh: download the test-times-shard-N artifacts of a few CI runs and run scripts/ci_test_times.py
+# on each run's files; take each file's median.
 MEASURED_SECONDS = {
-    "tests/test_completed_uncertain_history.py": 1537,
-    "tests/test_goat_periodic_audit_finalization_part_2.py": 933,
-    "tests/test_publication_readiness.py": 844,
-    "tests/test_goat_periodic_audit_finalization_part_4.py": 752,
-    "tests/test_retroactive_transactions.py": 685,
-    "tests/test_goat_periodic_audit_finalization_part_1.py": 662,
-    "tests/test_goat_periodic_audit_finalization_part_3.py": 615,
-    "tests/test_build_publication_epub.py": 345,
-    "tests/test_uncertain_request_disposition.py": 170,
-    "tests/test_production_goat_batch_journal.py": 163,
-    "tests/test_experimental_goat.py": 162,
-    "tests/test_production_goat_batch_ledger.py": 118,
-    "tests/test_goat_batch_plan.py": 106,
-    "tests/test_goat_state_terminal_recovery.py": 105,
-    "tests/test_continue_and_flag.py": 78,
-    "tests/test_production_lifecycle.py": 71,
-    "tests/test_experimental_goat_audit_proof.py": 67,
-    "tests/test_production_goat_batch_boundary.py": 54,
-    "tests/test_goat_unattended.py": 48,
-    "tests/test_auxiliary_response_reconciliation.py": 46,
-    "tests/test_ui_api.py": 37,
-    "tests/test_novel_runner.py": 32,
-    "tests/test_full_pipeline_experiment_contract_v3.py": 30,
-    "tests/test_benchmark_longitudinal_g7r_stage1_ch3_24_wave_controller.py": 28,
-    "tests/test_goat_chapter_review_response_reconciliation.py": 19,
-    "tests/test_goat_glossary_review_recovery.py": 18,
-    "tests/test_batch_mode.py": 14,
-    "tests/test_goat_cap_recovery.py": 12,
-    "tests/test_production_goat_runtime.py": 12,
-    "tests/test_goat_saturation_recovery.py": 11,
+    "tests/test_completed_uncertain_history.py": 1455,
+    "tests/test_goat_periodic_audit_finalization_part_4.py": 852,
+    "tests/test_publication_readiness.py": 841,
+    "tests/test_goat_periodic_audit_finalization_part_1.py": 715,
+    "tests/test_goat_periodic_audit_finalization_part_2.py": 688,
+    "tests/test_goat_periodic_audit_finalization_part_3.py": 638,
+    "tests/test_retroactive_transactions.py": 492,
+    "tests/test_build_publication_epub.py": 385,
+    "tests/test_production_goat_batch_journal.py": 259,
+    "tests/test_experimental_goat.py": 195,
+    "tests/test_uncertain_request_disposition.py": 187,
+    "tests/test_production_goat_batch_ledger.py": 186,
+    "tests/test_goat_batch_plan.py": 115,
+    "tests/test_goat_state_terminal_recovery.py": 115,
+    "tests/test_experimental_goat_audit_proof.py": 94,
+    "tests/test_production_goat_batch_boundary.py": 87,
+    "tests/test_continue_and_flag.py": 86,
+    "tests/test_production_lifecycle.py": 48,
+    "tests/test_goat_unattended.py": 39,
+    "tests/test_ui_api.py": 39,
+    "tests/test_auxiliary_response_reconciliation.py": 37,
+    "tests/test_novel_runner.py": 31,
+    "tests/test_benchmark_longitudinal_g7r_stage1_ch3_24_wave_controller.py": 27,
+    "tests/test_full_pipeline_experiment_contract_v3.py": 26,
+    "tests/test_goat_accounting_epoch_migration.py": 22,
+    "tests/test_goat_glossary_review_recovery.py": 20,
+    "tests/test_controlled_trial_execute.py": 17,
+    "tests/test_production_goat_runtime.py": 16,
+    "tests/test_goat_cap_recovery.py": 13,
+    "tests/test_goat_chapter_review_response_reconciliation.py": 12,
+    "tests/test_goat_saturation_recovery.py": 12,
+    "tests/test_goat_state_policy_migration.py": 12,
 }
-# Every other file is estimated from its size: together they took 173 seconds for 2.86 MB.
-UNMEASURED_BYTES_PER_SECOND = 16500
+# Every other file is estimated from its size: together they took 136 seconds for 2.81 MB.
+UNMEASURED_BYTES_PER_SECOND = 20700
 
 
 def load_exclusions(repo=REPO):

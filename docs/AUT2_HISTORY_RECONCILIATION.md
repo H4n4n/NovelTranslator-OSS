@@ -322,6 +322,16 @@ whole operation with `HISTORICAL_OWNERSHIP_RESERVATION`; conflicting saved plans
 stop with `IMMUTABLE_PLAN_POLICY_CONFLICT`. Missing/unproven historical evidence
 fails closed. No old plan is trimmed, rehashed, overwritten or migrated.
 
+A new periodic audit does not stop on that veto. When its first plan contains edits a
+reservation refuses, the plan is made again with those places listed in the request
+(`reserved_skips`, pairs of chapter and rule index). `build_plan` leaves those edits out
+and records the decision as skipped with `earlier_audit_owns_text`; the authorization is
+proven again on the new plan and the rest of the audit publishes. The glossary change
+stands, the refused places keep their text, and the run flags each one for review
+(`correction_skipped:<term>`), to be applied with `translate.py --apply-corrections` if
+the new English is right. A saved plan keeps its own list, so a plan without one is
+rebuilt exactly as before. Direct and standalone writers still stop on the veto.
+
 New authorization uses an immutable per-slot `.authorization.json` sidecar with
 revision `historical-writer-authorization-v1`. It binds the exact original plan,
 complete inventory/BEFORE revision, accepted-change/source witness, reservation

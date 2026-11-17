@@ -74,7 +74,7 @@ from glossary_audit import (
     run_chunked_audit_skipping_failures,
 )
 from provider_retry_policy import is_run_level_stop
-from retroactive_span_planning import OVER_COUNT_REASON
+from retroactive_span_planning import OVER_COUNT_REASON, RESERVED_SKIP_REASON
 from noveltranslator_core import atomic_write_bytes
 from chapter_text_checks import curl_quotes, review_flags as chapter_review_flags
 from requested_corrections import (claim_for_audit as claim_requested_corrections, for_audit as requested_corrections_for_audit,
@@ -612,6 +612,18 @@ def flag_skipped_corrections(result):
             if decision.get("skip_reason") in CORRECTION_REVIEW_REASONS and decision.get("target_candidate_count"):
                 flag_for_review(decision["chapter"], f"correction_skipped:{rule['chinese']}",
                                 f"{rule['old_english']} -> {rule['new_english']}: {decision['skip_reason']}")
+
+
+def flag_reserved_corrections(result):
+    """An audit's correction that old chapters did not get, because an earlier audit owns that text."""
+    for rule in result.get("details", []):
+        chapters = [decision["chapter"] for decision in rule.get("decisions", [])
+                    if decision.get("skip_reason") == RESERVED_SKIP_REASON]
+        if chapters:
+            flag_for_review(chapters[0], f"correction_skipped:{rule['chinese']}",
+                            f"{rule['old_english']} -> {rule['new_english']}: an earlier audit owns this text in "
+                            f"chapter(s) {', '.join(str(n) for n in chapters)}, so it was not changed there. If the "
+                            "new English is right, apply it with translate.py --apply-corrections.")
 
 
 def _prepare_known_glossary_fixes(glossary_data, *, profile, ming_compatibility):
@@ -3260,6 +3272,7 @@ def run_periodic_audit(
         recover_local=reconcile_local_publication)
     changes = result["audit_record"]["changes"]
     retroactive_result = result["audit_record"]["retroactive"]
+    flag_reserved_corrections(retroactive_result)
 
     print(
         f"Kept: "

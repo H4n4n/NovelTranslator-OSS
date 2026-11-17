@@ -12,7 +12,8 @@ from noveltranslator_core import atomic_write_bytes, atomic_write_json
 from production_failure_classification import ProductionIntegrityError, LocalPersistenceError
 from production_run_lock import production_run_lock
 from retroactive_span_planning import (
-    COUNT_MATCH_POLICY_VERSION, POLICY_VERSION, SCHEMA_VERSION, SPAN_POLICIES, canonical_hash, digest, normalized_rules,
+    COUNT_MATCH_POLICY_VERSION, POLICY_VERSION, RESERVED_SKIP_REASON, SCHEMA_VERSION, SPAN_POLICIES, canonical_hash,
+    digest, normalized_rules,
     ownership_policy, plan_chapter, span_policy_of, transform_bytes,
 )
 
@@ -150,11 +151,20 @@ def with_span_policy(request, existing_plan=None):
     """An existing plan keeps the rule it was made under; a new plan uses the current one."""
     policy = (COUNT_MATCH_POLICY_VERSION if existing_plan is None
               else existing_plan["request"].get("span_policy"))
-    return {**request, "span_policy": policy} if policy else dict(request)
+    request = {**request, "span_policy": policy} if policy else dict(request)
+    # Places an earlier audit owns, which this plan was made to leave alone (see build_plan).
+    if existing_plan is not None and "reserved_skips" in existing_plan["request"]:
+        request["reserved_skips"] = existing_plan["request"]["reserved_skips"]
+    return request
 
 
 def build_plan(request, chapters, chapter_map):
-    """Pure immutable plan; chapters maps committed numbers to exact bytes."""
+    """Pure immutable plan; chapters maps committed numbers to exact bytes.
+
+    request["reserved_skips"], when present, lists [chapter, rule index] pairs whose edits an
+    earlier audit's ownership refused. Those edits are left out and the decision says why.
+    """
+    reserved = {tuple(pair) for pair in request.get("reserved_skips", [])}
     items = []
     for number, before in sorted(chapters.items()):
         source = chapter_map.get(number, {}).get("text")
@@ -163,6 +173,9 @@ def build_plan(request, chapters, chapter_map):
         edits, decisions = plan_chapter(source, before, request["rules"],
                                        request["ownership_policy"], request["safe_categories"],
                                        span_policy_of(request))
+        for index in {edit["rule_index"] for edit in edits if (number, edit["rule_index"]) in reserved}:
+            decisions[index].update(status="skipped", skip_reason=RESERVED_SKIP_REASON)
+        edits = [edit for edit in edits if (number, edit["rule_index"]) not in reserved]
         items.append({"chapter": number, "source_sha256": digest(source.encode("utf-8")),
                       "before_sha256": digest(before),
                       "after_sha256": digest(transform_bytes(before, edits)),

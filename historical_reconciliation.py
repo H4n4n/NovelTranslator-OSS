@@ -782,7 +782,11 @@ def writer_authorization(module, plan, *, selected=None, unpublished=False, reco
                                request["rules"], reserved, request["safe_categories"], span_policy_of(request))
         # A reservation is a veto, never a replacement plan or new source anchor.
         vetoed += [(item["chapter"], edit) for edit in item["edits"] if edit not in edits]
-    require(not vetoed, "HISTORICAL_OWNERSHIP_RESERVATION" + ownership_clash_details(vetoed))
+    if vetoed:
+        error = ProductionIntegrityError("AUT2: HISTORICAL_OWNERSHIP_RESERVATION" + ownership_clash_details(vetoed))
+        # A new audit can leave exactly these places alone and publish the rest.
+        error.reserved_skips = [list(pair) for pair in sorted({(n, edit["rule_index"]) for n, edit in vetoed})]
+        raise error
     known_plans = [plan]
     for path in plain(module.AUDIT_DIR).glob("*.finalization.json"):
         known_plans.append(audit_intent(module, path, _inputs=_inputs)["transaction_plan"])

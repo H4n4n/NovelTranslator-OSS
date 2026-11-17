@@ -1645,7 +1645,43 @@ def _writer_invoke(case, boundary, args=None):
     return tx.execute_retroactive_transaction(**(_writer_args(case) if args is None else args))
 
 
-@pytest.mark.parametrize("boundary", ["finalizer", "direct", "compatibility"])
+@pytest.mark.parametrize("identity,english,source", [("韓先生", "Master Han", "韓先生"), ("漢", "Han", "韓")])
+def test_new_audit_leaves_text_an_earlier_audit_owns_and_publishes_the_rest(discovery_novel, monkeypatch, identity, english, source):
+    """The veto still protects the place; it no longer stops the whole audit."""
+    import production_periodic_audit_finalization as final
+    from historical_reconciliation import final_consistency_report
+    from retroactive_span_planning import RESERVED_SKIP_REASON
+    case = discovery_novel(prior_extra={identity: {"english": english, "category": "character"}},
+                           sources={1: source}, english={1: "Han."})
+    e = case.engine
+    final.intent_path(e, 26, 26).unlink()  # Setup: no current intent.
+    before = {n: (e.OUTPUT_DIR / f"{n:04d}.md").read_bytes() for n in range(1, 27)}
+    result = final.finalize_periodic_audit(e, 26, 26, *case.args)
+    assert result["status"] == "FINALIZED"
+    plan = final.load_intent(e, 26, 26)["transaction_plan"]
+    skips = plan["request"]["reserved_skips"]
+    assert [1, 0] in skips
+    for item in plan["chapters"]:
+        n = item["chapter"]
+        current = (e.OUTPUT_DIR / f"{n:04d}.md").read_bytes()
+        if [n, 0] in skips:
+            assert not item["edits"] and item["decisions"][0]["skip_reason"] == RESERVED_SKIP_REASON
+            assert current == before[n]
+        else:
+            assert current == tx.transform_bytes(before[n], item["edits"])
+    assert (e.OUTPUT_DIR / "0001.md").read_bytes() == b"Han."
+    assert e.glossary["entries"][case.key]["english"] == "Hann"
+    flags = []
+    monkeypatch.setattr(e, "flag_for_review", lambda chapter, kind, detail: flags.append((chapter, kind, detail)))
+    e.flag_reserved_corrections(result["audit_record"]["retroactive"])
+    assert [(chapter, kind) for chapter, kind, _ in flags] == [(skips[0][0], f"correction_skipped:{case.key}")]
+    assert "Han -> Hann" in flags[0][2] and "--apply-corrections" in flags[0][2]
+    # A restart and the whole-book report rebuild the same plan from the saved intent.
+    assert final.finalize_periodic_audit(e, 26, 26, *case.args)["status"] == "ALREADY_FINALIZED"
+    final_consistency_report(e)
+
+
+@pytest.mark.parametrize("boundary", ["direct", "compatibility"])
 @pytest.mark.parametrize("identity,english,source", [("韓先生", "Master Han", "韓先生"), ("漢", "Han", "韓")])
 def test_writer_safety_d4_d5_before_persistence(discovery_novel, boundary, identity, english, source):
     """WS-D4-01 / WS-D5-01 / WS-GUARD-02 / WS-ATOM-01."""

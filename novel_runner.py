@@ -92,9 +92,14 @@ def remaining_budget(project):
     return value["limit_usd"] - spent
 
 
-def last_logged_error(project):
-    """The newest error in the novel's run logs, for a plain-language stop message."""
+def last_logged_error(project, since=None):
+    """The newest error in the novel's run logs, for a plain-language stop message.
+
+    With since (a UTC datetime), errors logged before it are ignored: a run that stops before
+    logging anything must not be explained by an earlier run's error."""
     logs = sorted(project.logs_dir.glob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if since is not None:
+        logs = [path for path in logs if path.stat().st_mtime >= since.timestamp()]
     for path in logs[:2]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         for line in reversed(lines):
@@ -103,12 +108,21 @@ def last_logged_error(project):
             except ValueError:
                 continue
             if isinstance(event, dict) and event.get("event") == "error":
+                if since is not None and _logged_before(event, since):
+                    continue
                 return event
     return None
 
 
-def describe_stop(project, reason=None):
-    error = None if reason else last_logged_error(project)
+def _logged_before(event, since):
+    try:
+        return datetime.fromisoformat(event["timestamp_utc"]) < since
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def describe_stop(project, reason=None, since=None):
+    error = None if reason else last_logged_error(project, since)
     if error and error.get("error_type") == "GoatProviderStop":
         reason = error.get("error_message")
     if error and error.get("error_type") == "BatchTermsOnlyStop":
@@ -283,6 +297,7 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
     from production_run_lock import ProductionRunLockedError
     if budget_usd is not None:
         set_budget(project, budget_usd)
+    started = datetime.now(timezone.utc)
     runs_without_progress = 0
     last_state = None
     for _ in range(MAX_STEPS):
@@ -343,7 +358,7 @@ def _run_until_stopped(project, novel_id, repo_root, budget_usd):
         last_state = state
         if runs_without_progress >= MAX_NO_PROGRESS_RUNS:
             return dict(status=STOPPED, run_status=outcome.get("status"), stop_exception=outcome.get("stop_exception"),
-                        **describe_stop(project))
+                        **describe_stop(project, since=started))
         time.sleep(1)
     return dict(status=STOPPED, reason="too_many_restarts", message="The run restarted too many times.",
                 action="See the latest file in this novel's logs folder.")

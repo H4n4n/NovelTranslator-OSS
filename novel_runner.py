@@ -250,6 +250,29 @@ def run_novel(novel_id, *, repo_root=None, budget_usd=None, trial_chapters=None)
     return result
 
 
+def record_if_complete(project):
+    """Write COMPLETE to data/last_run.json when every chapter is committed and audited.
+
+    The same rule as a run's own first check. A run writes this file itself; a final audit
+    finished locally does not, and the interface kept showing the earlier stop.
+    """
+    progress = _progress(project)
+    if min(progress["last_completed"], progress.get("last_audited_chapter", 0)) < project.config.final_chapter:
+        return None
+    path = project.data_dir / "last_run.json"
+    try:
+        earlier = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        earlier = {}
+    result = dict(status=COMPLETE, message="The novel is fully translated.", action="", novel_id=project.config.id,
+                  last_completed=progress["last_completed"], next_chapter=progress["next_chapter"],
+                  final_chapter=project.config.final_chapter, finished_utc=datetime.now(timezone.utc).isoformat())
+    if "reader_epub" in earlier:
+        result["reader_epub"] = earlier["reader_epub"]
+    atomic_write_json(path, result)
+    return result
+
+
 def _trial_is_finished(project):
     path = project.data_dir / "trial_stop.json"
     return path.is_file() and _progress(project)["last_completed"] >= json.loads(path.read_text(encoding="utf-8"))["after_chapter"]

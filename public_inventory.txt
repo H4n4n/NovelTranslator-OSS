@@ -275,6 +275,7 @@ review_queue.py
 review_triage.py
 run_production_engine.py
 runtime_hardening_smoke.py
+scripts/ci_test_times.py
 scripts/guard_allowlist.py
 scripts/publication_guard.py
 scripts/run_ci_shard.py

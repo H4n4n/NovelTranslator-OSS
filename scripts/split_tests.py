@@ -9,7 +9,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 EXCLUSIONS = REPO / "tests" / "ci_exclusions.json"
 # Seconds each file took in a full local run on 2026-11-16, for the files that took 10 seconds or more.
-# To refresh: run the suite with pytest --junitxml and add up each file's test times.
+# To refresh: download a CI run's test-times-shard-N artifacts and run scripts/ci_test_times.py on them.
 MEASURED_SECONDS = {
     "tests/test_completed_uncertain_history.py": 1537,
     "tests/test_goat_periodic_audit_finalization_part_2.py": 933,

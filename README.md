@@ -936,6 +936,29 @@ Statuses:
 - `provisional`: the current preferred rendering, subject to review.
 - `contextual`: approved alternatives selected by context, not exact constraints.
 
+Two local checks help keep the glossary sound. Both make zero API calls, write
+nothing, and only report; nothing they find stops a run.
+
+```powershell
+python glossary_checks.py --novel <novel_id> preflight
+python glossary_checks.py --novel <novel_id> consistency
+```
+
+Run `preflight` before translating. It lists short Korean keys that occur mostly
+inside other words, where the glossary would send them to chapters in which they
+mean something else (a key inside a longer glossary key is covered by that entry
+and not counted). It also lists entries whose English contradicts English the
+source itself gives in parentheses, and recurring source pairs the glossary
+lacks. Abbreviations and the source's own misspellings are not reported.
+
+Run `consistency` after translating. For every entry used as itself in at least
+three committed chapters (`--min-chapters`), it reports the share of those
+chapters whose English contains the entry's English, ignoring case, curly
+apostrophes, a leading "the", a bracketed gloss, and "/" alternatives. Entries
+below `--threshold` (default 0.8) are listed with the chapters that miss them,
+so either the entry or the prose can be corrected. `--json` prints either report
+as JSON.
+
 Profile `high_priority_categories` expresses terminology attention and review
 importance. It never makes all locked entries in those categories hard blockers.
 The established legacy compatibility gate remains the intersection of that

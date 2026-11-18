@@ -293,8 +293,9 @@ def main(argv=None):
     entries, chapters = _load(project)
     if args.command == "titles":
         from chapter_titles import load_chapter_titles, title_report
+        numbering = getattr(getattr(project, "config", None), "chapter_numbering", "global")
         rows = [row for row in title_report(chapters, load_chapter_titles(project.glossary_file.parent),
-                                            _translations(project))
+                                            _translations(project), chapter_numbering=numbering)
                 if len(row["chapters"]) >= args.min_chapters or row["english"]]
         if args.json:
             print(json.dumps({"titles": rows}, ensure_ascii=False, indent=1))

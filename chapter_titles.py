@@ -9,7 +9,10 @@ without the part markers that follow it: a volume numeral such as ``(Ⅱ)`` or
 ``Ⅱ`` and a part number such as ``- 2``. When a chapter's heading is one of these
 titles, the translation request gives the exact English heading to use:
 
-    Chapter <number>: <English title>[ <volume numeral>][ (<part>)]
+    <reader-facing label>: <English title>[ <volume numeral>][ (<part>)]
+
+where the label is the one the request already names ("Chapter 841",
+"Chapters 12-13"). Named units such as a prologue or epilogue are left alone.
 
 Novels without the file are unaffected. The file is novel-owned state, read
 only; nothing here calls a provider or writes a file.
@@ -19,11 +22,13 @@ import re
 import sys
 from pathlib import Path
 
+from chapter_library import NAMED_UNIT_KINDS, production_unit_kind, reader_facing_unit_identity
+
 TITLES_FILE = "chapter_titles.json"
 ROMAN = {"Ⅰ": "I", "Ⅱ": "II", "Ⅲ": "III", "Ⅳ": "IV", "Ⅴ": "V", "Ⅵ": "VI", "Ⅶ": "VII", "Ⅷ": "VIII",
-         "Ⅸ": "IX", "Ⅹ": "X"}
+         "Ⅸ": "IX", "Ⅹ": "X", "Ⅺ": "XI", "Ⅻ": "XII"}
 _NUMBER = re.compile(r"^\s*\d+\s*(?:[.)]|화)\s*")
-_VOLUME = r"(?:\(\s*([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\s*\)|([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]))"
+_VOLUME = r"(?:\(\s*([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ])\s*\)|([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]))"
 _PART = r"(?:-\s*(\d+)|\(\s*(\d+)\s*\))"
 _TAIL = re.compile(rf"\s*{_VOLUME}?\s*{_PART}?\s*$")
 
@@ -56,17 +61,27 @@ def split_heading(source_heading):
     return title, ROMAN.get(volume_paren or volume, ""), part_dash or part_paren or ""
 
 
-def settled_heading(chapter_number, source_heading, titles):
-    """The exact English heading for a chapter whose source title is settled, else None."""
-    parts = split_heading(source_heading) if titles else None
+def settled_heading(chapter, chapter_numbering, titles):
+    """The exact English heading for a chapter whose source title is settled, else None.
+
+    The label is the reader-facing one the request already uses ("Chapter 841",
+    "Chapters 12-13"). Named units (prologue, epilogue, side story, supplement)
+    keep their own heading and get none.
+    """
+    parts = split_heading(chapter.get("heading")) if titles else None
     if parts is None or parts[0] not in titles:
         return None
+    try:
+        if production_unit_kind(chapter) in NAMED_UNIT_KINDS:
+            return None
+        label = reader_facing_unit_identity(chapter, chapter_numbering)
+    except ValueError:
+        return None
     title, volume, part = parts
-    return (f"Chapter {chapter_number}: {titles[title]}" + (f" {volume}" if volume else "")
-            + (f" ({part})" if part else ""))
+    return f"{label}: {titles[title]}" + (f" {volume}" if volume else "") + (f" ({part})" if part else "")
 
 
-def title_report(chapters, titles, translations=None):
+def title_report(chapters, titles, translations=None, chapter_numbering="global"):
     """Every source title with its chapters, its settled English, and committed headings that differ."""
     rows = {}
     for chapter in chapters:
@@ -81,7 +96,7 @@ def title_report(chapters, titles, translations=None):
                            if line.strip()), "")
         if first_line:
             row["headings_used"][number] = first_line
-            expected = settled_heading(number, chapter.get("heading"), titles)
+            expected = settled_heading(chapter, chapter_numbering, titles)
             if expected and first_line.lstrip("# ").strip() != expected:
                 row["mismatches"].append({"chapter": number, "expected": expected, "found": first_line})
     return sorted(rows.values(), key=lambda row: row["chapters"][0])

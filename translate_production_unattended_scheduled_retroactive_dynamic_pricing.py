@@ -1514,8 +1514,11 @@ def previous_chapter_heading(chapter_number):
 def settled_chapter_heading(chapter_number):
     """The exact English heading when this chapter's source title is in data/chapter_titles.json."""
     from chapter_titles import load_chapter_titles, settled_heading
-    chapter = (chapter_map or {}).get(chapter_number) or {}
-    return settled_heading(chapter_number, chapter.get("heading"), load_chapter_titles(GLOSSARY_FILE.parent))
+    chapter = (chapter_map or {}).get(chapter_number)
+    if not chapter:
+        return None
+    numbering = ACTIVE_NOVEL_CONFIG.chapter_numbering if ACTIVE_NOVEL_CONFIG else "global"
+    return settled_heading(chapter, numbering, load_chapter_titles(GLOSSARY_FILE.parent))
 
 
 def translate_chapter(chapter):

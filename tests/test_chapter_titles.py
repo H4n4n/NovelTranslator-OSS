@@ -28,11 +28,38 @@ def test_a_heading_splits_into_title_volume_and_part(heading, parts):
     assert ct.split_heading(heading) == parts
 
 
-def test_a_settled_title_gives_the_exact_english_heading():
-    assert ct.settled_heading(42, "1. 푸른 강의 전투(Ⅱ) - 3", TITLES) == "Chapter 42: The Battle of the Blue River II (3)"
-    assert ct.settled_heading(7, "새 출발 (2)", TITLES) == "Chapter 7: A New Start (2)"
-    assert ct.settled_heading(8, "8. 낯선 손님", TITLES) is None
-    assert ct.settled_heading(8, "3. 푸른 강의 전투 - 2", {}) is None
+def unit(number, heading, **fields):
+    return {"chapter": number, "heading": heading, "text": heading, **fields}
+
+
+def test_a_settled_title_gives_the_exact_english_heading_with_global_numbering():
+    assert (ct.settled_heading(unit(42, "1. 푸른 강의 전투(Ⅱ) - 3"), "global", TITLES)
+            == "Chapter 42: The Battle of the Blue River II (3)")
+    assert ct.settled_heading(unit(7, "새 출발 (2)"), "global", TITLES) == "Chapter 7: A New Start (2)"
+    assert ct.settled_heading(unit(8, "8. 낯선 손님"), "global", TITLES) is None
+    assert ct.settled_heading(unit(8, "3. 푸른 강의 전투 - 2"), "global", {}) is None
+
+
+def test_spine_numbering_uses_the_local_chapter_number_and_range():
+    local = unit(1, "841화 새 출발", local_chapter_start=841, local_chapter_end=841)
+    assert ct.settled_heading(local, "spine_sequential", TITLES) == "Chapter 841: A New Start"
+    merged = unit(12, "새 출발 (3)", local_chapter_start=12, local_chapter_end=13)
+    assert ct.settled_heading(merged, "spine_sequential", TITLES) == "Chapters 12-13: A New Start (3)"
+    assert ct.settled_heading(unit(5, "새 출발 (1)"), "spine_sequential", TITLES) is None  # no local range
+
+
+def test_the_report_compares_against_the_local_label():
+    chapters = [unit(1, "841화 새 출발", local_chapter_start=841, local_chapter_end=841),
+                unit(2, "842화 새 출발", local_chapter_start=842, local_chapter_end=842)]
+    english = {1: "Chapter 841: A New Start\n\nProse.", 2: "Chapter 2: A New Start\n\nProse."}
+    rows = ct.title_report(chapters, TITLES, english, chapter_numbering="spine_sequential")
+    assert rows[0]["mismatches"] == [{"chapter": 2, "expected": "Chapter 842: A New Start",
+                                      "found": "Chapter 2: A New Start"}]
+
+
+@pytest.mark.parametrize("kind", ["prologue", "epilogue", "side_story", "supplement"])
+def test_a_named_unit_keeps_its_own_heading(kind):
+    assert ct.settled_heading(unit(9, "새 출발", unit_kind=kind), "global", TITLES) is None
 
 
 def test_the_titles_file_is_read_and_a_malformed_one_is_ignored(tmp_path, capsys):
@@ -62,11 +89,15 @@ def test_the_request_names_the_settled_heading_only_when_there_is_one():
 
 def test_the_engine_reads_the_novel_titles_file(tmp_path, monkeypatch):
     monkeypatch.setattr(production, "GLOSSARY_FILE", tmp_path / "glossary.json")
-    monkeypatch.setattr(production, "chapter_map", {3: {"heading": "3. 푸른 강의 전투 - 2"}})
+    monkeypatch.setattr(production, "chapter_map", {3: unit(3, "3. 푸른 강의 전투 - 2", local_chapter_start=843,
+                                                            local_chapter_end=843)})
+    monkeypatch.setattr(production, "ACTIVE_NOVEL_CONFIG", None)
     assert production.settled_chapter_heading(3) is None
     (tmp_path / ct.TITLES_FILE).write_text(json.dumps({"titles": TITLES}, ensure_ascii=False), encoding="utf-8")
     assert production.settled_chapter_heading(3) == "Chapter 3: The Battle of the Blue River (2)"
     assert production.settled_chapter_heading(4) is None
+    monkeypatch.setattr(production, "ACTIVE_NOVEL_CONFIG", SimpleNamespace(chapter_numbering="spine_sequential"))
+    assert production.settled_chapter_heading(3) == "Chapter 843: The Battle of the Blue River (2)"
 
 
 def test_the_titles_command_lists_titles_and_headings_that_differ(tmp_path, monkeypatch, capsys):

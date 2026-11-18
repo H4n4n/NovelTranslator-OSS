@@ -977,8 +977,10 @@ the chosen English in the novel's `data/chapter_titles.json`:
 The source title is the heading without its leading number ("12.", "841화")
 and without the volume numeral and part number that follow it. For a chapter
 whose title is settled, the translation request gives the exact heading to use,
-`Chapter <number>: <English title>[ <volume numeral>][ (<part>)]`, in both
-direct and batch runs. After translating, the same command lists committed
+`<label>: <English title>[ <volume numeral>][ (<part>)]`, in both direct and
+batch runs. The label is the reader-facing one the request already names
+(`Chapter 841` or `Chapters 12-13` under `spine_sequential` numbering); a
+prologue, epilogue, side story or supplement keeps its own heading. After translating, the same command lists committed
 headings that differ from the settled ones. Novels without the file are
 unaffected.
 

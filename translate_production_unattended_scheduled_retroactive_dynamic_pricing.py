@@ -1511,6 +1511,13 @@ def previous_chapter_heading(chapter_number):
     return (source, english) if source and english else None
 
 
+def settled_chapter_heading(chapter_number):
+    """The exact English heading when this chapter's source title is in data/chapter_titles.json."""
+    from chapter_titles import load_chapter_titles, settled_heading
+    chapter = (chapter_map or {}).get(chapter_number) or {}
+    return settled_heading(chapter_number, chapter.get("heading"), load_chapter_titles(GLOSSARY_FILE.parent))
+
+
 def translate_chapter(chapter):
     chapter_number = chapter["chapter"]
     chinese_text = chapter["text"]
@@ -1524,7 +1531,8 @@ def translate_chapter(chapter):
         context_in_system=filter_refused_marker(PAID_REQUEST_JOURNAL_DIR.parent, chapter_number).exists(),
         profile=ACTIVE_PROFILE, system_prompt=system_prompt,
         rendered_glossary=glossary_to_text(relevant_glossary(chinese_text), chapter_number=chapter_number), continuity=continuity, model=MODEL, controls=operation_request_controls("chapter_translation"),
-        previous_heading=previous_chapter_heading(chapter_number))
+        previous_heading=previous_chapter_heading(chapter_number),
+        settled_heading=settled_chapter_heading(chapter_number))
     policy = current_production_operation_policy()
     result = run_translation_stage(
         policy=policy, initial_kwargs=request_kwargs,

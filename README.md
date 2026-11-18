@@ -959,6 +959,29 @@ below `--threshold` (default 0.8) are listed with the chapters that miss them,
 so either the entry or the prose can be corrected. `--json` prints either report
 as JSON.
 
+Chapter titles that run over several chapters ("Title - 1", "Title (2)",
+"Title(Ⅱ) - 3") can be settled before translating, so every part keeps one
+English heading:
+
+```powershell
+python glossary_checks.py --novel <novel_id> titles
+```
+
+lists each source title used by two or more chapters (`--min-chapters`). Save
+the chosen English in the novel's `data/chapter_titles.json`:
+
+```json
+{"titles": {"<source title>": "<English title>"}}
+```
+
+The source title is the heading without its leading number ("12.", "841화")
+and without the volume numeral and part number that follow it. For a chapter
+whose title is settled, the translation request gives the exact heading to use,
+`Chapter <number>: <English title>[ <volume numeral>][ (<part>)]`, in both
+direct and batch runs. After translating, the same command lists committed
+headings that differ from the settled ones. Novels without the file are
+unaffected.
+
 Profile `high_priority_categories` expresses terminology attention and review
 importance. It never makes all locked entries in those categories hard blockers.
 The established legacy compatibility gate remains the intersection of that

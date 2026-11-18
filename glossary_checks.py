@@ -260,6 +260,17 @@ def _print_consistency(summary, rows):
               f"{r['category']}); missed ch. {r['missed_chapters'][:10]}")
 
 
+def _print_titles(rows):
+    print(f"Chapter titles: {len(rows)} (settled: {sum(1 for row in rows if row['english'])})")
+    for row in rows:
+        chapters = row["chapters"]
+        span = f"{chapters[0]}-{chapters[-1]}" if len(chapters) > 1 else str(chapters[0])
+        print(f"  {row['source']}  [{len(chapters)} chapters, {span}]  {row['english'] or '(not settled)'}")
+        for miss in row["mismatches"]:
+            print(f"    chapter {miss['chapter']}: {miss['found']!r}, settled {miss['expected']!r}")
+    print('\nTo settle titles, save data/chapter_titles.json as {"titles": {"<source title>": "<English>"}}.')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Local glossary checks (zero API calls, read-only)")
     parser.add_argument("--novel", required=True)
@@ -273,12 +284,23 @@ def main(argv=None):
     con.add_argument("--threshold", type=float, default=0.8)
     con.add_argument("--min-chapters", type=int, default=3)
     con.add_argument("--category", action="append", help="limit to one or more glossary categories")
+    tit = sub.add_parser("titles", help="chapter titles: the recurring ones to settle, and headings that differ")
+    tit.add_argument("--min-chapters", type=int, default=2, help="list titles used by at least this many chapters")
     args = parser.parse_args(argv)
 
     from novel_project import select_project
     project = select_project(args.novel, args.repo_root)
     entries, chapters = _load(project)
-    if args.command == "preflight":
+    if args.command == "titles":
+        from chapter_titles import load_chapter_titles, title_report
+        rows = [row for row in title_report(chapters, load_chapter_titles(project.glossary_file.parent),
+                                            _translations(project))
+                if len(row["chapters"]) >= args.min_chapters or row["english"]]
+        if args.json:
+            print(json.dumps({"titles": rows}, ensure_ascii=False, indent=1))
+        else:
+            _print_titles(rows)
+    elif args.command == "preflight":
         traps = trap_report(entries, chapters, max_syllables=args.max_syllables, inside_ratio=args.inside_ratio)
         conflicts, missing = source_english_report(entries, chapters)
         if args.json:

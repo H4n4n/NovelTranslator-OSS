@@ -1174,8 +1174,10 @@ The automatic system performs periodic glossary audits and may safely propagate 
 An audit does not change an entry settled by hand before translation (source
 provenance `manual` / `explicit_manual`). If it proposes to correct, reject,
 merge or split such an entry, the entry stays as it is and the proposal is
-recorded under `held` in the audit's changes in `data/audit_history.json`, and
-printed at the end of the audit for review. The run continues. To accept a held
+recorded under `held` in the audit's changes in `data/audit_history.json`, added
+to `data/issues.json` as an `audit_change_held` issue, and printed at the end of
+the audit for review. A correction that only changes what formal capitalization
+would store anyway is not held. The run continues. To accept a held
 proposal, apply it as an approved correction (`translate.py --apply-corrections`).
 
 Periodic audits keep the configured chapter window but divide its glossary

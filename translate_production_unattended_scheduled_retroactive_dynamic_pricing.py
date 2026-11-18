@@ -2875,6 +2875,8 @@ def audit_change_to_settled_entry(entry, action, decision, entries):
         return None
     if action == "correct":
         english = (decision.get("english", "") or "").strip()
+        if english and ACTIVE_PROFILE.requires_formal_capitalization(entry.get("category")):
+            english = format_technique_name(english)  # As the correction itself would store it.
         if not english or english == entry.get("english", ""):
             return None
         return english

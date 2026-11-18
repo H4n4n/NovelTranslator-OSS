@@ -58,3 +58,12 @@ def test_a_decision_that_changes_nothing_is_not_held():
     entries, changes = audit({"chinese": "青国", "action": "correct", "english": "Azure State"},
                              {"chinese": "青都", "action": "merge", "merge_with": "无此"})
     assert changes["held"] == [] and entries == glossary()["entries"]
+
+
+def test_a_capitalization_only_correction_to_a_technique_is_not_held():
+    data = {"entries": {"黑虎掏心": {"english": "Black Tiger Seizes The Heart", "category": "martial technique",
+                                    "status": "provisional", "source_provenance": dict(SETTLED)}}}
+    changes = production.apply_periodic_audit(
+        1, 5, {"decisions": [{"chinese": "黑虎掏心", "action": "correct", "english": "Black Tiger seizes the heart"}]},
+        glossary_data=data, targets=[{"chinese": "黑虎掏心"}])
+    assert changes["held"] == [] and data["entries"]["黑虎掏心"]["english"] == "Black Tiger Seizes The Heart"

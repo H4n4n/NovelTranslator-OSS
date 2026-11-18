@@ -304,6 +304,7 @@ tests/test_audit_semantic_completeness_all.py
 tests/test_audit_semantic_completeness_candidates.py
 tests/test_audit_semantic_integrity_cli.py
 tests/test_audit_semantic_kinship.py
+tests/test_audit_settled_entries.py
 tests/test_auxiliary_response_reconciliation.py
 tests/test_batch_mode.py
 tests/test_benchmark_ambiguous_recovery.py

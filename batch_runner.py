@@ -549,9 +549,10 @@ def _start_batch(module, batch, config, previous=None):
         entries = bt.glossary_entries_for_translation(entries, settled)
         last = previous.manifest["end"]
         source_heading = _source_heading(module, last)
+        last_heading = getattr(module, "settled_chapter_heading", lambda _number: None)(last) or headings.get(last)
         manifest.update(ahead_of=previous.start,
                         base_continuity=timeline(module, previous)["after"][str(last)],
-                        previous_heading=[source_heading, headings[last]] if source_heading and last in headings else None,
+                        previous_heading=[source_heading, last_heading] if source_heading and last_heading else None,
                         previous_tail=bt.source_tail(module.chapter_map[last]["text"]))
         batch.write(settled, "inherited.json")
     batch.write(entries, "base_glossary.json")
@@ -797,10 +798,11 @@ def _translation_kwargs(module, batch, number):
         chapter = module.chapter_map[number]
         used = module.relevant_glossary_for_entries(chapter["text"], entries)
         batch.write({item["chinese"]: item for item in used}, "glossary_used", f"{number:04d}.json")
+        settled_heading = getattr(module, "settled_chapter_heading", lambda _number: None)
         if number == batch.start:
             previous_heading, tail = _previous_heading(module, batch), batch.manifest.get("previous_tail")
         else:
-            heading = headings.get(number - 1)
+            heading = settled_heading(number - 1) or headings.get(number - 1)
             source_heading = _source_heading(module, number - 1)
             previous_heading = (source_heading, heading) if heading and source_heading else None
             tail = bt.source_tail(module.chapter_map[number - 1]["text"])
@@ -809,7 +811,8 @@ def _translation_kwargs(module, batch, number):
             rendered_glossary=module.glossary_to_text(used, chapter_number=number),
             continuity={"summary": timeline(module, batch)["packets"][str(number)]}, model=module.MODEL,
             controls=module.operation_request_controls("chapter_translation"),
-            previous_heading=previous_heading, previous_source_tail=tail)
+            previous_heading=previous_heading, previous_source_tail=tail,
+            settled_heading=settled_heading(number))
     return batch.saved_request(f"translation_{number:04d}", build)
 
 

@@ -26,7 +26,9 @@ It reads only, so it can run while a translation is going.
 1. **Free checks:** source script left in the English, fewer dialogue lines than the source,
    far fewer paragraphs, glossary terms in the source with no rendering in the English.
 2. **Find:** one request with the numbered source and English paragraphs, the novel's
-   `translation_addendum.txt`, and the glossary entries that occur in the chapter.
+   `translation_addendum.txt`, and the glossary entries that occur in the chapter. Each entry shows
+   whether it is locked or contextual and its note (up to 160 characters), so casing and form rules in
+   the notes are followed rather than "corrected". The judge below sees the same lines.
 3. **Local filter:** a finding is kept only if its English occurs exactly once in the
    chapter, the fix changes it, and the source words it quotes are in the chapter source.
 4. **Verify:** one more request, only when findings survived, shows each one with its

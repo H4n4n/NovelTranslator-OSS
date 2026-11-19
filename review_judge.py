@@ -35,7 +35,8 @@ Approve when the fix corrects a real error: wrong meaning; a dropped clause, sen
 pronoun or gender; wrong speaker or subject; wrong number, date, time, unit or rank; a name or term that contradicts the
 glossary; a garbled sentence; a break of the project rules.
 Reject when: the English is already a fair rendering and the fix only rewords it or is more literal; the fix makes the
-English stiffer, wordier or less natural; the fix contradicts the glossary or the project rules; the reviewer misread the
+English stiffer, wordier or less natural; the fix contradicts the glossary or the project rules, including a glossary
+note on case or form (an entry marked locked is settled; its note outranks the bare rendering); the reviewer misread the
 source; the source has an obvious slip the English already corrected; the dropped detail is trivial and already implied.
 Items marked mechanical are automatic term swaps or dialogue splits: judge them too, and reject any that make the prose
 awkward or use a term in the wrong sense.

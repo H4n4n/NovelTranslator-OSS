@@ -216,3 +216,16 @@ def test_candidates_are_split_into_mechanical_and_to_judge(tmp_path):
     to_judge = json.loads((run_dir / "candidates_0001_0002_to_judge.json").read_text(encoding="utf-8"))["replacements"]
     assert mechanical == [] and sorted(c["new"] for c in to_judge) == ["He stepped back two zhang.", "“Raise your sword,” he said."]
     assert summary["mechanical"] == 0 and summary["to_judge"] == 2
+
+
+def test_glossary_lines_carry_a_settled_status_and_a_short_note():
+    entries = {"백운검": {"english": "White Cloud Sword", "status": "locked", "notes": "lowercase  in\nrunning text"},
+               "백운": {"english": "White Cloud", "status": "provisional"},
+               "흑운": {"english": "Black Cloud", "status": "contextual", "notes": "x" * 400},
+               "청운": {"english": "Azure Cloud"}}
+    lines = chapter_review.chapter_glossary(entries, "백운검 흑운")
+    assert lines[0] == "백운 = White Cloud"
+    assert "백운검 = White Cloud Sword (locked) - note: lowercase in running text" in lines
+    long = next(line for line in lines if line.startswith("흑운"))
+    assert long.startswith("흑운 = Black Cloud (contextual) - note: ") and long.endswith("…")
+    assert len(long) < 220 and not any(line.startswith("청운") for line in lines)

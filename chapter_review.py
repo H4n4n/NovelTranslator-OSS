@@ -44,6 +44,8 @@ Report only real problems a careful bilingual editor would fix:
 - "omission": a source sentence or line of dialogue with no English;
 - "rule": a break of the project rules below;
 - "term": a name or term rendered against the glossary below, or against the Chinese characters the source gives.
+  An entry marked (locked) is settled. A note after an entry says how to use it (its case in running text, its form,
+  when it applies) and outranks the bare rendering: do not report English that follows the note.
 Do not report style, word choice, register, or anything that is merely stiff. A chapter with nothing wrong gets no findings.
 Paragraphs are numbered S1, S2… (source) and E1, E2… (English). For each problem give:
  "kind"; "s" and "e", the paragraph numbers; "source", the source words copied exactly;
@@ -103,10 +105,28 @@ def parse_json(content):
     return value
 
 
+MAX_NOTE_CHARACTERS = 160
+SHOWN_STATUSES = ("locked", "contextual")
+
+
+def glossary_line(term, entry):
+    """'term = English', with the status when it is locked or contextual and a short note, so a
+    checker can tell a settled form or a casing rule from a bare rendering."""
+    line = f"{term} = {entry.get('english')}"
+    if entry.get("status") in SHOWN_STATUSES:
+        line += f" ({entry['status']})"
+    note = " ".join(str(entry.get("notes") or "").split())
+    if note:
+        line += " - note: " + (note if len(note) <= MAX_NOTE_CHARACTERS else note[:MAX_NOTE_CHARACTERS - 1] + "…")
+    return line
+
+
 def chapter_glossary(entries, source):
-    lines = [f"{term} = {entry.get('english')}" for term, entry in entries.items()
+    found = [(term, entry) for term, entry in entries.items()
              if len(term) >= 2 and term in source and entry.get("english")]
-    return sorted(lines, key=len)[:MAX_GLOSSARY_LINES]
+    # Shortest renderings first, as before, so a long note never pushes an entry out of the cap.
+    found.sort(key=lambda item: len(f"{item[0]} = {item[1].get('english')}"))
+    return [glossary_line(term, entry) for term, entry in found[:MAX_GLOSSARY_LINES]]
 
 
 def local_flags(source, english, entries):

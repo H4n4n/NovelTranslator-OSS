@@ -171,6 +171,7 @@ glossary_candidate_resolution.py
 glossary_checks.py
 glossary_homonym_report.py
 glossary_integrity.py
+glossary_settle.py
 goat_accounting_migration_execute.py
 goat_accounting_migration_plan.py
 goat_batch_plan.py
@@ -273,6 +274,7 @@ residual_cjk_micro_repair.py
 resolve_glossary_candidate_conflict.py
 retroactive_span_planning.py
 retroactive_transactions.py
+review_judge.py
 review_queue.py
 review_triage.py
 run_production_engine.py
@@ -423,6 +425,7 @@ tests/test_glossary_candidate_resolution.py
 tests/test_glossary_checks.py
 tests/test_glossary_hygiene.py
 tests/test_glossary_integrity.py
+tests/test_glossary_settle.py
 tests/test_goat_accounting_epoch_migration.py
 tests/test_goat_batch_plan.py
 tests/test_goat_batch_standalone_receipts.py
@@ -506,6 +509,7 @@ tests/test_qa_runtime_wrapper_reinstallation.py
 tests/test_reader_epub.py
 tests/test_real_core_pending_provenance.py
 tests/test_retroactive_transactions.py
+tests/test_review_judge.py
 tests/test_review_triage.py
 tests/test_rogue_first_prince_source.py
 tests/test_rolling_continuity.py

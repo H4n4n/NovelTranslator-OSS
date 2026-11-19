@@ -2873,6 +2873,33 @@ def call_periodic_audit(start_chapter, end_chapter):
     return run["audit_result"], stats, chunking
 
 
+def settled_before_translation(entry):
+    """An entry settled by hand before translation, from a source scan and review."""
+    provenance = entry.get("source_provenance")
+    return (isinstance(provenance, dict) and provenance.get("origin") == "manual"
+            and provenance.get("verification") == "explicit_manual")
+
+
+def audit_change_to_settled_entry(entry, action, decision, entries):
+    """What an audit decision would change on a settled entry, or None if it changes nothing."""
+    if action not in ("correct", "reject", "merge", "contextual") or not settled_before_translation(entry):
+        return None
+    if action == "correct":
+        english = (decision.get("english", "") or "").strip()
+        if english and ACTIVE_PROFILE.requires_formal_capitalization(entry.get("category")):
+            english = format_technique_name(english)  # As the correction itself would store it.
+        if not english or english == entry.get("english", ""):
+            return None
+        return english
+    if action == "reject":
+        return "remove the entry"
+    if action == "merge":
+        target = (decision.get("merge_with", "") or "").strip()
+        return f"merge into {target}" if target in entries and target != decision.get("chinese") else None
+    renderings = [x.strip() for x in decision.get("approved_renderings", []) if isinstance(x, str) and x.strip()]
+    return "contextual: " + " / ".join(renderings) if renderings else None
+
+
 def apply_periodic_audit(
     start_chapter,
     end_chapter,
@@ -2888,6 +2915,7 @@ def apply_periodic_audit(
     rejected = []
     contextualized = []
     merged = []
+    held = []
     retroactive_replacements = []
 
     decisions = {
@@ -2950,6 +2978,14 @@ def apply_periodic_audit(
             )
             or ""
         ).strip()
+
+        proposed = audit_change_to_settled_entry(entry, action, decision, entries)
+        if proposed is not None:
+            # Settled before translation: the audit may only suggest a change.
+            held.append({"chinese": chinese, "action": action,
+                         "current": entry.get("english", "") or " / ".join(entry.get("approved_renderings") or []),
+                         "proposed": proposed, "notes": notes})
+            continue
 
         if action == "reject":
             del entries[
@@ -3201,6 +3237,7 @@ def apply_periodic_audit(
         "rejected": rejected,
         "contextualized": contextualized,
         "merged": merged,
+        "held": held,
         "retroactive_replacements": retroactive_replacements,
     }
 
@@ -3309,6 +3346,11 @@ def run_periodic_audit(
         f"Merged aliases: "
         f"{len(changes['merged'])}"
     )
+
+    held = changes.get("held", [])
+    print(f"Held for your review (settled before translation): {len(held)}")
+    for item in held:
+        print(f"  {item['chinese']}: kept {item['current']!r}; audit proposed {item['proposed']!r}")
 
     print(
         f"Retroactive chapters changed: "

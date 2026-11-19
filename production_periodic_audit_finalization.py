@@ -336,6 +336,9 @@ def prepare_finalization(module, start, end, audit_result, audit_stats, chunking
     post_issues = copy.deepcopy(baseline["issues"])
     post_issues["issues"].extend(dict(chapter=end, type="periodic_glossary_audit", details=issue)
                                for issue in audit_result.get("issues", []))
+    # A change the audit proposed to an entry settled before translation, kept for review.
+    post_issues["issues"].extend(dict(chapter=end, type="audit_change_held", details=item)
+                               for item in changes.get("held", []))
     post = dict(glossary=staged, progress=candidate, issues=post_issues, history=post_history)
     manifest = chapter_manifest(module, _inputs=_inputs)
     manifest.update({f"{i['chapter']:04d}.md": i["before_sha256"] for i in proof["plan"]["chapters"]})

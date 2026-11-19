@@ -2716,3 +2716,19 @@ def test_an_unexplained_edit_to_an_audited_chapter_still_blocks(discovery_novel,
         next(project.backup_dir.glob("approved_corrections/*/0025.md")).unlink()
     with pytest.raises(Exception, match="provenance missing|does not reach current chapter bytes"):
         verify_audit_obligations(project)
+
+
+def test_a_held_audit_proposal_is_recorded_as_an_issue(sandbox, monkeypatch):
+    engine = install_engine(monkeypatch, sandbox)
+    monkeypatch.setattr(engine, "log_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "call_periodic_audit", lambda *args: (
+        {"issues": []}, {"cost_usd": 0}, {"candidate_set_hash": "validated-local-fixture"}))
+    held = {"chinese": "青国", "action": "correct", "current": "Azure State", "proposed": "Blue Kingdom",
+            "notes": "Reads better."}
+    monkeypatch.setattr(engine, "apply_periodic_audit", lambda *args, **kwargs: {
+        "retroactive_replacements": [], "kept": [], "corrected": [], "rejected": [],
+        "contextualized": [], "merged": [], "held": [held]})
+    engine.run_periodic_audit(1, 10)
+    issues = json.loads(engine.ISSUES_FILE.read_text(encoding="utf-8"))["issues"]
+    assert issues == [{"chapter": 10, "type": "audit_change_held", "details": held}]
+    assert engine.progress["last_audited_chapter"] == 10

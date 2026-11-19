@@ -1196,6 +1196,15 @@ Named martial arts / techniques use capitalization like:
 
 The automatic system performs periodic glossary audits and may safely propagate exact terminology corrections backward into already committed chapters.
 
+An audit does not change an entry settled by hand before translation (source
+provenance `manual` / `explicit_manual`). If it proposes to correct, reject,
+merge or split such an entry, the entry stays as it is and the proposal is
+recorded under `held` in the audit's changes in `data/audit_history.json`, added
+to `data/issues.json` as an `audit_change_held` issue, and printed at the end of
+the audit for review. A correction that only changes what formal capitalization
+would store anyway is not held. The run continues. To accept a held
+proposal, apply it as an approved correction (`translate.py --apply-corrections`).
+
 Periodic audits keep the configured chapter window but divide its glossary
 candidates into deterministic bounded chunks. Each chunk is independently
 parsed and validated, and validated chunks are atomically checkpointed under

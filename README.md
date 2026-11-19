@@ -936,6 +936,28 @@ Statuses:
 - `provisional`: the current preferred rendering, subject to review.
 - `contextual`: approved alternatives selected by context, not exact constraints.
 
+Before the first chapter, the glossary can be settled with DeepSeek:
+
+```powershell
+python glossary_settle.py --novel <novel_id> propose --budget-usd 1
+python glossary_settle.py --novel <novel_id> install --run settle
+```
+
+`propose` scans the source locally for words and two-word phrases used at least
+`--min-count` times (default 8) that the glossary lacks, and sends them in chunks of
+150, with two short contexts each, the profile's categories, `translation_addendum.txt`
+and some existing entries as style examples. DeepSeek keeps the terms that need one
+stable rendering and gives their English and category. Local checks then drop a term
+whose key is not in the source or is already in the glossary, map an unknown category
+to the profile's general one, capitalize formal names as the engine stores them, and
+flag keys used mostly inside other words. It writes only
+`output/glossary_settle/<run>/` (`proposals.json`, `report.md`) and goes through the
+paid request journal, budget, pause and off-peak handling of `chapter_review.py`.
+Read the report; `install` then backs up `data/glossary.json` under
+`backup/glossary_settle/` and adds the proposals it lacks as provisional entries
+settled by hand, leaving out flagged traps (`--include-traps` adds them) and any
+`--skip` key. It never changes an existing entry.
+
 Two local checks help keep the glossary sound. Both make zero API calls, write
 nothing, and only report; nothing they find stops a run.
 

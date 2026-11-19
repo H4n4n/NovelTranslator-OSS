@@ -48,10 +48,25 @@ It reads only, so it can run while a translation is going.
 
 1. Skim `..._mechanical.json` and apply it. On ruler_of_the_martial_world, checkers agreed with
    93% of these (277 of 297); the rest were style calls such as "Jongnam" for "the Jongnam Sect".
-2. Judge `..._to_judge.json` (a person, or cheaper model checkers given `translation_addendum.txt`
-   and the glossary), then apply what survives. That is about 80% of the findings: most review
+2. Judge `..._to_judge.json` (a person, cheaper model checkers given `translation_addendum.txt`
+   and the glossary, or `review_judge.py` below), then apply what survives. That is about 80% of the findings: most review
    fixes are meaning fixes that need judging.
 3. Run the startup check (`production_path_preflight.py`) after applying.
+
+## Judging with DeepSeek
+
+    python review_judge.py --novel <id> --run <review run> --budget-usd 1
+
+sends each reviewed chapter's candidates (mechanical ones included and marked), with the source
+and English paragraphs around each, the chapter's glossary lines and `translation_addendum.txt`,
+to one final judging request at high reasoning. It approves, rewords or rejects each item. A
+rewording is kept only if it applies exactly once, in its own chapter; an item with no readable
+decision is rejected. It writes under `output/review/<run>/judge/`: `decisions.json` (every item
+with its decision and reason), `report.md`, and `approved_<first>_<last>.json` for
+`translate.py --apply-corrections`. It changes no chapter: read the report, then apply.
+It shares the reviewer's journal, budget, pause and off-peak handling below, so a rerun replays
+recorded answers. It uses the same model family as the reviewer, so it is a weaker second
+opinion than a different model or a person.
 
 ## Safety and cost
 

@@ -229,3 +229,61 @@ def test_glossary_lines_carry_a_settled_status_and_a_short_note():
     long = next(line for line in lines if line.startswith("흑운"))
     assert long.startswith("흑운 = Black Cloud (contextual) - note: ") and long.endswith("…")
     assert len(long) < 220 and not any(line.startswith("청운") for line in lines)
+
+
+class ThinksTooLong(FakeClient):
+    """Answers with reasoning only (content None, finish "length") at the given reasoning levels."""
+
+    def __init__(self, *args, empty_at=("high",), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.empty_at = empty_at
+
+    def create(self, **wire):
+        if wire["reasoning_effort"] in self.empty_at:
+            self.requests.append(wire)
+            return response(None, finish="length")
+        return super().create(**wire)
+
+
+def test_an_answer_that_is_all_reasoning_is_sent_once_more_at_low_reasoning(tmp_path):
+    logs = []
+    client = ThinksTooLong(findings={1: [ZHANG]})
+    novel = project(tmp_path)
+    summary = chapter_review.review_novel(novel, client, GoatBudget(20, 5.0), first=1, last=2, clock=OFF_PEAK,
+                                          log=logs.append, parallel=1)
+    assert summary["candidates"] == 1 and not summary["not_reviewed"]
+    efforts = [r["reasoning_effort"] for r in client.requests]
+    assert efforts.count("high") == 3 and efforts.count("low") == 3  # Two finds and one verify, each resent.
+    journal = novel.root / "output" / "review" / "0001_0002" / "journal"
+    assert any("chapter_review_low" in path.name for path in journal.rglob("*"))
+    assert sum("sending it once more at low reasoning" in line for line in logs) == 3
+    record = json.loads((novel.root / "output" / "review" / "0001_0002" / "chapters" / "0001.json").read_text(encoding="utf-8"))
+    assert record["resent_low"] == ["chapter_review", "chapter_review_verify"]
+    for path in (novel.root / "output" / "review" / "0001_0002" / "chapters").glob("*.json"):
+        path.unlink()
+    sent = len(client.requests)
+    _, replayed = run(tmp_path, client, novel=novel)
+    assert len(client.requests) == sent and replayed["calls"] == 0 and replayed["candidates"] == 1
+
+
+def test_a_chapter_whose_answers_stay_all_reasoning_is_reported_not_reviewed(tmp_path):
+    client = ThinksTooLong(findings={1: [ZHANG]}, empty_at=("high", "low"))
+    novel, summary = run(tmp_path, client)
+    assert len(client.requests) == 4 and summary["reviewed"] == 0  # One resend per chapter, no more.
+    assert [c for c, _ in summary["not_reviewed"]] == [1, 2]
+    assert "all reasoning" in summary["not_reviewed"][0][1]
+    assert not list((novel.root / "output" / "review" / "0001_0002" / "chapters").glob("*.json"))
+    _, again = run(tmp_path, client, novel=novel)
+    assert len(client.requests) == 4 and again["calls"] == 0  # A rerun replays; it never resends again.
+
+
+def test_a_finding_on_the_heading_line_is_dropped_and_the_prompt_says_the_heading_is_settled(tmp_path):
+    heading = dict(ZHANG, s=1, e=1, source="제 1 장 시작", english="Chapter 1: The Start", fix="Chapter 24: The Start")
+    part = dict(ZHANG, s=1, e=1, source="제 1 장 시작", english="The Start", fix="The Beginning")
+    client = FakeClient(findings={1: [heading, part, ZHANG]}, verdicts={"all": [{"id": 3, "verdict": "keep"}]})
+    novel, summary = run(tmp_path, client)
+    record = json.loads((novel.root / "output" / "review" / "0001_0002" / "chapters" / "0001.json").read_text(encoding="utf-8"))
+    assert [item["english"] for item in record["dropped"]] == ["Chapter 1: The Start", "The Start"]
+    assert all(item["dropped"].startswith("on the heading line") for item in record["dropped"])
+    assert summary["candidates"] == 1
+    assert "chapter heading" in chapter_review.FIND_PROMPT and "Do not review or report it" in chapter_review.FIND_PROMPT

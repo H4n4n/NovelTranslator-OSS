@@ -1,12 +1,19 @@
 """Settle glossary terms before translating, with DeepSeek, and install them only when approved.
 
 `propose` scans the novel's source locally for recurring words and two-word phrases the glossary
-lacks, sends them in chunks with a few contexts each to DeepSeek, which keeps only the terms that
-need one stable English rendering and gives that English and a category. Local checks then drop
-proposals whose key is not in the source, map unknown categories to the profile's general one,
-capitalize formal names the way the engine stores them, and flag keys that mostly match inside
-other words. Results go to output/glossary_settle/<run>/ (proposals.json, report.md); the glossary
-is not touched.
+lacks. It never sends a 1-syllable key, and it skips locally any short candidate that nearly always
+starts mid-word, after another syllable (요하 in 필요하다, 여주 in 보여주다). A compound's first or last
+part (조선 in 조선군, 총관 in 대총관) is not mid-word, and a candidate found mid-word less than 70% of
+the time is still sent. The rest go in chunks to DeepSeek with two contexts each, the first occurrence and the middle one, so a term is seen early and later in the book. DeepSeek keeps
+only the terms that need one stable English rendering and gives that English and a category. Local
+checks then drop proposals whose key is not in the source or has one syllable, map unknown categories
+to the profile's general one, capitalize formal names the way the engine stores them, and flag keys
+that mostly match inside other words. Results go to output/glossary_settle/<run>/ (proposals.json,
+report.md); the glossary is not touched.
+
+A chunk whose answer is all reasoning and no content (every completion token spent thinking) is
+sent once more as two half chunks, each its own journaled request; a half that again gets no answer
+is reported as not done. Nothing is split further.
 
 `install` adds the approved proposals of a run to data/glossary.json after backing it up: only
 keys the glossary lacks, never a changed entry, and no flagged trap unless asked.
@@ -24,12 +31,12 @@ import re
 import shutil
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from chapter_review import ALLOWANCE_REFUSAL, ReviewStop, Sender, parse_json
-from glossary_checks import trap_report
+from chapter_review import ALLOWANCE_REFUSAL, ReviewStop, Sender, parse_json, reasoning_only
+from glossary_checks import HANGUL, hangul_length, trap_report
 from noveltranslator_core import atomic_write_json, format_technique_name
 from production_paid_request_journal import (PaidRequestJournalError, PaidRequestUncertainError,
                                              release_ambiguous_requests)
@@ -44,6 +51,10 @@ PARTICLES = sorted("""은 는 이 가 을 를 의 에 에서 에게 에게서 �
 에서는 에서도 에는 에도 으로는 로는 으로도 로도 과는 와는 이라는 라는 인 이었던 였던""".split(), key=len, reverse=True)
 WORD = re.compile(r"[가-힣A-Za-z0-9·]+")
 PAIR = re.compile(r"[가-힣]{2,6} [가-힣]{2,6}")
+SHORT_KEY = re.compile(r"[가-힣]{2,3}")  # Keys this short are checked for starting mid-word.
+MID_WORD_MIN_COUNT = 3
+# Skipped before sending only at a high share; a lower share (trap_report's 0.4) is still sent and flagged.
+MID_WORD_RATIO = 0.7
 
 SETTLE_PROMPT = """You settle the glossary of a novel before it is translated into English.
 You get candidates from a local frequency scan of the source: a word stem (particles stripped; sometimes still a broken
@@ -66,30 +77,74 @@ def stem(word):
     return word
 
 
-def scan(chapters, entries, *, min_count=8):
-    """Recurring stems and two-word phrases the glossary lacks, most frequent first. No API calls."""
-    counts, first, contexts = Counter(), {}, {}
+def _forms(text):
+    """(form, start) for each word stem and two-word phrase of the text, without 1-syllable forms."""
+    words = list(WORD.finditer(text))
+    for index, match in enumerate(words):
+        forms = [stem(match.group())]
+        if index + 1 < len(words) and text[match.end():words[index + 1].start()] == " ":
+            pair = match.group() + " " + stem(words[index + 1].group())
+            if PAIR.fullmatch(pair):
+                forms.append(pair)
+        for form in forms:
+            if len(form) >= 2 and hangul_length(form) != 1:
+                yield form, match.start()
+
+
+def mid_word_counts(chapters):
+    """For every 2- and 3-syllable Korean string: (occurrences, occurrences that start mid-word, right
+    after another Hangul syllable), from one pass over the distinct words. A compound's first part
+    (조선 in 조선군) or last part (총관 in 대총관이, ending where the stem ends) is not mid-word."""
+    words = Counter(word for chapter in chapters for word in WORD.findall(chapter["text"]))
+    total, inside = Counter(), Counter()
+    for word, count in words.items():
+        stem_end = len(stem(word))
+        for start in range(len(word) - 1):
+            for width in (2, 3):
+                piece = word[start:start + width]
+                if len(piece) < width or not SHORT_KEY.fullmatch(piece):
+                    continue
+                total[piece] += count
+                if start and HANGUL.match(word[start - 1]) and start + width != stem_end:
+                    inside[piece] += count
+    return total, inside
+
+
+def scan(chapters, entries, *, min_count=8, skipped=None):
+    """Recurring stems and two-word phrases the glossary lacks, most frequent first. No API calls.
+
+    A short candidate that nearly always starts mid-word is left out (and appended to `skipped`).
+    Each candidate gets the context of its first occurrence and of its middle one.
+    """
+    counts, first = Counter(), {}
+    for chapter in chapters:
+        for form, _ in _forms(chapter["text"]):
+            counts[form] += 1
+            first.setdefault(form, chapter["chapter"])
+    total, inside = mid_word_counts(chapters)
+    wanted = {}
+    for term, count in counts.items():
+        if count < min_count or term in entries:
+            continue
+        if (SHORT_KEY.fullmatch(term) and total[term] >= MID_WORD_MIN_COUNT
+                and inside[term] / total[term] >= MID_WORD_RATIO):
+            if skipped is not None:
+                skipped.append({"term": term, "count": count, "occurrences": total[term], "mid_word": inside[term]})
+            continue
+        wanted[term] = {part * count // CONTEXTS for part in range(CONTEXTS)}
+    seen, contexts = Counter(), defaultdict(list)
     for chapter in chapters:
         text = chapter["text"]
-        words = list(WORD.finditer(text))
-        for index, match in enumerate(words):
-            forms = [stem(match.group())]
-            if index + 1 < len(words) and text[match.end():words[index + 1].start()] == " ":
-                pair = match.group() + " " + stem(words[index + 1].group())
-                if PAIR.fullmatch(pair):
-                    forms.append(pair)
-            for form in forms:
-                if len(form) < 2:
-                    continue
-                counts[form] += 1
-                first.setdefault(form, chapter["chapter"])
-                seen = contexts.setdefault(form, [])
-                if len(seen) < CONTEXTS and (not seen or seen[-1][0] != chapter["chapter"]):
-                    start = match.start()
-                    seen.append((chapter["chapter"],
-                                 text[max(0, start - CONTEXT_RADIUS): start + len(form) + CONTEXT_RADIUS].replace("\n", " ")))
-    return [{"term": term, "count": count, "first": first[term], "contexts": [c for _, c in contexts[term]]}
-            for term, count in counts.most_common() if count >= min_count and term not in entries]
+        for form, start in _forms(text):
+            if form in wanted:
+                if seen[form] in wanted[form]:
+                    contexts[form].append(
+                        text[max(0, start - CONTEXT_RADIUS): start + len(form) + CONTEXT_RADIUS].replace("\n", " "))
+                seen[form] += 1
+    if skipped is not None:
+        skipped.sort(key=lambda item: -item["count"])
+    return [{"term": term, "count": count, "first": first[term], "contexts": contexts[term]}
+            for term, count in counts.most_common() if term in wanted]
 
 
 def settle_messages(candidates, rules, categories, examples):
@@ -118,6 +173,9 @@ def check_proposals(raw_terms, source_text, entries, profile, fallback="speciali
             continue
         if korean in entries:
             dropped.append({**item, "dropped": "already in the glossary"})
+            continue
+        if hangul_length(korean) == 1:
+            dropped.append({**item, "dropped": "a 1-syllable key matches inside too many words"})
             continue
         if korean in kept:
             if kept[korean]["english"] != english:
@@ -149,11 +207,40 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
     rules = project.translation_addendum_file.read_text(encoding="utf-8") if project.translation_addendum_file.is_file() else ""
     examples = [f"{key} = {entry.get('english')} ({entry.get('category')})" for key, entry in list(entries.items())[:EXAMPLES]
                 if entry.get("english")]
-    candidates = scan(chapters, entries, min_count=min_count)
+    skipped = []
+    candidates = scan(chapters, entries, min_count=min_count, skipped=skipped)
+    if skipped:
+        log(f"Skipped {len(skipped)} candidate(s) that nearly always start mid-word.")
     chunks = [candidates[start:start + CHUNK] for start in range(0, len(candidates), CHUNK)]
     log(f"{len(candidates)} candidates in {len(chunks)} request(s).")
     sender = Sender(project, client, budget, journal_dir, reasoning=reasoning, sleep=sleep, clock=clock, log=log)
     answers, failed = {}, []
+
+    def split(index, chunk, key, cost):
+        """Send an all-reasoning chunk once more as two halves, each its own journaled request."""
+        log(f"Request {index + 1}/{len(chunks)}: the answer was all reasoning and no terms; "
+            f"sending its {len(chunk)} candidates again as two halves.")
+        middle, terms, left = len(chunk) // 2, [], 0
+        for number, part in enumerate((chunk[:middle], chunk[middle:])):
+            messages = settle_messages(part, rules, profile.allowed_categories, examples)
+            part_key = hashlib.sha256(json.dumps(messages, ensure_ascii=False).encode("utf-8")).hexdigest()
+            answer = sender.ask("glossary_settle_split", 2 * index + 1 + number, messages, SETTLE_TOKENS,
+                                source_sha256=part_key, english_sha256=part_key)
+            cost += answer["cost_usd"]
+            try:
+                if answer["finish_reason"] != "stop":
+                    raise ValueError(answer["finish_reason"])
+                terms += parse_json(answer["content"]).get("terms") or []
+            except (ValueError, json.JSONDecodeError):
+                left += len(part)
+        problem = (f"{left} of {len(chunk)} candidates got no answer, also after splitting the request in two"
+                   if left else None)
+        if left == len(chunk):
+            return index, None, problem
+        atomic_write_json(run_dir / "chunks" / f"{index + 1:04d}.json",
+                          {"key": key, "terms": terms, "not_done": problem, "cost_usd": cost})
+        log(f"Request {index + 1}/{len(chunks)}: {len(terms)} terms from its halves (${cost:.4f})")
+        return index, terms, problem
 
     def one(index):
         chunk = chunks[index]
@@ -163,10 +250,12 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
         if path.is_file():
             saved = json.loads(path.read_text(encoding="utf-8"))
             if saved.get("key") == key:
-                return index, saved["terms"], None
+                return index, saved["terms"], saved.get("not_done")
         try:
             answer = sender.ask("glossary_settle", index + 1, messages, SETTLE_TOKENS,
                                 source_sha256=key, english_sha256=key)
+            if reasoning_only(answer) and len(chunk) > 1:
+                return split(index, chunk, key, answer["cost_usd"])
         except PaidRequestUncertainError:
             return index, None, "a request got no recorded answer; rerun to send it once more"
         except PaidRequestJournalError as exc:
@@ -193,6 +282,8 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
         for index, terms, problem in results:
             if terms is not None:
                 answers[index] = terms
+                if problem:  # Half of the chunk got no answer.
+                    failed.append((index + 1, problem))
             elif index not in retry:
                 failed.append((index + 1, problem))
         if retry and len(retry) < len(waiting):
@@ -210,15 +301,16 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
                              "examples": row["examples"]}
     atomic_write_json(run_dir / "proposals.json", {"run": run, "terms": kept, "dropped": dropped})
     summary = dict(novel=project.config.id, run=run, candidates=len(candidates), requests=len(chunks),
+                   skipped_mid_word=len(skipped),
                    proposed=len(kept), traps=len(traps), dropped=len(dropped), calls=sender.calls,
                    cost_usd=round(sender.cost_usd, 6), failed_requests=sorted(failed),
                    proposals_file=str(run_dir / "proposals.json"), report=str(run_dir / "report.md"))
-    write_report(run_dir, kept, dropped, summary)
+    write_report(run_dir, kept, dropped, summary, skipped)
     atomic_write_json(run_dir / "summary.json", summary)
     return summary
 
 
-def write_report(run_dir, kept, dropped, summary):
+def write_report(run_dir, kept, dropped, summary, skipped=()):
     lines = [f"# Glossary settling: {summary['novel']} run {summary['run']}", "",
              f"- {summary['candidates']} candidates in {summary['requests']} requests; {summary['calls']} new, "
              f"${summary['cost_usd']:.4f} this run (replays cost nothing)",
@@ -232,6 +324,9 @@ def write_report(run_dir, kept, dropped, summary):
         lines.append(f"- {key} = {entry['english']} [{entry['category']}]{alternatives}{flag}")
     lines += ["", "## Dropped by the local checks", ""]
     lines += [f"- {item.get('korean')} = {item.get('english')}: {item['dropped']}" for item in dropped] or ["- none"]
+    lines += ["", "## Not sent: nearly always mid-word", ""]
+    lines += [f"- {item['term']} ({item['count']}x): {item['mid_word']} of {item['occurrences']} "
+              "occurrences start mid-word" for item in skipped] or ["- none"]
     (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -298,7 +393,8 @@ def main(argv=None):
     chapters = json.loads(project.chapters_file.read_text(encoding="utf-8"))
     entries = json.loads(project.glossary_file.read_text(encoding="utf-8")).get("entries", {})
     requests = -(-len(scan(chapters, entries, min_count=args.min_count)) // CHUNK)
-    budget = GoatBudget(requests + 2, args.budget_usd)
+    # Each chunk may be sent once more as two halves; --budget-usd bounds the cost.
+    budget = GoatBudget(3 * requests + 2, args.budget_usd)
     with command_code_api_key_scope() as key:
         client = create_command_code_client(api_key=key)
         summary = propose(project, client, budget, run=args.run, profile=profile, min_count=args.min_count,

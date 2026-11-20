@@ -223,6 +223,8 @@ def _load(project):
 
 
 def _translations(project):
+    if not project.progress_file.is_file():
+        return {}  # Before the first run nothing is translated yet.
     progress = json.loads(project.progress_file.read_text(encoding="utf-8"))
     last = int(progress.get("last_completed") or 0)
     out = {}

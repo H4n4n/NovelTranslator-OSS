@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 from approved_corrections import correct_chapter
 from chapter_review import (ALLOWANCE_REFUSAL, ReviewStop, Sender, _around, chapter_glossary, file_form,
-                            paragraphs, parse_json, sha256, source_form, word_edges)
+                            paragraphs, parse_json, reasoning_only, sha256, source_form, word_edges)
 from noveltranslator_core import atomic_write_json
 from production_paid_request_journal import (PaidRequestJournalError, PaidRequestUncertainError,
                                              release_ambiguous_requests)
@@ -188,12 +188,31 @@ def judge_review(project, client, budget, *, run, parallel=50, reasoning="high",
         if path.is_file():
             saved = json.loads(path.read_text(encoding="utf-8"))
             if saved.get("key") == key:
-                return chapter, saved["decided"], None
+                return chapter, saved["decided"], saved.get("not_judged")
+        glossary = chapter_glossary(entries, sources[chapter])
+
+        def ask(kind, part):
+            return sender.ask(kind, chapter, judge_messages(part, sources[chapter], english, rules, glossary),
+                              JUDGE_TOKENS, source_sha256=sha256(sources[chapter]), english_sha256=key)
         try:
-            answer = sender.ask("review_judge", chapter,
-                                judge_messages(chapter_items, sources[chapter], english, rules,
-                                               chapter_glossary(entries, sources[chapter])),
-                                JUDGE_TOKENS, source_sha256=sha256(sources[chapter]), english_sha256=key)
+            answer = ask("review_judge", chapter_items)
+            cost, result, left = answer["cost_usd"], [], []
+            if not reasoning_only(answer):
+                result = decide(chapter_items, answer, chapter, sources, raws)
+            elif len(chapter_items) < 2:
+                left = chapter_items
+            else:
+                # All reasoning and no decisions: judge each half once in its own journaled request.
+                log(f"Chapter {chapter}: the judging answer was all reasoning and no decisions; "
+                    f"sending its {len(chapter_items)} items again in two halves.")
+                middle = len(chapter_items) // 2
+                for number, part in enumerate((chapter_items[:middle], chapter_items[middle:]), 1):
+                    half = ask(f"review_judge_half{number}", part)
+                    cost += half["cost_usd"]
+                    if reasoning_only(half):
+                        left += part
+                    else:
+                        result += decide(part, half, chapter, sources, raws)
         except PaidRequestUncertainError:
             return chapter, None, "a request got no recorded answer; rerun to send it once more"
         except PaidRequestJournalError as exc:
@@ -202,10 +221,14 @@ def judge_review(project, client, budget, *, run, parallel=50, reasoning="high",
             return chapter, None, f"provider refused: {exc}"
         except Exception as exc:  # Budget refusals and anything else leave the chapter for a rerun.
             return chapter, None, f"{type(exc).__name__}: {str(exc)[:160]}"
-        result = decide(chapter_items, answer, chapter, sources, raws)
-        atomic_write_json(path, {"chapter": chapter, "key": key, "decided": result, "cost_usd": answer["cost_usd"]})
+        problem = (f"{len(left)} of {len(chapter_items)} item(s) not judged: the answers were all reasoning "
+                   "and no decisions, also after splitting" if left else None)
+        if not result:
+            return chapter, None, problem
+        atomic_write_json(path, {"chapter": chapter, "key": key, "decided": result, "not_judged": problem,
+                                 "cost_usd": cost})
         log(f"Chapter {chapter}: " + ", ".join(f"{sum(1 for r in result if r['decision'] == c)} {c}" for c in DECISIONS))
-        return chapter, result, None
+        return chapter, result, problem
 
     waiting = sorted(by_chapter)
     while waiting:
@@ -215,6 +238,8 @@ def judge_review(project, client, budget, *, run, parallel=50, reasoning="high",
         for chapter, result, problem in results:
             if result is not None:
                 decided[chapter] = result
+                if problem:  # Some of its items could not be judged.
+                    not_judged.append((chapter, problem))
             elif chapter not in retry:
                 not_judged.append((chapter, problem))
         if retry and len(retry) < len(waiting):
@@ -262,7 +287,8 @@ def main(argv=None):
     from production_goat_runtime import GoatBudget
     project = load_novel_project(args.novel, repo_root=args.repo_root)
     chapters = len(list((project.root / "output" / "review" / args.run / "chapters").glob("*.json")))
-    budget = GoatBudget(chapters + 2, args.budget_usd)
+    # One request per chapter, or three when an all-reasoning answer is split; --budget-usd bounds the cost.
+    budget = GoatBudget(3 * chapters + 2, args.budget_usd)
     with command_code_api_key_scope() as key:
         client = create_command_code_client(api_key=key)
         summary = judge_review(project, client, budget, run=args.run, parallel=args.parallel, reasoning=args.reasoning)

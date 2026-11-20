@@ -96,3 +96,22 @@ def test_the_command_reads_a_project_and_writes_nothing(tmp_path, monkeypatch, c
     report = json.loads(capsys.readouterr().out)
     assert report["summary"]["entries"] == 1 and report["below_threshold"] == []
     assert snapshot() == before
+
+
+def test_titles_and_consistency_work_before_the_first_run(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "novel"
+    (root / "data").mkdir(parents=True)
+    project = SimpleNamespace(root=root, chapter_dir=root / "output" / "chapters",
+                              progress_file=root / "data" / "progress.json",
+                              chapters_file=root / "data" / "chapters.json", glossary_file=root / "data" / "glossary.json")
+    project.chapters_file.write_text(json.dumps(chapters("1. 시작\n\n인도로 간다.", "2. 시작\n\n주인도 왔다."),
+                                                ensure_ascii=False), encoding="utf-8")
+    project.glossary_file.write_text(json.dumps({"entries": {"인도": entry("India")}}, ensure_ascii=False),
+                                     encoding="utf-8")
+    monkeypatch.setattr(novel_project, "select_project", lambda novel, repo_root=None: project)
+    assert not project.progress_file.exists()
+    assert gc._translations(project) == {}
+    assert gc.main(["--novel", "synthetic", "--json", "titles"]) == 0
+    assert "titles" in json.loads(capsys.readouterr().out)
+    assert gc.main(["--novel", "synthetic", "--json", "consistency", "--min-chapters", "1"]) == 0
+    assert json.loads(capsys.readouterr().out)["below_threshold"] == []

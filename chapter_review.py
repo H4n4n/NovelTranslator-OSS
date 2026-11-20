@@ -47,6 +47,8 @@ Report only real problems a careful bilingual editor would fix:
   An entry marked (locked) is settled. A note after an entry says how to use it (its case in running text, its form,
   when it applies) and outranks the bare rendering: do not report English that follows the note.
 Do not report style, word choice, register, or anything that is merely stiff. A chapter with nothing wrong gets no findings.
+The first line of each text is the chapter heading. It is settled: the English heading and its number are set from the
+project's chapter list and may differ from the source's own numbering on purpose. Do not review or report it.
 Paragraphs are numbered S1, S2… (source) and E1, E2… (English). For each problem give:
  "kind"; "s" and "e", the paragraph numbers; "source", the source words copied exactly;
  "english", the EXACT English words to replace, copied character for character from one E paragraph,
@@ -61,6 +63,10 @@ VERIFY_PROMPT = """You check proposed corrections to a translated chapter. For e
 - "drop": the English was already right, the item is a style preference, or you cannot tell.
 Be strict: when in doubt, drop.
 Answer with JSON only: {"verdicts": [{"id": 1, "verdict": "keep", "fix": "", "why": "under 15 words"}]}"""
+
+
+class NoAnswer(RuntimeError):
+    """Every answer to a request was all reasoning and no content, even after the one resend."""
 
 
 class ReviewStop(RuntimeError):
@@ -156,8 +162,11 @@ def finding_problem(item, source, english):
         return "missing English or fix"
     if old.strip() == new.strip():
         return "fix is the same as the English"
-    if english.replace("\r\n", "\n").count(old.replace("\r\n", "\n")) != 1:
+    text, old = english.replace("\r\n", "\n").lstrip(), old.replace("\r\n", "\n")
+    if text.count(old) != 1:
         return "English not found exactly once in the chapter"
+    if text.find(old) + len(old) - len(old.lstrip()) < len(text.split("\n", 1)[0]):
+        return "on the heading line, which the engine sets from data/chapter_titles.json"
     tokens = [token.strip(TOKEN_EDGE) for token in str(item.get("source") or "").split()]
     if not any(len(token) >= 2 and token in source for token in tokens):
         return "source words not found in the chapter source"
@@ -270,14 +279,14 @@ class Sender:
                              else "Waiting for off-peak hours; no requests are sent meanwhile.")
             self.sleep(WAIT_SECONDS)
 
-    def ask(self, kind, chapter, messages, max_tokens, *, source_sha256, english_sha256):
+    def ask(self, kind, chapter, messages, max_tokens, *, source_sha256, english_sha256, reasoning=None):
         from benchmark_longitudinal_provider import (build_provider_request, build_provider_request_identity,
                                                      normalize_provider_response)
         from command_code_provider_transport import account_command_code_usage, accept_command_code_response
         from production_goat_runtime import raw_response_record
         from provider_retry_policy import DefiniteProviderFailure, send_with_retries
         wire = build_provider_request(model=MODEL, messages=messages, max_output_tokens=max_tokens,
-                                      reasoning_capability=self.capability, reasoning_level=self.reasoning)
+                                      reasoning_capability=self.capability, reasoning_level=reasoning or self.reasoning)
         transport = build_provider_request_identity(request_body=wire)
         identity = request_identity(operation_kind=kind, novel_id=self.project.config.id, chapter=chapter,
                                     provider="command_code_provider", model=MODEL,
@@ -317,7 +326,8 @@ class Sender:
             save_json=atomic_write_json, prepare_attempt=prepare, send_once=send, authorize_send=authorize,
             normalize_response=lambda raw, context: {"raw_response": raw_response_record(raw), **context})
         recorded = result["response"]
-        normalized = normalize_provider_response(recorded["raw_response"], request_identity=transport)
+        normalized = normalize_provider_response(_reasoning_only_as_empty(recorded["raw_response"]),
+                                                 request_identity=transport)
         accepted = accept_command_code_response(transport, normalized)
         stats = account_command_code_usage(MODEL, accepted.usage, recorded["request_started_utc"])
         if result["api_called"]:
@@ -327,6 +337,22 @@ class Sender:
                 self.calls += 1
         return {"content": accepted.content, "finish_reason": accepted.finish_reason,
                 "cost_usd": stats["cost_usd"], "replayed": result["replayed"]}
+
+
+def _reasoning_only_as_empty(raw):
+    """A recorded answer whose content is None because reasoning spent every completion token
+    (finish_reason "length"), with that content as "" so it is accounted and read as no answer."""
+    choices = raw.get("choices") if isinstance(raw, dict) else None
+    if (isinstance(choices, list) and len(choices) == 1 and isinstance(choices[0], dict)
+            and choices[0].get("finish_reason") == "length"
+            and isinstance(choices[0].get("message"), dict) and choices[0]["message"].get("content") is None):
+        return {**raw, "choices": [{**choices[0], "message": {**choices[0]["message"], "content": ""}}]}
+    return raw
+
+
+def reasoning_only(answer):
+    """True when the answer ran out of tokens before giving any content: all reasoning, no answer."""
+    return answer["finish_reason"] == "length" and not (answer["content"] or "").strip()
 
 
 def find_messages(source, english, rules, glossary):
@@ -356,14 +382,29 @@ def verify_messages(items, source, english, rules):
     return [{"role": "system", "content": VERIFY_PROMPT}, {"role": "user", "content": user}]
 
 
+def ask_once_more_low(sender, kind, chapter, messages, max_tokens, record, **keys):
+    """Ask; when the answer is all reasoning and no content, send it once more at low reasoning.
+    The resend is its own journaled request (kind + "_low"), so both answers replay on a rerun."""
+    answer = sender.ask(kind, chapter, messages, max_tokens, **keys)
+    record["cost_usd"] += answer["cost_usd"]
+    if reasoning_only(answer) and sender.reasoning != "low":
+        sender.log(f"Chapter {chapter} {kind}: the answer was all reasoning and no content; "
+                   "sending it once more at low reasoning.")
+        answer = sender.ask(kind + "_low", chapter, messages, max_tokens, reasoning="low", **keys)
+        record["cost_usd"] += answer["cost_usd"]
+        record.setdefault("resent_low", []).append(kind)
+    return answer
+
+
 def review_chapter(sender, chapter, source, english, rules, entries, *, verify=True):
     """One chapter's findings, checked locally and verified. Returns the saved record."""
     keys = dict(source_sha256=sha256(source), english_sha256=sha256(english))
     record = {"revision": REVISION, "chapter": chapter, **keys, "local_flags": local_flags(source, english, entries),
               "kept": [], "dropped": [], "cost_usd": 0.0}
-    answer = sender.ask("chapter_review", chapter, find_messages(source, english, rules,
-                        chapter_glossary(entries, source)), FIND_TOKENS, **keys)
-    record["cost_usd"] += answer["cost_usd"]
+    answer = ask_once_more_low(sender, "chapter_review", chapter, find_messages(source, english, rules,
+                               chapter_glossary(entries, source)), FIND_TOKENS, record, **keys)
+    if reasoning_only(answer):
+        raise NoAnswer("the answer was all reasoning and no findings, also when sent at low reasoning")
     if answer["finish_reason"] != "stop":
         record["status"] = f"no_answer_{answer['finish_reason']}"
         return record
@@ -379,9 +420,8 @@ def review_chapter(sender, chapter, source, english, rules, entries, *, verify=T
         item = {"id": index + 1, "chapter": chapter, **{k: item.get(k) for k in ("kind", "s", "e", "source", "english", "fix", "why")}}
         (record["dropped"].append({**item, "dropped": problem}) if problem else usable.append(item))
     if usable and verify:
-        answer = sender.ask("chapter_review_verify", chapter, verify_messages(usable, source, english, rules),
-                            VERIFY_TOKENS, **keys)
-        record["cost_usd"] += answer["cost_usd"]
+        answer = ask_once_more_low(sender, "chapter_review_verify", chapter,
+                                   verify_messages(usable, source, english, rules), VERIFY_TOKENS, record, **keys)
         verdicts = {}
         if answer["finish_reason"] == "stop":
             try:
@@ -472,6 +512,8 @@ def review_novel(project, client, budget, *, first, last, run_name=None, paralle
             return chapter, None, f"journal: {str(exc)[:160]} (the chapter changed; review it under a new --run)"
         except ReviewStop as exc:
             return chapter, None, f"provider refused: {exc}"
+        except NoAnswer as exc:
+            return chapter, None, f"no answer: {exc}"
         except Exception as exc:  # Budget refusals and anything else leave the chapter for a rerun.
             return chapter, None, f"{type(exc).__name__}: {str(exc)[:160]}"
         atomic_write_json(path, record)
@@ -545,7 +587,8 @@ def main(argv=None):
     from novel_project import load_novel_project
     from production_goat_runtime import GoatBudget
     project = load_novel_project(args.novel, repo_root=args.repo_root)
-    budget = GoatBudget(2 * (last - first + 1) + 2, args.budget_usd)
+    # Find and verify per chapter, each possibly sent once more at low reasoning; --budget-usd bounds the cost.
+    budget = GoatBudget(4 * (last - first + 1) + 2, args.budget_usd)
     with command_code_api_key_scope() as key:
         client = create_command_code_client(api_key=key)
         summary = review_novel(project, client, budget, first=first, last=last, run_name=args.run,

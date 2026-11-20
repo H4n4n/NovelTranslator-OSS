@@ -90,7 +90,8 @@ def test_install_adds_only_missing_keys_backs_up_and_leaves_traps_out(tmp_path):
     entries = json.loads(novel.glossary_file.read_text(encoding="utf-8"))["entries"]
     assert result["added"] == 1 and set(entries) == {"백운성", "흑룡검"}
     assert entries["흑룡검"]["status"] == "provisional"
-    assert entries["흑룡검"]["source_provenance"]["origin"] == "manual"
+    assert entries["흑룡검"]["source_provenance"]["origin"] == gs.INSTALL_ORIGIN
+    assert entries["흑룡검"]["source_provenance"]["verification"] == "model_settled"
     assert Path(result["backup"]).read_bytes() == before
     assert entries["백운성"]["english"] == "White Cloud Fortress"
 
@@ -160,3 +161,38 @@ def test_halves_still_without_an_answer_are_reported_and_not_split_again(tmp_pat
                          min_count=2, clock=OFF_PEAK, log=lambda *_: None)
     assert len(client.requests) == 3 and summary["proposed"] == 0
     assert summary["failed_requests"] and "also after splitting" in summary["failed_requests"][0][1]
+
+
+def test_installed_terms_are_not_held_from_audits_like_hand_settled_ones(tmp_path):
+    import translate_production_unattended_scheduled_retroactive_dynamic_pricing as production
+    novel, _, _, _ = proposed(tmp_path)
+    gs.install(novel, run="settle", clock=OFF_PEAK)
+    entries = json.loads(novel.glossary_file.read_text(encoding="utf-8"))["entries"]
+    assert not production.settled_before_translation(entries["흑룡검"])
+    assert production.settled_before_translation(
+        {"source_provenance": {"origin": "manual", "verification": "explicit_manual"}})
+
+
+def test_install_refuses_while_a_run_holds_the_production_lock(tmp_path):
+    import threading
+    import pytest
+    from production_run_lock import ProductionRunLockedError, production_run_lock
+    novel, _, _, _ = proposed(tmp_path)
+    before = novel.glossary_file.read_bytes()
+    held, release = threading.Event(), threading.Event()
+
+    def run():
+        with production_run_lock(novel.root):
+            held.set()
+            release.wait(10)
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert held.wait(10)
+        with pytest.raises(ProductionRunLockedError):
+            gs.install(novel, run="settle", clock=OFF_PEAK)
+    finally:
+        release.set()
+        worker.join()
+    assert novel.glossary_file.read_bytes() == before
+    assert not (novel.root / "backup" / "glossary_settle").exists()

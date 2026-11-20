@@ -954,9 +954,12 @@ flag keys used mostly inside other words. It writes only
 `output/glossary_settle/<run>/` (`proposals.json`, `report.md`) and goes through the
 paid request journal, budget, pause and off-peak handling of `chapter_review.py`.
 Read the report; `install` then backs up `data/glossary.json` under
-`backup/glossary_settle/` and adds the proposals it lacks as provisional entries
-settled by hand, leaving out flagged traps (`--include-traps` adds them) and any
-`--skip` key. It never changes an existing entry.
+`backup/glossary_settle/` and adds the proposals it lacks as provisional entries,
+leaving out flagged traps (`--include-traps` adds them) and any `--skip` key. It never
+changes an existing entry, and it refuses while a translation run holds the novel's
+production lock. Installed entries are marked as proposed by `glossary_settle`
+(`model_settled`), not as settled by hand, so periodic audits may still correct them;
+only entries a person settled (`manual` / `explicit_manual`) are held from audits.
 
 Two local checks help keep the glossary sound. Both make zero API calls, write
 nothing, and only report; nothing they find stops a run.

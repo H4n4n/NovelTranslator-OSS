@@ -16,7 +16,11 @@ sent once more as two half chunks, each its own journaled request; a half that a
 is reported as not done. Nothing is split further.
 
 `install` adds the approved proposals of a run to data/glossary.json after backing it up: only
-keys the glossary lacks, never a changed entry, and no flagged trap unless asked.
+keys the glossary lacks, never a changed entry, and no flagged trap unless asked. It holds the
+novel's production lock, so it refuses while a translation run is going. Installed entries are
+marked as proposed by glossary_settle (origin "glossary_settle", verification "model_settled"),
+not as settled by hand: periodic audits may still correct them, while entries a person settled
+("manual" / "explicit_manual") stay held for review.
 
 Every request goes through the paid request journal (replay or send once), reserves its
 worst-case cost first, and waits for pause.flag and the novel's off-peak setting.
@@ -40,7 +44,11 @@ from glossary_checks import HANGUL, hangul_length, trap_report
 from noveltranslator_core import atomic_write_json, format_technique_name
 from production_paid_request_journal import (PaidRequestJournalError, PaidRequestUncertainError,
                                              release_ambiguous_requests)
+from production_run_lock import production_run_lock
 
+# Provenance of installed proposals: model-settled, so audits may correct them (unlike manual/explicit_manual).
+INSTALL_ORIGIN = "glossary_settle"
+INSTALL_VERIFICATION = "model_settled"
 CHUNK = 150
 SETTLE_TOKENS = 24000
 CONTEXTS = 2
@@ -331,26 +339,33 @@ def write_report(run_dir, kept, dropped, summary, skipped=()):
 
 
 def install(project, *, run, include_traps=False, skip=(), clock=lambda: datetime.now(timezone.utc)):
-    """Add a run's proposals the glossary lacks, after backing it up. Returns what was added."""
+    """Add a run's proposals the glossary lacks, after backing it up. Returns what was added.
+
+    Holds the novel's production lock, so it never saves over a running translation's glossary
+    changes (ProductionRunLockedError while a run is going). Installed entries are marked as
+    settled by the model, not by hand, so periodic audits may still correct them.
+    """
     proposals = json.loads((_run_dir(project, run) / "proposals.json").read_text(encoding="utf-8"))["terms"]
-    data = json.loads(project.glossary_file.read_text(encoding="utf-8"))
-    entries = data.setdefault("entries", {})
-    stamp = clock().strftime("%Y%m%dT%H%M%SZ")
-    backup = project.root / "backup" / "glossary_settle" / f"glossary_{run}_{stamp}.json"
-    backup.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(project.glossary_file, backup)
-    added, skipped = [], []
-    for key, entry in proposals.items():
-        if key in entries or key in skip or (entry.get("trap") and not include_traps):
-            skipped.append(key)
-            continue
-        entries[key] = {"english": entry["english"], "category": entry["category"], "status": "provisional",
-                        "notes": entry.get("notes", ""),
-                        "source_provenance": {"origin": "manual", "verification": "explicit_manual",
-                                              "note": f"settled before translation by glossary_settle run {run}, "
-                                                      "approved for install"}}
-        added.append(key)
-    atomic_write_json(project.glossary_file, data)
+    with production_run_lock(project.root):
+        data = json.loads(project.glossary_file.read_text(encoding="utf-8"))
+        entries = data.setdefault("entries", {})
+        stamp = clock().strftime("%Y%m%dT%H%M%SZ")
+        backup = project.root / "backup" / "glossary_settle" / f"glossary_{run}_{stamp}.json"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(project.glossary_file, backup)
+        added, skipped = [], []
+        for key, entry in proposals.items():
+            if key in entries or key in skip or (entry.get("trap") and not include_traps):
+                skipped.append(key)
+                continue
+            entries[key] = {"english": entry["english"], "category": entry["category"], "status": "provisional",
+                            "notes": entry.get("notes", ""),
+                            "source_provenance": {"origin": INSTALL_ORIGIN, "verification": INSTALL_VERIFICATION,
+                                                  "run": run,
+                                                  "note": f"proposed before translation by glossary_settle run {run}, "
+                                                          "approved for install"}}
+            added.append(key)
+        atomic_write_json(project.glossary_file, data)
     return {"added": len(added), "skipped": len(skipped), "backup": str(backup)}
 
 
@@ -379,8 +394,14 @@ def main(argv=None):
     from novel_project import load_novel_project
     project = load_novel_project(args.novel, repo_root=args.repo_root)
     if args.command == "install":
-        print(json.dumps(install(project, run=args.run, include_traps=args.include_traps, skip=set(args.skip)),
-                         indent=2, ensure_ascii=False))
+        from production_run_lock import ProductionRunLockedError
+        try:
+            result = install(project, run=args.run, include_traps=args.include_traps, skip=set(args.skip))
+        except ProductionRunLockedError:
+            print(f"{project.config.id} is running (its production lock is held). Install after the run ends; "
+                  "the glossary was not changed.")
+            return 1
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     if args.budget_usd <= 0:
         print("Give the most this run may spend with --budget-usd.")

@@ -95,13 +95,19 @@ def test_install_adds_only_missing_keys_backs_up_and_leaves_traps_out(tmp_path):
     assert entries["백운성"]["english"] == "White Cloud Fortress"
 
 
-def test_the_scan_skips_one_syllable_forms_and_keys_mostly_inside_other_words():
-    texts = ["인도로 간다. 인도에 간다. 검 검 검.", "인도양 인도양 인도양 인도네시아. 흑룡검이 운다.", "흑룡검을 든다. 검이 운다."]
+def test_the_scan_skips_one_syllable_forms_and_keys_that_start_mid_word_but_not_compound_parts():
+    texts = ["조선군 조선군 조선군. 조선이 크다. 조선이 멀다. 검 검 검.",
+             "여진족 여진족 여진족. 여진은 강하다. 여진은 많다.",
+             "대총관이 왔다. 대총관이 갔다. 대총관이 웃었다. 총관은 늙었다. 총관은 웃었다.",
+             "요하에 간다. 요하에 닿았다. 필요하다 필요하다 필요하다 필요하다 필요하다. 중요하다 중요하다.",
+             "흑룡검이 운다. 흑룡검을 든다. 검이 운다."]
     skipped = []
     found = {item["term"] for item in gs.scan([{"chapter": n, "text": t} for n, t in enumerate(texts, 1)], {},
                                               min_count=2, skipped=skipped)}
-    assert "흑룡검" in found and "인도" not in found and "검" not in found
-    assert skipped[0] == {"term": "인도", "count": 2, "occurrences": 6, "inside_other_words": 4}
+    assert {"조선", "여진", "총관", "흑룡검"} <= found  # A compound's first or last part is not mid-word.
+    assert "요하" not in found and "검" not in found
+    assert next(item for item in skipped if item["term"] == "요하") == {
+        "term": "요하", "count": 2, "occurrences": 9, "mid_word": 7}
 
 
 def test_the_two_contexts_are_the_first_and_the_middle_occurrence():

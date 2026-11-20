@@ -1,9 +1,10 @@
 """Settle glossary terms before translating, with DeepSeek, and install them only when approved.
 
 `propose` scans the novel's source locally for recurring words and two-word phrases the glossary
-lacks. It never sends a 1-syllable key, and it skips locally any short candidate that occurs mostly
-inside other words (인도 in 직장인도, 주인도). The rest go in chunks to DeepSeek with two contexts each,
-the first occurrence and the middle one, so a term is seen early and later in the book. DeepSeek keeps
+lacks. It never sends a 1-syllable key, and it skips locally any short candidate that nearly always
+starts mid-word, after another syllable (요하 in 필요하다, 여주 in 보여주다). A compound's first or last
+part (조선 in 조선군, 총관 in 대총관) is not mid-word, and a candidate found mid-word less than 70% of
+the time is still sent. The rest go in chunks to DeepSeek with two contexts each, the first occurrence and the middle one, so a term is seen early and later in the book. DeepSeek keeps
 only the terms that need one stable English rendering and gives that English and a category. Local
 checks then drop proposals whose key is not in the source or has one syllable, map unknown categories
 to the profile's general one, capitalize formal names the way the engine stores them, and flag keys
@@ -35,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from chapter_review import ALLOWANCE_REFUSAL, ReviewStop, Sender, parse_json, reasoning_only
-from glossary_checks import HANGUL, PARTICLES as STANDALONE_ENDINGS, hangul_length, trap_report
+from glossary_checks import HANGUL, hangul_length, trap_report
 from noveltranslator_core import atomic_write_json, format_technique_name
 from production_paid_request_journal import (PaidRequestJournalError, PaidRequestUncertainError,
                                              release_ambiguous_requests)
@@ -50,9 +51,10 @@ PARTICLES = sorted("""은 는 이 가 을 를 의 에 에서 에게 에게서 �
 에서는 에서도 에는 에도 으로는 로는 으로도 로도 과는 와는 이라는 라는 인 이었던 였던""".split(), key=len, reverse=True)
 WORD = re.compile(r"[가-힣A-Za-z0-9·]+")
 PAIR = re.compile(r"[가-힣]{2,6} [가-힣]{2,6}")
-SHORT_KEY = re.compile(r"[가-힣]{2,3}")  # Keys this short are checked for occurring mostly inside other words.
-INSIDE_MIN_COUNT = 3
-INSIDE_RATIO = 0.4  # As glossary_checks.trap_report.
+SHORT_KEY = re.compile(r"[가-힣]{2,3}")  # Keys this short are checked for starting mid-word.
+MID_WORD_MIN_COUNT = 3
+# Skipped before sending only at a high share; a lower share (trap_report's 0.4) is still sent and flagged.
+MID_WORD_RATIO = 0.7
 
 SETTLE_PROMPT = """You settle the glossary of a novel before it is translated into English.
 You get candidates from a local frequency scan of the source: a word stem (particles stripped; sometimes still a broken
@@ -89,20 +91,21 @@ def _forms(text):
                 yield form, match.start()
 
 
-def inside_counts(chapters):
-    """For every 2- and 3-syllable Korean string: (occurrences, occurrences inside another word), the
-    way glossary_checks.trap_report counts them, from one pass over the distinct words."""
+def mid_word_counts(chapters):
+    """For every 2- and 3-syllable Korean string: (occurrences, occurrences that start mid-word, right
+    after another Hangul syllable), from one pass over the distinct words. A compound's first part
+    (조선 in 조선군) or last part (총관 in 대총관이, ending where the stem ends) is not mid-word."""
     words = Counter(word for chapter in chapters for word in WORD.findall(chapter["text"]))
     total, inside = Counter(), Counter()
     for word, count in words.items():
+        stem_end = len(stem(word))
         for start in range(len(word) - 1):
             for width in (2, 3):
                 piece = word[start:start + width]
                 if len(piece) < width or not SHORT_KEY.fullmatch(piece):
                     continue
-                tail = re.match(r"[가-힣]*", word[start + width:]).group(0)
                 total[piece] += count
-                if (start and HANGUL.match(word[start - 1])) or (tail and tail not in STANDALONE_ENDINGS):
+                if start and HANGUL.match(word[start - 1]) and start + width != stem_end:
                     inside[piece] += count
     return total, inside
 
@@ -110,7 +113,7 @@ def inside_counts(chapters):
 def scan(chapters, entries, *, min_count=8, skipped=None):
     """Recurring stems and two-word phrases the glossary lacks, most frequent first. No API calls.
 
-    A short candidate that occurs mostly inside other words is left out (and appended to `skipped`).
+    A short candidate that nearly always starts mid-word is left out (and appended to `skipped`).
     Each candidate gets the context of its first occurrence and of its middle one.
     """
     counts, first = Counter(), {}
@@ -118,15 +121,15 @@ def scan(chapters, entries, *, min_count=8, skipped=None):
         for form, _ in _forms(chapter["text"]):
             counts[form] += 1
             first.setdefault(form, chapter["chapter"])
-    total, inside = inside_counts(chapters)
+    total, inside = mid_word_counts(chapters)
     wanted = {}
     for term, count in counts.items():
         if count < min_count or term in entries:
             continue
-        if SHORT_KEY.fullmatch(term) and total[term] >= INSIDE_MIN_COUNT and inside[term] / total[term] >= INSIDE_RATIO:
+        if (SHORT_KEY.fullmatch(term) and total[term] >= MID_WORD_MIN_COUNT
+                and inside[term] / total[term] >= MID_WORD_RATIO):
             if skipped is not None:
-                skipped.append({"term": term, "count": count, "occurrences": total[term],
-                                "inside_other_words": inside[term]})
+                skipped.append({"term": term, "count": count, "occurrences": total[term], "mid_word": inside[term]})
             continue
         wanted[term] = {part * count // CONTEXTS for part in range(CONTEXTS)}
     seen, contexts = Counter(), defaultdict(list)
@@ -207,7 +210,7 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
     skipped = []
     candidates = scan(chapters, entries, min_count=min_count, skipped=skipped)
     if skipped:
-        log(f"Skipped {len(skipped)} candidate(s) that occur mostly inside other words.")
+        log(f"Skipped {len(skipped)} candidate(s) that nearly always start mid-word.")
     chunks = [candidates[start:start + CHUNK] for start in range(0, len(candidates), CHUNK)]
     log(f"{len(candidates)} candidates in {len(chunks)} request(s).")
     sender = Sender(project, client, budget, journal_dir, reasoning=reasoning, sleep=sleep, clock=clock, log=log)
@@ -298,7 +301,7 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
                              "examples": row["examples"]}
     atomic_write_json(run_dir / "proposals.json", {"run": run, "terms": kept, "dropped": dropped})
     summary = dict(novel=project.config.id, run=run, candidates=len(candidates), requests=len(chunks),
-                   skipped_inside_other_words=len(skipped),
+                   skipped_mid_word=len(skipped),
                    proposed=len(kept), traps=len(traps), dropped=len(dropped), calls=sender.calls,
                    cost_usd=round(sender.cost_usd, 6), failed_requests=sorted(failed),
                    proposals_file=str(run_dir / "proposals.json"), report=str(run_dir / "report.md"))
@@ -321,9 +324,9 @@ def write_report(run_dir, kept, dropped, summary, skipped=()):
         lines.append(f"- {key} = {entry['english']} [{entry['category']}]{alternatives}{flag}")
     lines += ["", "## Dropped by the local checks", ""]
     lines += [f"- {item.get('korean')} = {item.get('english')}: {item['dropped']}" for item in dropped] or ["- none"]
-    lines += ["", "## Not sent: mostly inside other words", ""]
-    lines += [f"- {item['term']} ({item['count']}x): {item['inside_other_words']} of {item['occurrences']} "
-              "occurrences inside other words" for item in skipped] or ["- none"]
+    lines += ["", "## Not sent: nearly always mid-word", ""]
+    lines += [f"- {item['term']} ({item['count']}x): {item['mid_word']} of {item['occurrences']} "
+              "occurrences start mid-word" for item in skipped] or ["- none"]
     (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

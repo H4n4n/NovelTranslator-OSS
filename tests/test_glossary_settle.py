@@ -93,3 +93,64 @@ def test_install_adds_only_missing_keys_backs_up_and_leaves_traps_out(tmp_path):
     assert entries["흑룡검"]["source_provenance"]["origin"] == "manual"
     assert Path(result["backup"]).read_bytes() == before
     assert entries["백운성"]["english"] == "White Cloud Fortress"
+
+
+def test_the_scan_skips_one_syllable_forms_and_keys_mostly_inside_other_words():
+    texts = ["인도로 간다. 인도에 간다. 검 검 검.", "인도양 인도양 인도양 인도네시아. 흑룡검이 운다.", "흑룡검을 든다. 검이 운다."]
+    skipped = []
+    found = {item["term"] for item in gs.scan([{"chapter": n, "text": t} for n, t in enumerate(texts, 1)], {},
+                                              min_count=2, skipped=skipped)}
+    assert "흑룡검" in found and "인도" not in found and "검" not in found
+    assert skipped[0] == {"term": "인도", "count": 2, "occurrences": 6, "inside_other_words": 4}
+
+
+def test_the_two_contexts_are_the_first_and_the_middle_occurrence():
+    texts = ["흑룡검 하나.", "흑룡검 둘.", "흑룡검 셋.", "흑룡검 넷.", "흑룡검 다섯.", "흑룡검 여섯."]
+    item = next(i for i in gs.scan([{"chapter": n, "text": t} for n, t in enumerate(texts, 1)], {}, min_count=2)
+                if i["term"] == "흑룡검")
+    assert len(item["contexts"]) == 2 and "하나" in item["contexts"][0] and "넷" in item["contexts"][1]
+
+
+def test_a_one_syllable_proposal_is_dropped():
+    kept, dropped = gs.check_proposals([{"korean": "검", "english": "sword", "category": "weapon"}], "검이 운다.",
+                                       {}, PROFILE)
+    assert kept == {} and dropped[0]["dropped"].startswith("a 1-syllable key")
+
+
+class ThinkingSettler(FakeSettler):
+    """All reasoning and no content for a request with more candidates than `most`."""
+
+    def __init__(self, terms, most):
+        super().__init__(terms)
+        self.most = most
+
+    def create(self, **wire):
+        candidates = wire["messages"][1]["content"].split("CANDIDATES:\n", 1)[1].count("\n") + 1
+        if candidates > self.most:
+            self.requests.append(wire)
+            return response(None, finish="length")
+        return super().create(**wire)
+
+
+def test_an_all_reasoning_chunk_is_sent_once_more_as_two_halves(tmp_path):
+    novel, logs = project(tmp_path), []
+    client = ThinkingSettler(TERMS, most=1)
+    summary = gs.propose(novel, client, GoatBudget(10, 5.0), run="settle", profile=PROFILE, min_count=2,
+                         clock=OFF_PEAK, log=logs.append)
+    assert summary["requests"] == 1 and len(client.requests) == 3 and not summary["failed_requests"]
+    assert any("two halves" in line for line in logs) and "흑룡검" in json.loads(
+        open(summary["proposals_file"], encoding="utf-8").read())["terms"]
+    journal = novel.root / "output" / "glossary_settle" / "settle" / "journal"
+    assert any("glossary_settle_split" in path.name for path in journal.rglob("*"))
+    again = ThinkingSettler([], most=1)
+    gs.propose(novel, again, GoatBudget(10, 5.0), run="settle", profile=PROFILE, min_count=2,
+               clock=OFF_PEAK, log=lambda *_: None)
+    assert again.requests == []
+
+
+def test_halves_still_without_an_answer_are_reported_and_not_split_again(tmp_path):
+    client = ThinkingSettler(TERMS, most=0)
+    summary = gs.propose(project(tmp_path), client, GoatBudget(10, 5.0), run="settle", profile=PROFILE,
+                         min_count=2, clock=OFF_PEAK, log=lambda *_: None)
+    assert len(client.requests) == 3 and summary["proposed"] == 0
+    assert summary["failed_requests"] and "also after splitting" in summary["failed_requests"][0][1]

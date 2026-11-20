@@ -28,9 +28,12 @@ It reads only, so it can run while a translation is going.
 2. **Find:** one request with the numbered source and English paragraphs, the novel's
    `translation_addendum.txt`, and the glossary entries that occur in the chapter. Each entry shows
    whether it is locked or contextual and its note (up to 160 characters), so casing and form rules in
-   the notes are followed rather than "corrected". The judge below sees the same lines.
+   the notes are followed rather than "corrected". The judge below sees the same lines. The prompt
+   says the first line, the chapter heading, is settled and not to be reviewed: the engine sets the
+   English heading from `data/chapter_titles.json`, and the source's own numbering may differ.
 3. **Local filter:** a finding is kept only if its English occurs exactly once in the
-   chapter, the fix changes it, and the source words it quotes are in the chapter source.
+   chapter, the fix changes it, it is not on the first (heading) line, and the source words it
+   quotes are in the chapter source. A dropped finding keeps its reason in `chapters/NNNN.json`.
 4. **Verify:** one more request, only when findings survived, shows each one with its
    paragraphs and asks to keep it, improve the fix, or drop it.
 5. **Output** in `output/review/<run>/`:
@@ -69,6 +72,21 @@ with its decision and reason), `report.md`, and `approved_<first>_<last>.json` f
 It shares the reviewer's journal, budget, pause and off-peak handling below, so a rerun replays
 recorded answers. It uses the same model family as the reviewer, so it is a weaker second
 opinion than a different model or a person.
+
+## Answers that are all reasoning
+
+Sometimes the model spends every completion token thinking and returns no content (`content`
+None, `finish_reason` "length"). Such an answer is accounted like any other and then handled once:
+
+- the reviewer sends that find or verify request once more at low reasoning, as its own journaled
+  request (`chapter_review_low`, `chapter_review_verify_low`); a chapter whose find answer is
+  still empty is listed as not reviewed;
+- the judge splits the chapter's items in half and judges each half once (`review_judge_half1`,
+  `review_judge_half2`); items still without an answer are listed as not judged;
+- `glossary_settle.py` splits the chunk into two halves the same way (`glossary_settle_split`).
+
+Every resend is logged. Nothing is resent or split a second time, and a rerun replays all the
+recorded answers, so it costs nothing and gives the same result.
 
 ## Safety and cost
 

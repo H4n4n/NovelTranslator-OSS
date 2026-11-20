@@ -73,3 +73,47 @@ def test_the_budget_refuses_before_sending(tmp_path):
     summary = review_judge.judge_review(novel, client, GoatBudget(10, 0.000001), run="0001_0002",
                                         clock=OFF_PEAK, log=lambda *_: None)
     assert client.requests == [] and summary["not_judged"] and summary["judged"] == 0
+
+
+class SplitJudge(FakeJudge):
+    """All reasoning and no decisions for a request with more items than `most`; else approves all."""
+
+    def __init__(self, most):
+        super().__init__([])
+        self.most = most
+
+    def create(self, **wire):
+        self.requests.append(wire)
+        items = wire["messages"][1]["content"].count("\nOLD: ")
+        if items > self.most:
+            return response(None, "length")
+        return response(json.dumps({"decisions": [{"id": n, "decision": "approve", "reason": "real"}
+                                                  for n in range(1, items + 1)]}))
+
+
+SWORD = {"kind": "meaning", "s": 2, "e": 2, "source": "검을 들어라", "english": "“Raise your sword.”",
+         "fix": "“Lift your sword.”", "why": "verb"}
+KEEP_TWO = {"all": [{"id": 1, "verdict": "keep", "why": "real"}, {"id": 2, "verdict": "keep", "why": "real"}]}
+
+
+def test_an_all_reasoning_answer_is_judged_again_in_two_halves(tmp_path):
+    novel, _ = run(tmp_path, FakeClient(findings={1: [ZHANG, SWORD]}, verdicts=KEEP_TWO))
+    logs, client = [], SplitJudge(most=1)
+    summary = review_judge.judge_review(novel, client, GoatBudget(10, 5.0), run="0001_0002", clock=OFF_PEAK,
+                                        log=logs.append)
+    assert len(client.requests) == 3 and summary["approved"] == 2 and not summary["not_judged"]
+    assert any("two halves" in line for line in logs)
+    journal = novel.root / "output" / "review" / "0001_0002" / "judge" / "journal"
+    assert any("review_judge_half2" in path.name for path in journal.rglob("*"))
+    again = SplitJudge(most=1)
+    assert review_judge.judge_review(novel, again, GoatBudget(10, 5.0), run="0001_0002", clock=OFF_PEAK,
+                                     log=lambda *_: None)["approved"] == 2 and again.requests == []
+
+
+def test_items_still_without_an_answer_after_the_split_are_reported_not_judged(tmp_path):
+    novel, _ = run(tmp_path, FakeClient(findings={1: [ZHANG]}))
+    client = SplitJudge(most=0)
+    summary = review_judge.judge_review(novel, client, GoatBudget(10, 5.0), run="0001_0002", clock=OFF_PEAK,
+                                        log=lambda *_: None)
+    assert len(client.requests) == 1 and summary["judged"] == 0  # One item cannot be split.
+    assert summary["not_judged"] and "all reasoning" in summary["not_judged"][0][1]

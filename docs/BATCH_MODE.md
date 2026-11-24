@@ -139,7 +139,9 @@ took 22.5 minutes one by one.
 Each request in flight holds its worst-case cost aside (up to $1.50 for an audit chunk),
 so a small budget fits only a few at once. The next chunk then waits for one to finish;
 the early sends end only when nothing is in flight and the next chunk still doesn't fit,
-and the audit sends the rest itself, which stops cleanly at the budget. Before this, the
+and the audit sends the rest itself, which stops cleanly at the budget. When a batch
+prepared ahead holds the room and the audit has nothing of its own in flight, the chunk is
+sent and waits for room (see Budget). Before this, the
 first refusal ended the early sends: tyrant_king_gojong's final audit (156 chunks, $10.50
 left) sent 12 together and the other 143 one by one, 44 minutes.
 
@@ -244,6 +246,28 @@ request reserves its own bound under a lock and releases it when it is accounted
 sum of reservations never exceeds the remaining budget. The pool starts a request only
 when the worst case of everything in flight still fits; if not even one request fits,
 the run stops with `ALLOWANCE_EXHAUSTED` as today.
+
+**Overlapping batches wait for each other's reservations.** With `overlap`, a batch being
+saved, one or two batches prepared ahead and the periodic audit send from different threads,
+and their reservations share the one cap. A request that does not fit only because requests
+in flight on other threads hold the room waits for them to settle (`budget_wait` in the run
+log, with phase `start` and then `end`, the seconds waited and whether it then fits), and is
+sent then. The wait happens before the request is prepared, so the pause flag, the off-peak
+gate and the start time it is priced at all apply after it. It is refused, and the run stops
+with `ALLOWANCE_EXHAUSTED`, only when it still does not fit with nothing else in flight, when
+the budget is blocked, or when its own thread still holds a reservation. A reservation whose
+request failed after its send without being accounted stays held (its cost is unknown), but
+nothing waits for it. Waiting never raises the cap.
+
+Before this, each batch's pool counted only its own requests in flight. On
+possession_life_namhansanseong (`chapters` 50, `max_parallel` 100, `--budget-usd 8`) the run
+stopped at chapter 100 with about $2 spent: batch 151–205, prepared ahead, was in its
+pre-pass with up to 100 requests of about $0.08 worst case each, which filled the cap while
+batch 101–150 translated. A translation request of 101–150 was refused, since its pool counted
+only its own requests, and that refusal ended the run as `BUDGET_REACHED`. A rerun with the same cap reused every paid answer and finished. Journey of
+the Martial Artist hit the same refusal at chapter 300 but went on by itself only by chance:
+one of its batch translations had failed acceptance and blocked the budget, so the stop was
+reported as a failure, not as `ALLOWANCE_EXHAUSTED`, and the runner restarted it.
 
 At peak rates a translation or a batch helper request reserves about $0.08, so 32 in
 flight hold about $2.60 aside, not 32 × $1.50.

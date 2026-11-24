@@ -163,6 +163,51 @@ def test_halves_still_without_an_answer_are_reported_and_not_split_again(tmp_pat
     assert summary["failed_requests"] and "also after splitting" in summary["failed_requests"][0][1]
 
 
+class CutOffSettler(FakeSettler):
+    """Cut off partway through the JSON (content, finish_reason "length") for a request with more candidates
+    than `most`, or with a candidate in `stubborn`."""
+
+    def __init__(self, terms, most, stubborn=()):
+        super().__init__(terms)
+        self.most, self.stubborn = most, set(stubborn)
+
+    def create(self, **wire):
+        listed = wire["messages"][1]["content"].split("CANDIDATES:\n", 1)[1].splitlines()
+        if len(listed) > self.most or any(line.split(". ", 1)[1].split(" (", 1)[0] in self.stubborn for line in listed):
+            self.requests.append(wire)
+            return response('{"terms": [{"korean": "흑룡', finish="length")
+        return super().create(**wire)
+
+
+def test_a_chunk_cut_off_partway_is_sent_once_more_as_two_halves(tmp_path):
+    novel, logs = project(tmp_path), []
+    client = CutOffSettler(TERMS, most=1)
+    summary = gs.propose(novel, client, GoatBudget(10, 5.0), run="settle", profile=PROFILE, min_count=2,
+                         clock=OFF_PEAK, log=logs.append)
+    assert summary["requests"] == 1 and len(client.requests) == 3 and not summary["failed_requests"]
+    assert any("cut off partway" in line and "two halves" in line for line in logs)
+    assert "흑룡검" in json.loads(open(summary["proposals_file"], encoding="utf-8").read())["terms"]
+    journal = novel.root / "output" / "glossary_settle" / "settle" / "journal"
+    assert len([path for path in journal.rglob("*glossary_settle_split*")]) == 2
+
+
+def test_a_half_cut_off_again_is_recorded_as_not_done(tmp_path):
+    novel = project(tmp_path)
+    entries = json.loads(novel.glossary_file.read_text(encoding="utf-8"))["entries"]
+    candidates = [item["term"] for item in gs.scan(json.loads(novel.chapters_file.read_text(encoding="utf-8")),
+                                                    entries, min_count=2)]
+    second_half = candidates[len(candidates) // 2:]
+    client = CutOffSettler(TERMS, most=len(candidates) - 1, stubborn=second_half[:1])
+    summary = gs.propose(novel, client, GoatBudget(10, 5.0), run="settle", profile=PROFILE, min_count=2,
+                         clock=OFF_PEAK, log=lambda *_: None)
+    assert len(client.requests) == 3  # the chunk, then its halves; nothing is split further
+    assert summary["failed_requests"] == [(1, f"{len(second_half)} of {len(candidates)} candidates got no answer, "
+                                              "also after splitting the request in two")]
+    saved = json.loads((novel.root / "output" / "glossary_settle" / "settle" / "chunks" / "0001.json")
+                       .read_text(encoding="utf-8"))
+    assert saved["not_done_terms"] == second_half and saved["terms"]
+
+
 def test_installed_terms_are_not_held_from_audits_like_hand_settled_ones(tmp_path):
     import translate_production_unattended_scheduled_retroactive_dynamic_pricing as production
     novel, _, _, _ = proposed(tmp_path)

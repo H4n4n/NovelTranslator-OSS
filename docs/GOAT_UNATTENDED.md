@@ -73,6 +73,9 @@ credit-equivalent counters, pre-send refusals, and durable checkpoint details in
 the report. It does not mean the novel is complete. The refused request remains
 PLANNED, never STARTED/UNCERTAIN. Committed chapters remain committed; any paid
 pending translation remains preserved. Provider/integrity failures exit 2.
+A request that fits only once requests in flight on other threads settle (overlapping
+batches, audit chunks) waits for them instead and is not a refusal (`budget_wait` in the
+run log; docs/BATCH_MODE.md, Budget).
 
 No allowance is automatically renewed. Re-run preflight, choose new limits,
 create a new plan, review it and explicitly authorize another invocation.

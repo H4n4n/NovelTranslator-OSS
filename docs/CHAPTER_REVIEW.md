@@ -84,6 +84,10 @@ None, `finish_reason` "length"). Such an answer is accounted like any other and 
 - the judge splits the chapter's items in half and judges each half once (`review_judge_half1`,
   `review_judge_half2`); items still without an answer are listed as not judged;
 - `glossary_settle.py` splits the chunk into two halves the same way (`glossary_settle_split`).
+  It does so for any cut-off chunk answer (`finish_reason` "length"), also one that stops
+  partway through its JSON with some content: half a list of terms is not a complete answer.
+  A half that is cut off again is reported as not done, and its candidates are listed under
+  `not_done_terms` in the chunk's file under `output/glossary_settle/<run>/chunks/`.
 
 Every resend is logged. Nothing is resent or split a second time, and a rerun replays all the
 recorded answers, so it costs nothing and gives the same result.

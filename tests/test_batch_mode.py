@@ -13,7 +13,7 @@ import batch_translation as bt
 import run_production_engine as launcher
 from controlled_trial_execute import _capture_core_runtime, _restore_core_runtime
 from novel_project import BatchModeConfig, NovelConfig
-from production_goat_runtime import GoatAllowanceExhausted, GoatBudget, install_goat_runtime
+from production_goat_runtime import GoatAllowanceExhausted, GoatBudget, GoatRoomHeld, install_goat_runtime
 from production_provider_contract import PROVIDER_COMMAND_CODE as GOAT
 from production_translation_request import build_production_translation_user_prompt
 from review_queue import read_items
@@ -199,6 +199,87 @@ def test_budget_reserves_each_request_in_flight_until_accounted():
     with budget.authorize(wire(), started):
         pass  # Room again once the first request is accounted; an unsent authorization holds nothing.
     assert budget.reserved_usd == pytest.approx(0) and budget.records[0]["status"] == "success"
+
+
+def _hold(budget, request, started, *, abandon=False):
+    """Another thread's request in flight: returns (thread, release). It is accounted on release."""
+    holding, release = threading.Event(), threading.Event()
+
+    def in_flight():
+        with budget.authorize(request, started):
+            budget.begin("h" * 64)
+        if abandon:
+            budget.abandon_current()
+        holding.set()
+        if not abandon:
+            release.wait(5)
+            budget.account({"cost_usd": 0.001, "prompt_tokens": 10, "completion_tokens": 10})
+
+    worker = threading.Thread(target=in_flight)
+    worker.start()
+    assert holding.wait(5)
+    return worker, release
+
+
+def test_a_request_waits_for_room_another_thread_holds_and_the_wait_is_logged():
+    started = CLOCK().isoformat()
+    bound = GoatBudget(10, 1.0).request_bound(wire(), started)["credit_equivalent_upper"]
+    budget, waits = GoatBudget(10, bound * 1.5), []
+    budget.waits_for_room, budget.on_wait = True, lambda **fields: waits.append(fields)
+    worker, release = _hold(budget, wire(), started)
+    with pytest.raises(GoatRoomHeld):  # not a refusal: nothing is recorded, the caller waits
+        with budget.authorize(wire(), started):
+            pass
+    assert budget.pre_send_refusals == []
+    threading.Timer(0.2, release.set).start()
+    assert budget.wait_for_room(wire(), started) > 0
+    assert [item["phase"] for item in waits] == ["start", "end"] and waits[1]["fits"] is True
+    assert waits[0]["reserved_usd"] == pytest.approx(bound, abs=1e-6)
+    with budget.authorize(wire(), started):
+        pass
+    worker.join(5)
+    assert budget.pre_send_refusals == [] and budget.reserved_usd == pytest.approx(0)
+
+
+@pytest.mark.parametrize("case", ["nothing_in_flight", "own_reservation", "abandoned", "waiting_off"])
+def test_a_request_that_cannot_fit_is_refused_without_waiting(case):
+    started = CLOCK().isoformat()
+    bound = GoatBudget(10, 1.0).request_bound(wire(), started)["credit_equivalent_upper"]
+    budget, waits = GoatBudget(10, bound * (0.5 if case == "nothing_in_flight" else 1.5)), []
+    budget.waits_for_room, budget.on_wait = case != "waiting_off", lambda **fields: waits.append(fields)
+    if case == "own_reservation":  # this thread cannot settle its own request while it waits
+        with budget.authorize(wire(), started):
+            budget.begin("o" * 64)
+    release = threading.Event()
+    if case in ("abandoned", "waiting_off"):
+        release = _hold(budget, wire(), started, abandon=case == "abandoned")[1]
+    assert budget.wait_for_room(wire(), started) == 0.0 and waits == []
+    with pytest.raises(GoatAllowanceExhausted) as refused:
+        with budget.authorize(wire(), started):
+            pass
+    release.set()
+    assert type(refused.value) is GoatAllowanceExhausted
+    assert budget.pre_send_refusals == [{"kind": "deterministic_local_budget_refusal"}]
+
+
+def test_batch_requests_wait_for_a_neighbour_holding_the_room_and_the_run_goes_on(batch_engine, monkeypatch):
+    """Overlapping batches: requests of a batch prepared ahead hold most of the cap. The batch being
+    prepared waits for them instead of stopping the run, and still never spends past the cap."""
+    project, module, provider, budget = batch_engine
+    events, log_event = [], module.log_event
+    monkeypatch.setattr(module, "log_event", lambda event, **fields: (events.append((event, fields)),
+                                                                      log_event(event, **fields)))
+    started = CLOCK().isoformat()
+    neighbour = wire(max_completion=1_000_000)
+    budget.max_cost_usd = budget.request_bound(neighbour, started)["credit_equivalent_upper"] + 0.01
+    worker, release = _hold(budget, neighbour, started)
+    threading.Timer(0.5, release.set).start()
+    run_all(module)
+    worker.join(5)
+    assert module.progress["completed"] == [1, 2, 3]
+    assert budget.pre_send_refusals == [] and budget.actual_cost_usd <= budget.max_cost_usd
+    waits = [fields for event, fields in events if event == "budget_wait"]
+    assert waits[0]["phase"] == "start" and any(item["phase"] == "end" and item["fits"] for item in waits)
 
 
 def test_definite_failure_releases_its_reservation():

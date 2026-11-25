@@ -11,9 +11,10 @@ to the profile's general one, capitalize formal names the way the engine stores 
 that mostly match inside other words. Results go to output/glossary_settle/<run>/ (proposals.json,
 report.md); the glossary is not touched.
 
-A chunk whose answer is all reasoning and no content (every completion token spent thinking) is
-sent once more as two half chunks, each its own journaled request; a half that again gets no answer
-is reported as not done. Nothing is split further.
+A chunk whose answer is cut off (finish_reason "length"), whether it is all reasoning with no
+content or stops partway through its JSON, is sent once more as two half chunks, each its own
+journaled request; a half that again gets no complete answer is reported as not done, with its
+candidates listed in the chunk file (`not_done_terms`). Nothing is split further.
 
 `install` adds the approved proposals of a run to data/glossary.json after backing it up: only
 keys the glossary lacks, never a changed entry, and no flagged trap unless asked. It holds the
@@ -224,11 +225,11 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
     sender = Sender(project, client, budget, journal_dir, reasoning=reasoning, sleep=sleep, clock=clock, log=log)
     answers, failed = {}, []
 
-    def split(index, chunk, key, cost):
-        """Send an all-reasoning chunk once more as two halves, each its own journaled request."""
-        log(f"Request {index + 1}/{len(chunks)}: the answer was all reasoning and no terms; "
+    def split(index, chunk, key, cost, why):
+        """Send a cut-off chunk once more as two halves, each its own journaled request."""
+        log(f"Request {index + 1}/{len(chunks)}: {why}; "
             f"sending its {len(chunk)} candidates again as two halves.")
-        middle, terms, left = len(chunk) // 2, [], 0
+        middle, terms, left, not_done = len(chunk) // 2, [], 0, []
         for number, part in enumerate((chunk[:middle], chunk[middle:])):
             messages = settle_messages(part, rules, profile.allowed_categories, examples)
             part_key = hashlib.sha256(json.dumps(messages, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -241,12 +242,14 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
                 terms += parse_json(answer["content"]).get("terms") or []
             except (ValueError, json.JSONDecodeError):
                 left += len(part)
+                not_done += [item["term"] for item in part]
         problem = (f"{left} of {len(chunk)} candidates got no answer, also after splitting the request in two"
                    if left else None)
         if left == len(chunk):
             return index, None, problem
         atomic_write_json(run_dir / "chunks" / f"{index + 1:04d}.json",
-                          {"key": key, "terms": terms, "not_done": problem, "cost_usd": cost})
+                          {"key": key, "terms": terms, "not_done": problem, "not_done_terms": not_done,
+                           "cost_usd": cost})
         log(f"Request {index + 1}/{len(chunks)}: {len(terms)} terms from its halves (${cost:.4f})")
         return index, terms, problem
 
@@ -262,8 +265,10 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
         try:
             answer = sender.ask("glossary_settle", index + 1, messages, SETTLE_TOKENS,
                                 source_sha256=key, english_sha256=key)
-            if reasoning_only(answer) and len(chunk) > 1:
-                return split(index, chunk, key, answer["cost_usd"])
+            if answer["finish_reason"] == "length" and len(chunk) > 1:
+                why = ("the answer was all reasoning and no terms" if reasoning_only(answer)
+                       else "the answer was cut off partway")
+                return split(index, chunk, key, answer["cost_usd"], why)
         except PaidRequestUncertainError:
             return index, None, "a request got no recorded answer; rerun to send it once more"
         except PaidRequestJournalError as exc:

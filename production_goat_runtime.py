@@ -10,6 +10,7 @@ import inspect
 import json
 import math
 import threading
+import time
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -91,6 +92,11 @@ class GoatAllowanceExhausted(GoatRuntimeError):
     deterministic_local_budget_refusal = True
 
 
+class GoatRoomHeld(GoatAllowanceExhausted):
+    """The request would fit once requests in flight elsewhere settle. Not a refusal: nothing is
+    recorded, the journal stays PLANNED, and the caller waits for room and asks again."""
+
+
 class GoatResponseRejected(GoatRuntimeError):
     """A helper call was answered and accounted, but its content is unusable."""
     response_rejected = True
@@ -169,7 +175,15 @@ class GoatBudget:
     Batch mode sends from several threads. Each authorization reserves its own
     conservative bound until its usage is accounted, so the requests in flight
     together never exceed what is left.
+
+    With waits_for_room (set by the production runtime), a request that does not fit
+    only because requests in flight on other threads hold the room waits for them to
+    settle instead of being refused (wait_for_room, GoatRoomHeld). It is refused, as
+    before, when nothing else is in flight, the budget is blocked, or its own thread
+    still holds a reservation. Waiting never raises the cap.
     """
+    WAIT_SLICE_SECONDS = 5.0  # A wait re-checks at least this often (a blocked budget does not notify).
+
     def __init__(self, max_api_calls, max_credit_equivalent_usd):
         if type(max_api_calls) is not int or max_api_calls < 1:
             raise GoatRuntimeError("GOAT physical-send ceiling must be positive")
@@ -188,8 +202,11 @@ class GoatBudget:
         self.blocked = False
         self.unaccounted_provider_response = False
         self._lock = threading.RLock()
+        self._changed = threading.Condition(self._lock)
         self._local = threading.local()
         self._open = []
+        self.waits_for_room = False
+        self.on_wait = None  # Called with the fields of each wait's start and end, outside the lock.
 
     def request_bound(self, request, started):
         """The conservative credit-equivalent a request may cost, or None without a reviewed bound."""
@@ -205,6 +222,55 @@ class GoatBudget:
         with self._lock:
             return self.max_cost_usd - self.actual_cost_usd - self.reserved_usd
 
+    def _fits(self, bound):
+        return bound <= self.max_cost_usd - self.actual_cost_usd - self.reserved_usd + 1e-12
+
+    def others_in_flight(self):
+        """Requests in flight on other threads that will release their reservation when they settle.
+
+        False while this thread holds a reservation itself: it cannot settle while it waits."""
+        me = threading.get_ident()
+        with self._lock:
+            if any(item["owner"] == me for item in self._open):
+                return False
+            return any(item["in_flight"] for item in self._open)
+
+    def _room_held_elsewhere(self, bound):
+        return (self.waits_for_room and not self.blocked
+                and self.api_calls + len(self._open) < self.max_api_calls
+                and not self._fits(bound) and self.others_in_flight())
+
+    def _report_wait(self, **fields):
+        if self.on_wait is not None:
+            self.on_wait(**fields)
+
+    def wait_for_room(self, request, started):
+        """Before a request is prepared: wait while it fits only once requests elsewhere settle.
+
+        Returns at once when it fits, or when it would be refused anyway (authorize says why).
+        Each wait is reported to on_wait when it starts and when it ends."""
+        if not self.waits_for_room:
+            return 0.0
+        try:
+            bound = self.request_bound(request, started)["credit_equivalent_upper"]
+        except ValueError:
+            return 0.0  # authorize() refuses it with the precise reason
+        with self._lock:
+            if not self._room_held_elsewhere(bound):
+                return 0.0
+            fields = dict(bound_usd=round(bound, 6), reserved_usd=round(self.reserved_usd, 6),
+                          spent_usd=round(self.actual_cost_usd, 6), cap_usd=self.max_cost_usd,
+                          in_flight=len(self._open))
+        self._report_wait(phase="start", **fields)
+        began = time.monotonic()
+        with self._changed:
+            while self._room_held_elsewhere(bound):
+                self._changed.wait(self.WAIT_SLICE_SECONDS)
+            fits = self._fits(bound) and not self.blocked
+        waited = time.monotonic() - began
+        self._report_wait(phase="end", waited_seconds=round(waited, 3), fits=fits, bound_usd=round(bound, 6))
+        return waited
+
     @contextmanager
     def authorize(self, request, started):
         try:
@@ -214,11 +280,14 @@ class GoatBudget:
             raise GoatRuntimeError("GOAT uncapped authorization needs architecture review: no reviewed hard bound") from exc
         bound = exposure["credit_equivalent_upper"]
         with self._lock:
+            if self._room_held_elsewhere(bound):
+                raise GoatRoomHeld("GOAT budget room is held by requests in flight; waiting for them")
             if (self.blocked or self.api_calls + len(self._open) >= self.max_api_calls
-                    or bound > self.max_cost_usd - self.actual_cost_usd - self.reserved_usd + 1e-12):
+                    or not self._fits(bound)):
                 self.pre_send_refusals.append({"kind": "deterministic_local_budget_refusal"})
                 raise GoatAllowanceExhausted("GOAT invocation send/credit-equivalent ceiling refuses request")
-            reservation = {"exposure": exposure, "record": None, "open": True}
+            reservation = {"exposure": exposure, "record": None, "open": True,
+                           "owner": threading.get_ident(), "in_flight": True}
             self._open.append(reservation)
             self.reserved_usd += bound
             self.authorized_exposure = exposure  # The latest authorization, for single-request callers.
@@ -236,6 +305,17 @@ class GoatBudget:
                 reservation["open"] = False
                 self._open.remove(reservation)
                 self.reserved_usd -= reservation["exposure"]["credit_equivalent_upper"]
+                self._changed.notify_all()
+
+    def abandon_current(self):
+        """This thread's request failed after its send without being accounted.
+
+        Its reservation stays held (its cost is unknown), but no request waits for it to settle."""
+        reservation = getattr(self._local, "reservation", None)
+        with self._lock:
+            if reservation is not None and reservation["open"] and reservation["in_flight"]:
+                reservation["in_flight"] = False
+                self._changed.notify_all()
 
     def current_record(self):
         reservation = getattr(self._local, "reservation", None)
@@ -291,6 +371,11 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
         batch_context.validate_runtime_locked(module)
     identity = provider_identity(PROVIDER_COMMAND_CODE, module.MODEL)
     clock = clock or (lambda: datetime.now(timezone.utc))
+    if budget is not None:
+        # Overlapping batches and audit chunks send from several threads: a request that fits
+        # only once the others settle waits for them, and every wait is logged.
+        budget.waits_for_room = True
+        budget.on_wait = lambda **fields: module.log_event("budget_wait", stage="budget", **fields)
     def effective_inventory():
         raw = inspect_paid_request_journals(module.PAID_REQUEST_JOURNAL_DIR)
         if raw["errors"]:
@@ -487,12 +572,35 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                         claim_send(module, kind, binding)
                     yield send
 
-        result = run_journaled_paid_request(journal_path=path, identity=binding,
-            save_json=module.atomic_write_json, prepare_attempt=prepare, send_once=send,
-            authorize_send=authorize,
-            observe_request=(None if batch_context is None else
-                lambda observation: batch_context.observe_locked(observation, wire)),
-            normalize_response=lambda raw, context: {"raw_response": raw_response_record(raw), **context})
+        def unsent():
+            try:
+                record = load_matching_journal(path, binding)
+            except Exception:
+                return False  # run_journaled_paid_request reports it
+            return record is None or record.get("status") == "planned"
+
+        while True:
+            # Requests in flight elsewhere (a batch prepared ahead, audit chunks) may hold the
+            # room this one needs. It waits for them before prepare(), so the pause flag,
+            # off-peak gate and the start time it is priced at still apply after the wait.
+            # Nothing elsewhere in flight (every sequential request): no clock read, no wait.
+            if (budget is not None and not replay_only and budget.waits_for_room
+                    and budget.others_in_flight() and unsent()):
+                budget.wait_for_room(wire, clock().astimezone(timezone.utc).isoformat())
+            try:
+                result = run_journaled_paid_request(journal_path=path, identity=binding,
+                    save_json=module.atomic_write_json, prepare_attempt=prepare, send_once=send,
+                    authorize_send=authorize,
+                    observe_request=(None if batch_context is None else
+                        lambda observation: batch_context.observe_locked(observation, wire)),
+                    normalize_response=lambda raw, context: {"raw_response": raw_response_record(raw), **context})
+                break
+            except GoatRoomHeld:
+                continue  # The journal is still PLANNED: wait for room and ask again.
+            except BaseException:
+                if budget is not None:
+                    budget.abandon_current()
+                raise
         recorded = result["response"]
         accounted = False
         try:
@@ -579,6 +687,7 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                     # a replay as a new physical attempt or fabricating usage.
                     budget.unaccounted_provider_response = True
                 budget.blocked = True
+                budget.abandon_current()
                 record = budget.current_record()
                 if result["api_called"] and record is not None and record["status"] == "started":
                     record["status"] = "missing_usage_unaccounted_response"
@@ -867,7 +976,9 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
             try:
                 while queue or running:
                     while queue and not stopped and len(running) < AUDIT_CHUNKS_IN_FLIGHT:
-                        if not fits(queue[0]):
+                        if not fits(queue[0]) and (running or budget is None or not budget.others_in_flight()):
+                            # With none of its own in flight but a batch prepared ahead holding the
+                            # room, the chunk is sent and waits for room before it is prepared.
                             if not running:
                                 stopped = True
                                 stop_sending(GoatAllowanceExhausted("budget left is too small for the next audit chunk"))

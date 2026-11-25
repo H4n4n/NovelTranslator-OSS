@@ -376,8 +376,26 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
         # only once the others settle waits for them, and every wait is logged.
         budget.waits_for_room = True
         budget.on_wait = lambda **fields: module.log_event("budget_wait", stage="budget", **fields)
+    # Journal files of requests this run is still waiting on, from any thread. Batch mode
+    # sends up to max_parallel at once, so their records are STARTED (and briefly have a
+    # temp file beside them) while a neighbour's answer is checked.
+    in_flight_journals, in_flight_lock = set(), threading.Lock()
+
+    def without_in_flight(raw):
+        """A request this run is still waiting on is not ambiguous history: its own thread
+        records its answer, or blocks the budget if the outcome is uncertain."""
+        with in_flight_lock:
+            names = set(in_flight_journals)
+        if not names:
+            return raw
+        temp = "stale paid request journal temporary file: ."
+        def in_flight_temp(error):
+            return error.startswith(temp) and any(error[len(temp):].startswith(name + ".") for name in names)
+        return {**raw, "errors": [error for error in raw["errors"] if not in_flight_temp(error)],
+                "uncertain": [item for item in raw["uncertain"] if item["file"] not in names]}
+
     def effective_inventory():
-        raw = inspect_paid_request_journals(module.PAID_REQUEST_JOURNAL_DIR)
+        raw = without_in_flight(inspect_paid_request_journals(module.PAID_REQUEST_JOURNAL_DIR))
         if raw["errors"]:
             return raw
         from pathlib import Path
@@ -579,28 +597,36 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                 return False  # run_journaled_paid_request reports it
             return record is None or record.get("status") == "planned"
 
-        while True:
-            # Requests in flight elsewhere (a batch prepared ahead, audit chunks) may hold the
-            # room this one needs. It waits for them before prepare(), so the pause flag,
-            # off-peak gate and the start time it is priced at still apply after the wait.
-            # Nothing elsewhere in flight (every sequential request): no clock read, no wait.
-            if (budget is not None and not replay_only and budget.waits_for_room
-                    and budget.others_in_flight() and unsent()):
-                budget.wait_for_room(wire, clock().astimezone(timezone.utc).isoformat())
-            try:
-                result = run_journaled_paid_request(journal_path=path, identity=binding,
-                    save_json=module.atomic_write_json, prepare_attempt=prepare, send_once=send,
-                    authorize_send=authorize,
-                    observe_request=(None if batch_context is None else
-                        lambda observation: batch_context.observe_locked(observation, wire)),
-                    normalize_response=lambda raw, context: {"raw_response": raw_response_record(raw), **context})
-                break
-            except GoatRoomHeld:
-                continue  # The journal is still PLANNED: wait for room and ask again.
-            except BaseException:
-                if budget is not None:
-                    budget.abandon_current()
-                raise
+        journal_name = Path(path).name
+        with in_flight_lock:
+            in_flight_journals.add(journal_name)
+        try:
+            while True:
+                # Requests in flight elsewhere (a batch prepared ahead, audit chunks) may hold the
+                # room this one needs. It waits for them before prepare(), so the pause flag,
+                # off-peak gate and the start time it is priced at still apply after the wait.
+                # Nothing elsewhere in flight (every sequential request): no clock read, no wait.
+                if (budget is not None and not replay_only and budget.waits_for_room
+                        and budget.others_in_flight() and unsent()):
+                    budget.wait_for_room(wire, clock().astimezone(timezone.utc).isoformat())
+                try:
+                    result = run_journaled_paid_request(journal_path=path, identity=binding,
+                        save_json=module.atomic_write_json, prepare_attempt=prepare, send_once=send,
+                        authorize_send=authorize,
+                        observe_request=(None if batch_context is None else
+                            lambda observation: batch_context.observe_locked(observation, wire)),
+                        normalize_response=lambda raw, context: {"raw_response": raw_response_record(raw), **context})
+                    break
+                except GoatRoomHeld:
+                    continue  # The journal is still PLANNED: wait for room and ask again.
+                except BaseException:
+                    if budget is not None:
+                        budget.abandon_current()
+                    raise
+        finally:
+            # Answered or failed: from here its journal record speaks for itself.
+            with in_flight_lock:
+                in_flight_journals.discard(journal_name)
         recorded = result["response"]
         accounted = False
         try:
@@ -686,7 +712,10 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
                     # Applies to fresh sends AND local replay, without counting
                     # a replay as a new physical attempt or fabricating usage.
                     budget.unaccounted_provider_response = True
-                budget.blocked = True
+                    # Its cost is unknown, so nothing more is sent this run.
+                    budget.blocked = True
+                # An accounted answer's cost is known and its record stays RESPONSE_RECORDED
+                # (a retry replays it, never resends): this request fails, the budget does not.
                 budget.abandon_current()
                 record = budget.current_record()
                 if result["api_called"] and record is not None and record["status"] == "started":

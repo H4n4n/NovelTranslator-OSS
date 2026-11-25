@@ -307,6 +307,8 @@ class FakeProvider:
         self.explode_prepass = set()
         self.audit_answers = {}  # source key -> audit decision; every other target is kept
         self.cut_off_once = set()
+        self.saturated_once = set()  # cut off at the 50K ceiling with real English, as Journey ch. 305
+        self.before_translation = {}  # chapter -> called before its translation is answered
         self.decision = {"terms": [], "headings": [], "continuity": "Memory after the batch."}
 
     def kind(self, body):
@@ -355,9 +357,13 @@ class FakeProvider:
                     for item in targets], "issues": []}, ensure_ascii=False))
             if kind == "translation":
                 number = self.chapter_of(body)
+                self.before_translation.pop(number, lambda: None)()
                 if number in self.cut_off_once:
                     self.cut_off_once.discard(number)
                     return response(content="Chapter", finish="length", completion=50_000)
+                if number in self.saturated_once:
+                    self.saturated_once.discard(number)
+                    return response(content=TRANSLATIONS[number][:60], finish="length", completion=50_000)
                 return response(content=TRANSLATIONS[number])
             if "new_terms" in body["messages"][0]["content"]:  # sequential state extraction
                 return response(content=json.dumps({"new_terms": [], "continuity_summary": "Sequential memory.",
@@ -526,6 +532,39 @@ def test_failed_batch_translation_is_sent_again_with_the_batch_terms(batch_engin
     assert list((project.root / "backup" / "superseded_translations").rglob("0002.chapter_translation.json"))
     assert (2, "batch_translation") in {(item["chapter"], item["kind"]) for item in read_items(project.data_dir)}
     assert batch_runner.manifests(project.data_dir)[0]["status"] == batch_runner.COMPLETE
+
+
+@pytest.mark.parametrize("history", ["clean", "ambiguous"])
+def test_a_translation_cut_off_while_its_neighbours_are_in_flight_fails_only_its_chapter(
+        batch_engine, monkeypatch, history):
+    """Journey ch. 305: a batch translation cut off at the 50K ceiling is checked against the
+    request journals while the rest of the batch is still in flight. Their STARTED records are
+    not ambiguous history, so the check passes ("clean"). When a check after the answer was
+    accounted does fail ("ambiguous"), only that chapter fails: its cost is known, so the shared
+    budget stays open and the chapter is translated again at commit."""
+    import production_goat_runtime as runtime
+    project, module, provider, budget = batch_engine
+    neighbour_sent, checked, inventories = threading.Event(), threading.Event(), []
+    real = runtime.inspect_paid_request_journals
+
+    def inspect(journal_dir):
+        raw = real(journal_dir)
+        inventories.append(raw)
+        if history == "ambiguous" and len(inventories) == 1:
+            raw = {**raw, "errors": raw["errors"] + ["unexpected paid request journal entry: stray.bin"]}
+        checked.set()
+        return raw
+
+    monkeypatch.setattr(runtime, "inspect_paid_request_journals", inspect)
+    provider.saturated_once = {2}
+    provider.before_translation = {2: lambda: neighbour_sent.wait(5),  # 3 is in flight when 2 is checked
+                                   3: lambda: (neighbour_sent.set(), checked.wait(5))}
+    run_all(module)
+    assert any(item["status"] == "started" and item["chapter"] == 3 for item in inventories[0]["uncertain"])
+    assert not budget.blocked and not budget.unaccounted_provider_response and budget.pre_send_refusals == []
+    assert module.progress["completed"] == [1, 2, 3] and provider.count("translation") == 4
+    assert batch_runner.manifests(project.data_dir)[0]["chapters"]["2"]["set_aside"] == "batch_translation_failed"
+    assert "batch_superseded_translation:1:2" in module.progress["accounted_api_operation_ids"]
 
 
 def test_glossary_correction_after_batch_translation_reaches_later_chapters(batch_engine):

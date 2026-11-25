@@ -269,6 +269,19 @@ the Martial Artist hit the same refusal at chapter 300 but went on by itself onl
 one of its batch translations had failed acceptance and blocked the budget, so the stop was
 reported as a failure, not as `ALLOWANCE_EXHAUSTED`, and the runner restarted it.
 
+**A batch translation that fails its checks fails only its chapter.** Journey's chapter 305
+batch translation was cut off at the 50K ceiling with English already written. Such an answer
+is checked against the request journals before it is kept, and that check read the STARTED
+records of the rest of the batch, still in flight, as ambiguous history. It failed, and the
+failure blocked the shared budget, so every other request of the run was refused. Now a
+request this run is still waiting on, from any thread, is not ambiguous to that check (its own
+thread records its answer, or blocks the budget if its outcome is uncertain). And when a check
+fails after an answer was accounted, only that request fails: its cost is known and its record
+stays RESPONSE_RECORDED, so a retry replays it and never resends it. The chapter is set aside
+and translated again at commit, as above. The budget is still blocked when an answer's cost
+could not be accounted, when usage exceeds what was reserved, or when a send's outcome is
+uncertain.
+
 At peak rates a translation or a batch helper request reserves about $0.08, so 32 in
 flight hold about $2.60 aside, not 32 × $1.50.
 

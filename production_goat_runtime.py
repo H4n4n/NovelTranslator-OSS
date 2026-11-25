@@ -583,7 +583,9 @@ def install_goat_runtime(module, *, provider_client, budget=None, clock=None, ba
             # Requests in flight elsewhere (a batch prepared ahead, audit chunks) may hold the
             # room this one needs. It waits for them before prepare(), so the pause flag,
             # off-peak gate and the start time it is priced at still apply after the wait.
-            if budget is not None and not replay_only and unsent():
+            # Nothing elsewhere in flight (every sequential request): no clock read, no wait.
+            if (budget is not None and not replay_only and budget.waits_for_room
+                    and budget.others_in_flight() and unsent()):
                 budget.wait_for_room(wire, clock().astimezone(timezone.utc).isoformat())
             try:
                 result = run_journaled_paid_request(journal_path=path, identity=binding,

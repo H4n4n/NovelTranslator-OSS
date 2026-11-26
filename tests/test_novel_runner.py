@@ -77,6 +77,24 @@ def test_first_start_saves_startup_glossary_cleanup(tmp_path, monkeypatch, capsy
     assert entries["傳音"]["english"] == "Voice Transmission"
 
 
+def test_startup_stop_reports_its_cause(tmp_path, monkeypatch):
+    from production_failure_classification import ProductionIntegrityError
+    project = novel(tmp_path, count=3)
+
+    def fail(*args):
+        raise ProductionIntegrityError("AUT2: STARTUP_TEST_REASON")
+
+    def hook(module):
+        module.apply_known_glossary_fixes = fail
+    fake_runtime(project, monkeypatch, tmp_path, load_hook=hook)
+    result = novel_runner.run_novel("fixture", repo_root=tmp_path, budget_usd=10)
+    assert result["status"] == novel_runner.STOPPED and result["reason"] == "unexpected_stop", result
+    assert "ProductionIntegrityError during startup (AUT2: STARTUP_TEST_REASON)" in result["message"], result
+    saved = json.loads((project.data_dir / "last_run.json").read_text(encoding="utf-8"))
+    assert saved["message"] == result["message"]
+    assert novel_runner.last_logged_error(project)["stage"] == "startup"
+
+
 def test_no_budget_stops_with_plain_message(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     fake_runtime(project, monkeypatch, tmp_path)

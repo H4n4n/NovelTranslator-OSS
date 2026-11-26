@@ -553,7 +553,10 @@ when truly necessary, exact `heading_overrides`. Every rule binds a physical
 line number to its exact expected text. A changed source hash or mismatched line
 blocks extraction; no fuzzy override is applied. Metadata, duplicate closing
 markers, and author afterwords remain in the authoritative TXT and are only
-excluded from the canonical translation queue.
+excluded from the canonical translation queue. A heading override may set
+`unit_kind` to `chapter`, `prologue`, `epilogue`, `side_story` or `supplement`;
+a supplement (a preface, a volume's term notes) is translated like the EPUB
+supplements above, with its own title and no local chapter number.
 
 Authoritative TXT files and source-derived libraries can contain copyrighted
 novel text and should remain local. This repository ignores imported TXT files,

@@ -214,6 +214,27 @@ Prologue
     assert "end_marker" in kinds
 
 
+def test_heading_override_can_mark_a_supplement():
+    """A preface or a volume's term notes is a supplement: a named unit with its own title."""
+    text = "작가 서문\n\n서문 본문.\n\n1화 시작\n\n본편 본문.\n\n용어 해설\n\n해설 본문.\n"
+    lines = text.splitlines()
+    line = lambda value: lines.index(value) + 1
+    overrides = {"line_classifications": [], "heading_overrides": [
+        {"line": line("작가 서문"), "expected_text": "작가 서문", "unit_kind": "supplement",
+         "source_number": None, "title": "작가 서문"},
+        {"line": line("1화 시작"), "expected_text": "1화 시작", "unit_kind": "chapter",
+         "source_number": 1, "title": "시작"},
+        {"line": line("용어 해설"), "expected_text": "용어 해설", "unit_kind": "supplement",
+         "source_number": None, "title": "용어 해설"},
+    ]}
+    result = extract_txt.extract_txt_text(text, digest(text.encode()), overrides)
+    units = result["chapters"]
+    assert [item["unit_kind"] for item in units] == ["supplement", "chapter", "supplement"]
+    assert [item["title"] for item in units] == ["작가 서문", "시작", "용어 해설"]
+    assert "local_chapter_number" not in units[0] and units[1]["local_chapter_number"] == 1
+    assert "해설 본문." in units[2]["text"]
+
+
 def test_duplicate_source_numbers_do_not_duplicate_production_indexes():
     text = """Prologue
 본문.

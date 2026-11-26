@@ -351,6 +351,24 @@ def test_scene_break_markdown_becomes_readable_separator(separator):
         assert f">{separator}<" not in rendered
 
 
+def test_emphasis_markers_become_italics_but_footnotes_and_markers_stay_text():
+    rendered = checkpoint.markdownish_to_xhtml(
+        "Chapter 1: Night\n\nHe opened *Haedong Gamgyeol* again.\n\n*Will you die in her place?*\n\n"
+        "“A den of robbers’*!”\n\n* Matthew 21:13.\n\nTwo * three and a<b>",
+        "Fallback",
+    )
+    assert "<p>He opened <em>Haedong Gamgyeol</em> again.</p>" in rendered
+    assert "<p><em>Will you die in her place?</em></p>" in rendered
+    assert "<p>“A den of robbers’*!”</p>" in rendered
+    assert "<p>* Matthew 21:13.</p>" in rendered
+    assert "<p>Two * three and a&lt;b&gt;</p>" in rendered
+    named = checkpoint.markdownish_to_xhtml(
+        "Preface to *The Soul Guardians*\n\nText.", "Preface to *The Soul Guardians*", named_heading=True
+    )
+    assert "<h1>Preface to <em>The Soul Guardians</em></h1>" in named
+    assert checkpoint.plain_title("Preface to *The Soul Guardians*") == "Preface to The Soul Guardians"
+
+
 def test_epub_build_makes_zero_api_or_network_calls(tmp_path, monkeypatch):
     project = create_project(tmp_path, "offline_epub")
     commit_chapters(project, {1: "Chapter 1\n\nOFFLINE"})

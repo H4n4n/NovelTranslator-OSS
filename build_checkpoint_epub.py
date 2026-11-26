@@ -122,6 +122,22 @@ def reader_facing_named_unit_title(text, fallback_title):
     return candidate
 
 
+def _inline(text, quote=True):
+    """Escape text; *word* and **word** become <em>/<strong> as in the publication EPUB."""
+    from build_publication_epub import INLINE_EMPHASIS_RE, render_inline_emphasis
+    if INLINE_EMPHASIS_RE.search(text):
+        return render_inline_emphasis(text)
+    return escape(text, quote=quote)
+
+
+def plain_title(text):
+    """A navigation title without emphasis markers (*The Soul Guardians* -> The Soul Guardians)."""
+    from build_publication_epub import INLINE_EMPHASIS_RE
+    return INLINE_EMPHASIS_RE.sub(
+        lambda match: match.group("strong") or match.group("star") or match.group("underscore"), text
+    )
+
+
 def markdownish_to_xhtml(text, fallback_title, named_heading=False):
     """
     Convert the simple chapter .md files produced by the translator
@@ -145,7 +161,7 @@ def markdownish_to_xhtml(text, fallback_title, named_heading=False):
 
     if named_heading:
         display_heading = reader_facing_named_unit_title(text, fallback_title)
-        html_parts.append(f"<h1>{escape(display_heading)}</h1>")
+        html_parts.append(f"<h1>{_inline(display_heading)}</h1>")
         body_blocks = blocks[1:] if display_heading != fallback_title or (
             re.sub(r"^#{1,6}\s*", "", first).strip() == fallback_title
         ) else blocks
@@ -154,7 +170,7 @@ def markdownish_to_xhtml(text, fallback_title, named_heading=False):
         if heading["title"]:
             display_heading += f": {heading['title']}"
         html_parts.append(
-            f"<h1>{escape(display_heading)}</h1>"
+            f"<h1>{_inline(display_heading)}</h1>"
         )
         body_blocks = blocks[1:]
     else:
@@ -170,13 +186,7 @@ def markdownish_to_xhtml(text, fallback_title, named_heading=False):
             )
             continue
 
-        safe = escape(
-            block,
-            quote=False,
-        ).replace(
-            "\n",
-            "<br/>"
-        )
+        safe = "<br/>".join(_inline(line, quote=False) for line in block.split("\n"))
 
         html_parts.append(
             f"<p>{safe}</p>"
@@ -430,7 +440,7 @@ Generated locally from committed translation files.
         )
 
         chapter = epub.EpubHtml(
-            title=chapter_title,
+            title=plain_title(chapter_title),
             file_name=(
                 f"chapters/"
                 f"chapter_{chapter_number:04d}.xhtml"

@@ -23,6 +23,7 @@ from chapter_library import (
     UNIT_KIND_EPILOGUE,
     UNIT_KIND_PROLOGUE,
     UNIT_KIND_SIDE_STORY,
+    UNIT_KIND_SUPPLEMENT,
     validate_chapter_library,
 )
 import unicodedata
@@ -72,6 +73,7 @@ KIND_VALUES = frozenset((
     UNIT_KIND_PROLOGUE,
     UNIT_KIND_EPILOGUE,
     UNIT_KIND_SIDE_STORY,
+    UNIT_KIND_SUPPLEMENT,  # a preface or a volume's term notes, set by a heading override
 ))
 LINE_CLASSIFICATIONS = frozenset((
     "metadata",

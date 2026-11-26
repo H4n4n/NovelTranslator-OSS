@@ -99,7 +99,8 @@ def last_logged_error(project, since=None):
     logging anything must not be explained by an earlier run's error."""
     logs = sorted(project.logs_dir.glob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
     if since is not None:
-        logs = [path for path in logs if path.stat().st_mtime >= since.timestamp()]
+        # File times can trail the clock by a tick on Windows; each event's own timestamp decides.
+        logs = [path for path in logs if path.stat().st_mtime >= since.timestamp() - 2]
     for path in logs[:2]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         for line in reversed(lines):

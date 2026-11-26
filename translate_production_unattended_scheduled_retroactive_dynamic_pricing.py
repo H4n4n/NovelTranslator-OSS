@@ -334,6 +334,7 @@ def initialize_production_runtime_state(*, activate_provider=True, provider_back
     if selected_provider(provider_backend) == PROVIDER_COMMAND_CODE and activate_provider:
         raise RuntimeError("GOAT transport requires provider-neutral initialization and explicit activation")
     _RUNTIME_INITIALIZING = True
+    RUN_LOGGER = None
     try:
         MODEL = PRODUCTION_TRANSLATION_MODEL
         ACTIVE_NOVEL_CONFIG = (
@@ -513,6 +514,13 @@ def initialize_production_runtime_state(*, activate_provider=True, provider_back
             + AUDIT_MODEL_PROMPT_SUFFIX
         )
         _RUNTIME_INITIALIZED = True
+    except Exception as exc:
+        # A stop here comes before the run's first event; log it so the
+        # stop report can name the cause. No provider is active yet.
+        if RUN_LOGGER is None:
+            RUN_LOGGER = SafeRunLogger(LOG_DIR)
+        log_error(exc, stage="startup")
+        raise
     finally:
         _RUNTIME_INITIALIZING = False
 

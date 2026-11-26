@@ -131,6 +131,9 @@ def describe_stop(project, reason=None, since=None):
         message, action = STOP_MESSAGES[reason]
         return dict(reason=reason, message=message, action=action)
     detail = f"{error.get('error_type')} during {error.get('stage')}" if error else "no error was logged"
+    if error and error.get("stage") == "startup" and error.get("error_message"):
+        # Startup runs before any provider request, so its message is local.
+        detail += f" ({str(error['error_message'])[:300]})"
     return dict(reason=reason or "unexpected_stop", message=f"The run stopped: {detail}.",
                 action="See the latest file in this novel's logs folder.")
 

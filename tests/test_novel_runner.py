@@ -60,6 +60,23 @@ def test_start_runs_whole_novel_with_one_command(tmp_path, monkeypatch, capsys):
     assert json.loads((project.data_dir / "last_run.json").read_text(encoding="utf-8"))["status"] == novel_runner.COMPLETE
 
 
+def test_first_start_saves_startup_glossary_cleanup(tmp_path, monkeypatch, capsys):
+    """No chapter is committed yet, so the cleanup only saves the glossary."""
+    project = novel(tmp_path)
+    glossary = json.loads(project.glossary_file.read_text(encoding="utf-8"))
+    glossary["entries"]["傳音"] = dict(english="voice transmission", category="technique",
+        status="provisional", first_chapter=1)
+    project.glossary_file.write_text(json.dumps(glossary, ensure_ascii=False), encoding="utf-8")
+    fake_runtime(project, monkeypatch, tmp_path)
+    code = translate.main(["--novel", "fixture", "--repo-root", str(tmp_path), "--start", "--budget-usd", "10"])
+    output = capsys.readouterr().out
+    result = json.loads(output[output.rfind('\n{\n  "status"') + 1:])
+    assert code == 0 and result["status"] == novel_runner.COMPLETE, result
+    assert output.count("STARTUP GLOSSARY CLEANUP") == 1
+    entries = json.loads(project.glossary_file.read_text(encoding="utf-8"))["entries"]
+    assert entries["傳音"]["english"] == "Voice Transmission"
+
+
 def test_no_budget_stops_with_plain_message(tmp_path, monkeypatch):
     project = novel(tmp_path, count=3)
     fake_runtime(project, monkeypatch, tmp_path)

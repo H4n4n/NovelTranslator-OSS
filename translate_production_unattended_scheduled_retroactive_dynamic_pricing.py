@@ -936,8 +936,9 @@ def apply_known_glossary_fixes():
 
         print("=" * 70)
 
-    # Apply safe exact fixes to previously committed English chapters.
-    if retroactive_rules:
+    # Apply safe exact fixes to previously committed English chapters. With
+    # none committed yet there is no prose to fix, only the glossary to save.
+    if retroactive_rules and (progress["completed"] or progress["last_completed"]):
         apply_known_fix(SimpleNamespace(**globals()), staged_glossary, retroactive_rules)
     elif changed or removed:
         save_json(GLOSSARY_FILE, staged_glossary)

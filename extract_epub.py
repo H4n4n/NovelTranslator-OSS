@@ -17,6 +17,7 @@ from chapter_library import (
     UNIT_KIND_CHAPTER,
     UNIT_KIND_SUPPLEMENT,
     production_unit_kind,
+    validate_chapter_library,
 )
 
 from novel_project import (
@@ -147,6 +148,7 @@ class ExtractionResult:
     content_coverage: float
     content_loss_documents: tuple
     validation_errors: tuple
+    continuations: tuple = ()
 
     @property
     def chapter_numbers(self):
@@ -632,7 +634,7 @@ def load_source_overrides(project, source_sha256):
         raise ExtractionError("source_overrides.json must contain a JSON object")
     unsupported = sorted(set(value) - {
         "source_sha256", "chapter_number_overrides", "supplement_documents",
-        "content_cleanup",
+        "content_cleanup", "continuations",
     })
     if unsupported:
         raise ExtractionError(
@@ -1486,13 +1488,28 @@ def extract_source_epub(project):
 
     if numbering_mode == CHAPTER_NUMBERING_GLOBAL:
         chapters.sort(key=lambda item: item["chapter"])
+    # A finished EPUB novel extended with TXT continuation files (source/novel_2.txt, ...):
+    # the EPUB's own units are checked against the EPUB's share of final_chapter, then the
+    # whole library is checked as one.
+    from extract_txt import TXTExtractionError, extend_with_continuations, load_txt_continuations
+    try:
+        added, continuation_reports = extend_with_continuations(
+            chapters, load_txt_continuations(project)
+        )
+    except TXTExtractionError as exc:
+        raise ExtractionError(str(exc)) from exc
     missing, configured_missing, duplicates, errors = _validate_chapters(
-        chapters, project.config.final_chapter, numbering_mode
+        chapters, max(1, project.config.final_chapter - len(added)), numbering_mode
     )
     unapplied_override_files = tuple(sorted(
         configured_rule_paths - seen_override_files - set(unknown_override_files)
     ))
     errors = list(errors)
+    if added:
+        chapters.extend(added)
+        errors.extend(validate_chapter_library(
+            chapters, project.config.final_chapter, numbering_mode
+        ))
     if unknown_override_files:
         errors.append(
             "source overrides reference unknown EPUB members: "
@@ -1538,6 +1555,7 @@ def extract_source_epub(project):
         ),
         content_loss_documents=tuple(content_loss_documents),
         validation_errors=tuple(errors),
+        continuations=tuple(continuation_reports),
     )
 
 
@@ -1587,9 +1605,14 @@ def install_extraction(project, result, overwrite=False):
     serialized = json.dumps(result.chapters, ensure_ascii=False, indent=2)
     # Round-trip the exact payload before replacing a valid existing library.
     decoded = json.loads(serialized)
+    added = sum(part["production_index_end"] - part["production_index_start"] + 1
+                for part in result.continuations)
+    final, numbering = project.config.final_chapter, project.config.chapter_numbering
     _, _, _, errors = _validate_chapters(
-        decoded, project.config.final_chapter, project.config.chapter_numbering
+        decoded[:len(decoded) - added], max(1, final - added), numbering
     )
+    if added:  # TXT continuation units follow the EPUB's own; check the library as one.
+        errors = (*errors, *validate_chapter_library(decoded, final, numbering))
     if errors:
         raise ExtractionValidationError(errors, result)
     atomic_write_text(output, serialized)
@@ -1620,6 +1643,9 @@ def print_extraction_report(project, result, output=None, backup=None, status=No
     print(f"Chapter numbering mode: {result.numbering_mode}")
     print(f"Configured final chapter: {project.config.final_chapter}")
     print(f"Translatable production units recognized: {len(result.chapters)}")
+    for part in result.continuations:
+        print(f"Continuation {part['source_file']}: units {part['production_index_start']}-"
+              f"{part['production_index_end']} (number offset {part['number_offset']})")
     print(f"Ordinary chapter units: {len(result.ordinary_chapters)}")
     print(f"Supplement units: {len(result.supplements)}")
     print(f"Unique production indexes: {result.unique_chapter_count}")

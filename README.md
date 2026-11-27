@@ -558,16 +558,27 @@ excluded from the canonical translation queue. A heading override may set
 a supplement (a preface, a volume's term notes) is translated like the EPUB
 supplements above, with its own title and no local chapter number.
 
-To extend a TXT novel with a sequel, even after it has finished and been audited,
-put the new text in its own file beside it (`source/novel_2.txt`, then
-`novel_3.txt`, ...) and list it under `continuations` in `source_overrides.json`:
-`{"file": "novel_2.txt", "source_sha256": "...", "txt": {...}}`, with the same
-kinds of rules as the main file, line numbers counted within that file. Raise
-`final_chapter` to the new total and extract again. `novel.txt` is never edited,
-so every committed unit keeps its exact source record and recorded audits still
-prove; an audit only sees a continuation file once its window reaches that
-file's first unit. The one-time `build_finalization_corpus.py` repartition
-migration still expects a single source file.
+To extend a novel with a sequel, even after it has finished and been audited,
+put the new text in its own TXT file beside the original (`source/novel_2.txt`,
+then `novel_3.txt`, ...) and list it under `continuations` in
+`source_overrides.json`: `{"file": "novel_2.txt", "source_sha256": "...", "txt":
+{...}}`, with the same kinds of rules as a TXT novel's main file, line numbers
+counted within that file. This works for TXT and EPUB novels alike: an EPUB
+novel's own units are checked by the EPUB rules, then the whole library is
+checked as one. Raise `final_chapter` to the new total and extract again. The
+original source is never edited, so every committed unit keeps its exact source
+record and recorded audits still prove; an audit only sees a continuation file
+once its window reaches that file's first unit.
+
+A continuation's chapters keep the numbers its headings give. When those don't
+carry on from the novel's (a revised edition numbered differently), add
+`"number_offset": N` to shift the reader-facing chapter numbers by N; the
+author's numbers stay in `source_number`. A file whose first chapter is
+Chapter 1 starts a new volume. Settle the sequel's glossary with
+`glossary_settle.py propose --from-chapter <first new unit>`, so the scan never
+reopens terms the translated chapters were written without. The one-time
+`build_finalization_corpus.py` repartition migration (one novel's chapter split)
+still expects a single source file.
 
 Authoritative TXT files and source-derived libraries can contain copyrighted
 novel text and should remain local. This repository ignores imported TXT files,
@@ -958,7 +969,8 @@ python glossary_settle.py --novel <novel_id> install --run settle
 ```
 
 `propose` scans the source locally for words and two-word phrases used at least
-`--min-count` times (default 8) that the glossary lacks, and sends them in chunks of
+`--min-count` times (default 8) that the glossary lacks (only in units from
+`--from-chapter` on, when given), and sends them in chunks of
 150, with two short contexts each, the profile's categories, `translation_addendum.txt`
 and some existing entries as style examples. DeepSeek keeps the terms that need one
 stable rendering and gives their English and category. Local checks then drop a term

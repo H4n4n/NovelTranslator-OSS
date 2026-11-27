@@ -202,16 +202,30 @@ def _run_dir(project, run):
     return project.root / "output" / "glossary_settle" / run
 
 
+def chapters_from(chapters, from_chapter):
+    """The units a settle run scans: from production unit `from_chapter` on (a sequel's new chapters)."""
+    return [chapter for chapter in chapters
+            if chapter.get("production_index", chapter["chapter"]) >= from_chapter]
+
+
 def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, reasoning="high",
-            sleep=time.sleep, clock=lambda: datetime.now(timezone.utc), log=print):
-    """Scan, ask DeepSeek, check locally, and write proposals. The glossary is not touched."""
+            from_chapter=1, sleep=time.sleep, clock=lambda: datetime.now(timezone.utc), log=print):
+    """Scan, ask DeepSeek, check locally, and write proposals. The glossary is not touched.
+
+    With `from_chapter`, only those units are scanned and a proposal must occur in them, so
+    settling a sequel never reopens terms the translated chapters were written without. The trap
+    check still looks at the whole novel, since an installed key matches in every chapter.
+    """
     run_dir = _run_dir(project, run)
     journal_dir = run_dir / "journal"
     (run_dir / "chunks").mkdir(parents=True, exist_ok=True)
     released = release_ambiguous_requests(journal_dir, next_chapter=1, save_json=atomic_write_json, max_resends=1)
     if released["released"]:
         log(f"Sending once more {len(released['released'])} request(s) that got no recorded answer.")
-    chapters = json.loads(project.chapters_file.read_text(encoding="utf-8"))
+    library = json.loads(project.chapters_file.read_text(encoding="utf-8"))
+    chapters = chapters_from(library, from_chapter)
+    if from_chapter > 1:
+        log(f"Scanning {len(chapters)} unit(s) from {from_chapter} on.")
     entries = json.loads(project.glossary_file.read_text(encoding="utf-8")).get("entries", {})
     rules = project.translation_addendum_file.read_text(encoding="utf-8") if project.translation_addendum_file.is_file() else ""
     examples = [f"{key} = {entry.get('english')} ({entry.get('category')})" for key, entry in list(entries.items())[:EXAMPLES]
@@ -308,12 +322,13 @@ def propose(project, client, budget, *, run, profile, min_count=8, parallel=20, 
     source_text = "\n".join(chapter["text"] for chapter in chapters)
     kept, dropped = check_proposals(raw_terms, source_text, entries, profile)
     together = {**entries, **{key: {**value, "status": "provisional"} for key, value in kept.items()}}
-    traps = {row["korean"]: row for row in trap_report(together, chapters) if row["korean"] in kept}
+    traps = {row["korean"]: row for row in trap_report(together, library) if row["korean"] in kept}
     for key, row in traps.items():
         kept[key]["trap"] = {"occurrences": row["occurrences"], "inside_other_words": row["inside_other_words"],
                              "examples": row["examples"]}
     atomic_write_json(run_dir / "proposals.json", {"run": run, "terms": kept, "dropped": dropped})
-    summary = dict(novel=project.config.id, run=run, candidates=len(candidates), requests=len(chunks),
+    summary = dict(novel=project.config.id, run=run, from_chapter=from_chapter,
+                   candidates=len(candidates), requests=len(chunks),
                    skipped_mid_word=len(skipped),
                    proposed=len(kept), traps=len(traps), dropped=len(dropped), calls=sender.calls,
                    cost_usd=round(sender.cost_usd, 6), failed_requests=sorted(failed),
@@ -385,7 +400,9 @@ def build_parser():
     pro.add_argument("--min-count", type=int, default=8, help="least occurrences for a candidate")
     pro.add_argument("--parallel", type=int, default=20)
     pro.add_argument("--reasoning", choices=("low", "high"), default="high")
-    ins = sub.add_parser("install", help="add a run's approved proposals to the glossary (backs it up first)")
+    pro.add_argument("--from-chapter", type=int, default=1,
+                     help="scan only from this production unit on (a sequel's first new chapter)")
+    ins =sub.add_parser("install", help="add a run's approved proposals to the glossary (backs it up first)")
     ins.add_argument("--run", required=True)
     ins.add_argument("--include-traps", action="store_true", help="also add keys flagged as traps")
     ins.add_argument("--skip", action="append", default=[], help="a proposed Korean key to leave out")
@@ -416,7 +433,10 @@ def main(argv=None):
     from production_goat_runtime import GoatBudget
     from translation_profile import load_translation_profile
     profile = load_translation_profile(project.config.profile, project.repository_root)
-    chapters = json.loads(project.chapters_file.read_text(encoding="utf-8"))
+    if args.from_chapter < 1:
+        print("--from-chapter must be 1 or more.")
+        return 2
+    chapters = chapters_from(json.loads(project.chapters_file.read_text(encoding="utf-8")), args.from_chapter)
     entries = json.loads(project.glossary_file.read_text(encoding="utf-8")).get("entries", {})
     requests = -(-len(scan(chapters, entries, min_count=args.min_count)) // CHUNK)
     # Each chunk may be sent once more as two halves; --budget-usd bounds the cost.
@@ -424,7 +444,7 @@ def main(argv=None):
     with command_code_api_key_scope() as key:
         client = create_command_code_client(api_key=key)
         summary = propose(project, client, budget, run=args.run, profile=profile, min_count=args.min_count,
-                          parallel=args.parallel, reasoning=args.reasoning)
+                          parallel=args.parallel, reasoning=args.reasoning, from_chapter=args.from_chapter)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0 if not summary["failed_requests"] else 1
 

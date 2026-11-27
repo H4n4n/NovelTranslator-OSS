@@ -227,11 +227,14 @@ CONTINUATION_NAME_RE = re.compile(r"^novel_(?P<part>[2-9]|[1-9]\d)\.txt$")
 
 
 def load_txt_continuations(project):
-    """The continuation files a finished TXT novel was extended with, in order.
+    """The continuation files a finished novel was extended with, in order.
 
-    novel.txt stays byte-for-byte what earlier runs and audits saw, so every
-    committed unit keeps its exact source record. A sequel goes in its own file
-    (source/novel_2.txt, novel_3.txt, ...), each with its own SHA and rules.
+    The original source (novel.txt or novel.epub) stays byte-for-byte what
+    earlier runs and audits saw, so every committed unit keeps its exact source
+    record. A sequel goes in its own TXT file (source/novel_2.txt, novel_3.txt,
+    ...), each with its own SHA and rules. `number_offset` shifts the
+    reader-facing chapter numbers of a file whose own numbering does not carry
+    on from the novel's (the author's numbers stay in `source_number`).
     """
     path = project.source_overrides_file
     if not path.is_file():
@@ -242,9 +245,12 @@ def load_txt_continuations(project):
         raise TXTExtractionError("source_overrides.json continuations must be a list")
     result = []
     for index, entry in enumerate(entries):
-        if not isinstance(entry, dict) or set(entry) - {"file", "source_sha256", "txt"} \
+        if not isinstance(entry, dict) or set(entry) - {"file", "source_sha256", "txt", "number_offset"} \
                 or not {"file", "source_sha256"} <= set(entry):
             raise TXTExtractionError(f"TXT continuation {index} has unsupported or missing fields")
+        offset = entry.get("number_offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise TXTExtractionError(f"TXT continuation {index} number_offset must be an integer")
         name = entry["file"]
         match = CONTINUATION_NAME_RE.match(name) if isinstance(name, str) else None
         if not match or int(match.group("part")) != index + 2:
@@ -257,8 +263,48 @@ def load_txt_continuations(project):
                 f"source_overrides.json is stale: source_sha256 does not match {name}"
             )
         rules = _validate_txt_rules(entry.get("txt", {}), source["line_record_count"])
-        result.append((name, source, rules))
+        result.append((name, source, rules, offset))
     return result
+
+
+def extend_with_continuations(units, continuations):
+    """Extract each continuation and number its units on from `units`, which are left untouched.
+
+    Returns (added_units, per_file_reports). A file whose first chapter is local
+    Chapter 1 starts a new volume; otherwise it carries on the last volume.
+    """
+    added, parts = [], []
+    for name, source, rules, offset in continuations:
+        extra = extract_txt_text(source["text"], source["source_sha256"], overrides=rules,
+                                 source_file=name)
+        previous = (units + added)[-1] if units or added else None
+        volume = previous.get("volume_index", 1) if previous else 1
+        first_local = next((unit["local_chapter_start"] + offset for unit in extra["chapters"]
+                            if unit["unit_kind"] == UNIT_KIND_CHAPTER), None)
+        if previous is not None and first_local == 1:
+            volume += 1
+        start = len(units) + len(added) + 1
+        for unit in extra["chapters"]:
+            unit["chapter"] = unit["production_index"] = len(units) + len(added) + 1
+            unit["volume_index"] = volume
+            if unit["unit_kind"] == UNIT_KIND_CHAPTER and offset:
+                for key in ("local_chapter_number", "local_chapter_start", "local_chapter_end"):
+                    unit[key] += offset
+                if unit["local_chapter_start"] < 1:
+                    raise TXTExtractionError(
+                        f"{name}: number_offset {offset} gives source chapter "
+                        f"{unit['source_number']} a reader-facing number below 1"
+                    )
+            added.append(unit)
+        part = {key: value for key, value in extra["report"].items() if key != "excluded_sections"}
+        part["production_index_start"] = start
+        part["production_index_end"] = start + len(extra["chapters"]) - 1
+        part["number_offset"] = offset
+        part["excluded_sections"] = extra["report"]["excluded_sections"]
+        part.update({key: value for key, value in source.items() if key not in {"raw", "text"}})
+        part["override_count"] = sum(len(value) for value in rules.values())
+        parts.append(part)
+    return added, parts
 
 
 def _trim_title(raw):
@@ -612,21 +658,8 @@ def extract_txt_text(text, source_sha256, overrides=None, source_file="novel.txt
 def _append_continuations(result, continuations):
     """Number continuation units on from novel.txt's; novel.txt's units are left untouched."""
     units, report = result["chapters"], result["report"]
-    parts = []
-    for name, source, rules in continuations:
-        extra = extract_txt_text(source["text"], source["source_sha256"], overrides=rules,
-                                 source_file=name)
-        for unit in extra["chapters"]:
-            index = len(units) + 1
-            unit["chapter"] = unit["production_index"] = index
-            units.append(unit)
-        part = {key: value for key, value in extra["report"].items() if key != "excluded_sections"}
-        part["production_index_start"] = len(units) - len(extra["chapters"]) + 1
-        part["production_index_end"] = len(units)
-        part["excluded_sections"] = extra["report"]["excluded_sections"]
-        part.update({key: value for key, value in source.items() if key not in {"raw", "text"}})
-        part["override_count"] = sum(len(value) for value in rules.values())
-        parts.append(part)
+    added, parts = extend_with_continuations(units, continuations)
+    units.extend(added)
     numeric = [unit["source_number"] for unit in units if unit["source_number"] is not None]
     counts = Counter(numeric)
     candidate = report["candidate_narrative_characters"] + sum(p["candidate_narrative_characters"] for p in parts)

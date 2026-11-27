@@ -10,6 +10,7 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 
 import apply_normalization_plan as normalization
@@ -44,6 +45,20 @@ def _sha(value):
 
 def _bytes(path):
     return plain(path).read_bytes()
+
+
+def _units_match_their_sources(project, units):
+    """Each unit came from novel.txt or from a named continuation file beside it."""
+    digests = {}
+    for unit in units:
+        name = unit.get("source_file", project.source_txt.name)
+        if name != project.source_txt.name and not re.fullmatch(r"novel_\d+\.txt", str(name)):
+            return False
+        if name not in digests:
+            digests[name] = digest(_bytes(project.source_txt.parent / name))
+        if unit.get("source_document_sha256") != digests[name]:
+            return False
+    return True
 
 
 def _plain_tree(directory):
@@ -123,9 +138,7 @@ def source_snapshot(project, whole_history_sha256):
     glossary = read_object(project.glossary_file)
     history = read_object(project.audit_history_file)
     payloads = _payloads(project.chapter_dir, count)
-    source = _bytes(project.source_txt)
-    require(all(u.get("source_document_sha256") == digest(source) for u in units),
-            "ORIGINAL_SOURCE_IDENTITY_DRIFT")
+    require(_units_match_their_sources(project, units), "ORIGINAL_SOURCE_IDENTITY_DRIFT")
     profile = load_translation_profile(project.config.profile)
     _require_current_qa(project, chapter_map, payloads, glossary)
     revisions = publication_revisions(project)
@@ -495,8 +508,7 @@ def _history_source(project):
     chapter_map = index_chapter_library(units, project.config.final_chapter, project.config.chapter_numbering)
     numbers = list(range(1, project.config.final_chapter + 1))
     require(list(chapter_map) == numbers and len(units) == len(numbers), "REPARTITION_REQUIRES_SEPARATE_APPROVAL")
-    source_sha = digest(_bytes(project.source_txt))
-    require(all(u.get("source_document_sha256") == source_sha for u in units), "ORIGINAL_SOURCE_IDENTITY_DRIFT")
+    require(_units_match_their_sources(project, units), "ORIGINAL_SOURCE_IDENTITY_DRIFT")
     progress = read_object(project.progress_file)
     require(all(type(n) is int for n in progress.get("completed", []))
             and all(type(progress.get(k)) is int for k in ("last_completed", "last_audited_chapter", "next_chapter"))

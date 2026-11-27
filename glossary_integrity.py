@@ -687,6 +687,31 @@ def partition_audit_candidates_by_source_integrity(
     return included, excluded
 
 
+def chapters_an_audit_sees(chapters, end_chapter):
+    """Leave out a TXT continuation file (novel_2.txt, ...) that starts after the audit's end.
+
+    A finished novel can be extended with a continuation file. Audits recorded before it
+    was added never saw its units, and replaying them must rebuild the same candidates;
+    audits that reach into the continuation see it. Single-file and EPUB novels are unchanged.
+    """
+    starts: dict[str, int] = {}
+    for chapter in chapters:
+        name = chapter.get("source_file") if isinstance(chapter, Mapping) else None
+        index = chapter.get("production_index") if isinstance(chapter, Mapping) else None
+        if isinstance(name, str) and _is_txt_continuation(name) and isinstance(index, int):
+            starts[name] = min(index, starts.get(name, index))
+    later = {name for name, first in starts.items() if first > end_chapter}
+    if not later:
+        return chapters
+    return [chapter for chapter in chapters
+            if not (isinstance(chapter, Mapping) and chapter.get("source_file") in later)]
+
+
+def _is_txt_continuation(name: str) -> bool:
+    stem, _, suffix = name.partition(".")
+    return suffix == "txt" and stem.startswith("novel_") and stem[len("novel_"):].isdigit()
+
+
 def build_source_integrity_audit_plan(
     entries: Mapping[str, Mapping[str, Any]],
     chapters: Sequence[Mapping[str, Any]],
@@ -703,6 +728,7 @@ def build_source_integrity_audit_plan(
     with contexts from both ends of the book, because later chapters may reveal
     what a term really means.
     """
+    chapters = chapters_an_audit_sees(chapters, end_chapter)
     chapter_texts = [
         str(chapter.get("text", "") or "")
         for chapter in chapters

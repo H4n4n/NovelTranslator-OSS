@@ -235,6 +235,58 @@ def test_heading_override_can_mark_a_supplement():
     assert "해설 본문." in units[2]["text"]
 
 
+def _continued_project(tmp_path, second_text, *, second_sha=None, name="novel_2.txt"):
+    project = make_project(tmp_path, final_chapter=4)
+    first = "1화 시작\n\n첫 본문.\n\n2화 둘째\n\n둘째 본문.\n".encode()
+    project.source_txt.write_bytes(first)
+    second = second_text.encode()
+    (project.source_txt.parent / name).write_bytes(second)
+    lines = second_text.splitlines()
+    project.source_overrides_file.write_text(json.dumps({
+        "source_sha256": digest(first),
+        "continuations": [{
+            "file": name,
+            "source_sha256": second_sha or digest(second),
+            "txt": {"line_classifications": [], "heading_overrides": [
+                {"line": lines.index("속편 서문") + 1, "expected_text": "속편 서문",
+                 "unit_kind": "supplement", "source_number": None, "title": "속편 서문"},
+            ]},
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    return project, first
+
+
+def test_a_continuation_file_extends_the_novel_without_touching_its_units(tmp_path):
+    """A sequel goes in novel_2.txt; novel.txt's units keep their exact source records."""
+    project, first = _continued_project(tmp_path, "속편 서문\n\n서문 본문.\n\n3화 셋째\n\n셋째 본문.\n")
+    alone = extract_txt.extract_txt_text(first.decode(), digest(first), source_file="novel.txt")
+    result = extract_txt.extract_source_txt(project)
+    units = result["chapters"]
+    assert units[:2] == alone["chapters"]
+    assert [u["chapter"] for u in units] == [1, 2, 3, 4]
+    assert [u["unit_kind"] for u in units] == ["chapter", "chapter", "supplement", "chapter"]
+    assert {u["source_file"] for u in units[2:]} == {"novel_2.txt"}
+    assert units[3]["source_number"] == 3 and units[2]["source_line_start"] == 1
+    assert units[2]["source_document_sha256"] != units[0]["source_document_sha256"]
+    report = result["report"]
+    assert report["production_unit_count"] == 4 and report["source_sha256"] == digest(first)
+    assert report["continuations"][0]["production_index_start"] == 3
+    extract_txt.install_extraction(project, result)
+    assert len(json.loads(project.chapters_file.read_text(encoding="utf-8"))) == 4
+
+
+def test_a_stale_or_misnamed_continuation_blocks(tmp_path):
+    text = "속편 서문\n\n서문 본문.\n\n3화 셋째\n\n셋째 본문.\n"
+    (tmp_path / "stale").mkdir()
+    project, _ = _continued_project(tmp_path / "stale", text, second_sha="0" * 64)
+    with pytest.raises(extract_txt.TXTExtractionError, match="stale"):
+        extract_txt.extract_source_txt(project)
+    (tmp_path / "named").mkdir()
+    project, _ = _continued_project(tmp_path / "named", text, name="sequel.txt")
+    with pytest.raises(extract_txt.TXTExtractionError, match="novel_2.txt"):
+        extract_txt.extract_source_txt(project)
+
+
 def test_duplicate_source_numbers_do_not_duplicate_production_indexes():
     text = """Prologue
 본문.

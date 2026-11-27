@@ -150,6 +150,7 @@ experimental_goat_budget.py
 experimental_goat_experiment.py
 experimental_goat_policy.py
 experimental_goat_runtime.py
+extend_novel.py
 extract_epub.py
 extract_txt.py
 final_editorial.py
@@ -521,6 +522,7 @@ tests/test_semantic_integrity_audit_policy.py
 tests/test_semantic_integrity_policy.py
 tests/test_semantic_kinship.py
 tests/test_semantic_shadow_runtime.py
+tests/test_source_continuations.py
 tests/test_synthetic_goat_batch_witness.py
 tests/test_term_repair.py
 tests/test_terminology_policy.py

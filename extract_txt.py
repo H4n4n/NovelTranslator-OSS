@@ -157,7 +157,11 @@ def load_txt_overrides(project, source_sha256, line_count):
         raise TXTExtractionError(
             "source_overrides.json is stale: source_sha256 does not match novel.txt"
         )
-    raw_txt = data.get("txt", {})
+    return _validate_txt_rules(data.get("txt", {}), line_count)
+
+
+def _validate_txt_rules(raw_txt, line_count):
+    """Check one source file's line classifications and heading overrides."""
     if not isinstance(raw_txt, dict):
         raise TXTExtractionError("source_overrides.json txt must be an object")
     unknown = sorted(set(raw_txt) - {"line_classifications", "heading_overrides"})
@@ -217,6 +221,90 @@ def load_txt_overrides(project, source_sha256, line_count):
             raise TXTExtractionError(f"TXT heading override {index} has invalid source_number")
         result["heading_overrides"].append(dict(rule))
     return result
+
+
+CONTINUATION_NAME_RE = re.compile(r"^novel_(?P<part>[2-9]|[1-9]\d)\.txt$")
+
+
+def load_txt_continuations(project):
+    """The continuation files a finished novel was extended with, in order.
+
+    The original source (novel.txt or novel.epub) stays byte-for-byte what
+    earlier runs and audits saw, so every committed unit keeps its exact source
+    record. A sequel goes in its own TXT file (source/novel_2.txt, novel_3.txt,
+    ...), each with its own SHA and rules. `number_offset` shifts the
+    reader-facing chapter numbers of a file whose own numbering does not carry
+    on from the novel's (the author's numbers stay in `source_number`).
+    """
+    path = project.source_overrides_file
+    if not path.is_file():
+        return []
+    data = _load_json(path)
+    entries = data.get("continuations", []) if isinstance(data, dict) else []
+    if not isinstance(entries, list):
+        raise TXTExtractionError("source_overrides.json continuations must be a list")
+    result = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) - {"file", "source_sha256", "txt", "number_offset"} \
+                or not {"file", "source_sha256"} <= set(entry):
+            raise TXTExtractionError(f"TXT continuation {index} has unsupported or missing fields")
+        offset = entry.get("number_offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise TXTExtractionError(f"TXT continuation {index} number_offset must be an integer")
+        name = entry["file"]
+        match = CONTINUATION_NAME_RE.match(name) if isinstance(name, str) else None
+        if not match or int(match.group("part")) != index + 2:
+            raise TXTExtractionError(
+                f"TXT continuation {index} must be named novel_{index + 2}.txt"
+            )
+        source = inspect_utf8_txt(project.source_txt.parent / name)
+        if entry["source_sha256"] != source["source_sha256"]:
+            raise TXTExtractionError(
+                f"source_overrides.json is stale: source_sha256 does not match {name}"
+            )
+        rules = _validate_txt_rules(entry.get("txt", {}), source["line_record_count"])
+        result.append((name, source, rules, offset))
+    return result
+
+
+def extend_with_continuations(units, continuations):
+    """Extract each continuation and number its units on from `units`, which are left untouched.
+
+    Returns (added_units, per_file_reports). A file whose first chapter is local
+    Chapter 1 starts a new volume; otherwise it carries on the last volume.
+    """
+    added, parts = [], []
+    for name, source, rules, offset in continuations:
+        extra = extract_txt_text(source["text"], source["source_sha256"], overrides=rules,
+                                 source_file=name)
+        previous = (units + added)[-1] if units or added else None
+        volume = previous.get("volume_index", 1) if previous else 1
+        first_local = next((unit["local_chapter_start"] + offset for unit in extra["chapters"]
+                            if unit["unit_kind"] == UNIT_KIND_CHAPTER), None)
+        if previous is not None and first_local == 1:
+            volume += 1
+        start = len(units) + len(added) + 1
+        for unit in extra["chapters"]:
+            unit["chapter"] = unit["production_index"] = len(units) + len(added) + 1
+            unit["volume_index"] = volume
+            if unit["unit_kind"] == UNIT_KIND_CHAPTER and offset:
+                for key in ("local_chapter_number", "local_chapter_start", "local_chapter_end"):
+                    unit[key] += offset
+                if unit["local_chapter_start"] < 1:
+                    raise TXTExtractionError(
+                        f"{name}: number_offset {offset} gives source chapter "
+                        f"{unit['source_number']} a reader-facing number below 1"
+                    )
+            added.append(unit)
+        part = {key: value for key, value in extra["report"].items() if key != "excluded_sections"}
+        part["production_index_start"] = start
+        part["production_index_end"] = start + len(extra["chapters"]) - 1
+        part["number_offset"] = offset
+        part["excluded_sections"] = extra["report"]["excluded_sections"]
+        part.update({key: value for key, value in source.items() if key not in {"raw", "text"}})
+        part["override_count"] = sum(len(value) for value in rules.values())
+        parts.append(part)
+    return added, parts
 
 
 def _trim_title(raw):
@@ -567,6 +655,36 @@ def extract_txt_text(text, source_sha256, overrides=None, source_file="novel.txt
     return {"chapters": units, "report": report}
 
 
+def _append_continuations(result, continuations):
+    """Number continuation units on from novel.txt's; novel.txt's units are left untouched."""
+    units, report = result["chapters"], result["report"]
+    added, parts = extend_with_continuations(units, continuations)
+    units.extend(added)
+    numeric = [unit["source_number"] for unit in units if unit["source_number"] is not None]
+    counts = Counter(numeric)
+    candidate = report["candidate_narrative_characters"] + sum(p["candidate_narrative_characters"] for p in parts)
+    extracted = report["extracted_narrative_characters"] + sum(p["extracted_narrative_characters"] for p in parts)
+    sizes = [unit["source_character_count"] for unit in units]
+    report.update({
+        "production_unit_count": len(units),
+        "unit_kind_counts": dict(Counter(unit["unit_kind"] for unit in units)),
+        "production_index_end": len(units),
+        "source_number_start": min(numeric) if numeric else None,
+        "source_number_end": max(numeric) if numeric else None,
+        "source_number_duplicates": sorted(n for n, c in counts.items() if c > 1),
+        "source_number_missing": sorted(set(range(min(numeric), max(numeric) + 1)) - set(numeric)) if numeric else [],
+        "source_number_resets": sum(b < a for a, b in zip(numeric, numeric[1:])),
+        "heading_format_counts": dict(Counter(unit["heading_format"] for unit in units)),
+        "candidate_narrative_characters": candidate,
+        "extracted_narrative_characters": extracted,
+        "narrative_coverage": extracted / candidate if candidate else 0.0,
+        "shortest_unit_characters": min(sizes),
+        "median_unit_characters": statistics.median(sizes),
+        "longest_unit_characters": max(sizes),
+        "continuations": parts,
+    })
+
+
 def extract_source_txt(project):
     if project.config.source_type != SOURCE_TYPE_TXT:
         raise TXTExtractionError(
@@ -583,6 +701,9 @@ def extract_source_txt(project):
     result = extract_txt_text(
         source["text"], source["source_sha256"], overrides=overrides
     )
+    continuations = load_txt_continuations(project)
+    if continuations:
+        _append_continuations(result, continuations)
     errors = validate_chapter_library(
         result["chapters"],
         project.config.final_chapter,

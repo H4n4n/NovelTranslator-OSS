@@ -83,6 +83,25 @@ def test_a_rerun_sends_nothing(tmp_path):
     assert again.requests == [] and summary["proposed"] == 3
 
 
+def test_a_sequel_settle_scans_only_the_new_chapters(tmp_path):
+    """From chapter 3 on, a term found only in chapters 1-2 is neither sent nor proposed."""
+    novel = project(tmp_path)
+    first_only = SOURCES[0][5:7]  # a stem of chapter 1 that chapters 3-5 never use
+    assert first_only not in "".join(SOURCES[2:]) and first_only in SOURCES[0]
+    client = FakeSettler(TERMS + [{"korean": first_only, "english": "Shone", "category": "location"}])
+    summary = gs.propose(novel, client, GoatBudget(10, 5.0), run="sequel", profile=PROFILE, min_count=2,
+                         from_chapter=3, clock=OFF_PEAK, log=lambda *_: None)
+    sent = client.requests[0]["messages"][1]["content"]
+    assert "first ch. 3)" in sent
+    assert not any(f"first ch. {n})" in sent for n in (1, 2))
+    result = json.loads(open(summary["proposals_file"], encoding="utf-8").read())
+    assert first_only not in result["terms"] and summary["from_chapter"] == 3
+    assert {"korean": first_only, "english": "Shone", "category": "location",
+            "dropped": "not in the source"} in result["dropped"]
+    assert gs.chapters_from([{"chapter": 1, "text": ""}, {"chapter": 2, "production_index": 2, "text": ""}], 2) == [
+        {"chapter": 2, "production_index": 2, "text": ""}]
+
+
 def test_install_adds_only_missing_keys_backs_up_and_leaves_traps_out(tmp_path):
     novel, _, _, _ = proposed(tmp_path)
     before = novel.glossary_file.read_bytes()

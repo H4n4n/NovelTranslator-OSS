@@ -29,8 +29,27 @@ from model_candidate_ids import (
 )
 from glossary_integrity import (
     build_source_integrity_audit_plan,
+    chapters_an_audit_sees,
     stable_glossary_candidate_id,
 )
+
+
+def test_an_audit_before_a_continuation_does_not_see_it():
+    """A finished novel's audits rebuild the same candidates after a sequel file is added."""
+    def unit(n, source_file, text):
+        return {"chapter": n, "production_index": n, "source_file": source_file, "text": text}
+    base = [unit(1, "novel.txt", "검마 등장."), unit(2, "novel.txt", "검마가 웃었다.")]
+    sequel = [unit(3, "novel_2.txt", "검마는 속편의 다른 사람이다.")]
+    entries = {"검마": {"english": "Sword Demon", "category": "character", "status": "provisional",
+                        "first_chapter": 1}}
+    before = build_source_integrity_audit_plan(entries, base, 1, 2, whole_novel=True)
+    after = build_source_integrity_audit_plan(entries, base + sequel, 1, 2, whole_novel=True)
+    assert after == before
+    assert chapters_an_audit_sees(base + sequel, 3) == base + sequel
+    later = build_source_integrity_audit_plan(entries, base + sequel, 1, 3, whole_novel=True)
+    assert any(c["chapter"] == 3 for c in later["candidates"][0]["contexts"])
+    epub = [unit(1, "Text/a.xhtml", "검마."), unit(2, "Text/b.xhtml", "검마.")]
+    assert chapters_an_audit_sees(epub, 1) == epub
 
 
 def candidate(source, english=None, *, alias_of=""):

@@ -558,6 +558,17 @@ excluded from the canonical translation queue. A heading override may set
 a supplement (a preface, a volume's term notes) is translated like the EPUB
 supplements above, with its own title and no local chapter number.
 
+To extend a TXT novel with a sequel, even after it has finished and been audited,
+put the new text in its own file beside it (`source/novel_2.txt`, then
+`novel_3.txt`, ...) and list it under `continuations` in `source_overrides.json`:
+`{"file": "novel_2.txt", "source_sha256": "...", "txt": {...}}`, with the same
+kinds of rules as the main file, line numbers counted within that file. Raise
+`final_chapter` to the new total and extract again. `novel.txt` is never edited,
+so every committed unit keeps its exact source record and recorded audits still
+prove; an audit only sees a continuation file once its window reaches that
+file's first unit. The one-time `build_finalization_corpus.py` repartition
+migration still expects a single source file.
+
 Authoritative TXT files and source-derived libraries can contain copyrighted
 novel text and should remain local. This repository ignores imported TXT files,
 installed `source/novel.txt` files, and the Example Novel extracted

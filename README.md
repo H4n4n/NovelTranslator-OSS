@@ -558,8 +558,25 @@ excluded from the canonical translation queue. A heading override may set
 a supplement (a preface, a volume's term notes) is translated like the EPUB
 supplements above, with its own title and no local chapter number.
 
-To extend a novel with a sequel, even after it has finished and been audited,
-put the new text in its own TXT file beside the original (`source/novel_2.txt`,
+To extend a novel with a sequel, even after it has finished and been audited:
+
+```powershell
+python extend_novel.py --novel <novel_id> --file <sequel.txt> [--number-offset N] [--rules rules.json]
+python extend_novel.py --novel <novel_id> --file <sequel.txt> ... --write
+python extract_txt.py --novel <novel_id> --overwrite   # extract_epub.py for an EPUB novel
+```
+
+The first command only shows what the sequel would add (units, reader-facing
+chapter numbers, gaps, the new `final_chapter`) and any blockers. `--write`
+backs up `novel.json` and `source_overrides.json` under
+`backup/extend_novel/<time>/`, then does the steps below, re-extracts in memory
+to prove the novel's existing units come out unchanged, and puts everything back
+if they don't. It needs the current chapter library installed, holds the novel's
+production lock, makes no API calls and never installs the library itself.
+`--rules` gives TXT rules for headings the extractor doesn't recognize. A sequel
+that comes as EPUB files has to be turned into one TXT first.
+
+By hand, that is: put the new text in its own TXT file beside the original (`source/novel_2.txt`,
 then `novel_3.txt`, ...) and list it under `continuations` in
 `source_overrides.json`: `{"file": "novel_2.txt", "source_sha256": "...", "txt":
 {...}}`, with the same kinds of rules as a TXT novel's main file, line numbers

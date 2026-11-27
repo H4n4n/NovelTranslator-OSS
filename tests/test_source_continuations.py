@@ -126,3 +126,78 @@ def test_an_epub_novel_with_too_small_a_final_chapter_is_blocked(tmp_path):
     assert any("configured final_chapter is 3" in error for error in result.validation_errors)
     with pytest.raises(extract_epub.ExtractionValidationError):
         extract_epub.install_extraction(project, result)
+
+
+# extend_novel.py: the setup command.
+import extend_novel  # noqa: E402
+
+
+def installed_txt_novel(tmp_path, numbers):
+    project, _ = txt_novel(tmp_path, numbers, len(numbers))
+    extract_txt.install_extraction(project, extract_txt.extract_source_txt(project))
+    return project
+
+
+def test_extend_shows_a_plan_then_writes_the_sequel_and_keeps_the_novel(tmp_path):
+    project = installed_txt_novel(tmp_path, [1, 2])
+    library = project.chapters_file.read_bytes()
+    sequel = tmp_path / "sequel.txt"
+    sequel.write_bytes(chapters_text([453, 454]).encode("cp949"))
+    plan = extend_novel.plan_extension(project, sequel, number_offset=-450)
+    assert plan["errors"] == [] and plan["final_chapter"] == 4 and plan["encoding"] == "cp949"
+    assert [u["local_chapter_start"] for u in plan["added"]] == [3, 4]
+    assert not (project.source_dir / "novel_2.txt").exists()
+
+    backup = extend_novel.apply_extension(project, plan)
+    assert (backup / "novel.json").is_file() and not (backup / "source_overrides.json").exists()
+    assert (project.source_dir / "novel_2.txt").read_text(encoding="utf-8") == chapters_text([453, 454])
+    overrides = json.loads(project.source_overrides_file.read_text(encoding="utf-8"))
+    assert overrides["source_sha256"] == digest(project.source_txt.read_bytes())
+    assert overrides["continuations"] == [{"file": "novel_2.txt", "source_sha256": plan["source_sha256"],
+                                           "number_offset": -450}]
+    project = load_novel_project("sequel_fixture", tmp_path)
+    assert project.config.final_chapter == 4 and project.chapters_file.read_bytes() == library
+    result = extract_txt.extract_source_txt(project)
+    extract_txt.install_extraction(project, result, overwrite=True)
+    assert [u["source_number"] for u in result["chapters"]] == [1, 2, 453, 454]
+    again = extend_novel.plan_extension(project, sequel)
+    assert again["name"] == "novel_3.txt"
+
+
+def test_extend_blocks_when_the_library_is_not_installed_or_the_headings_are_unknown(tmp_path):
+    project, _ = txt_novel(tmp_path, [1, 2], 2)
+    sequel = tmp_path / "sequel.txt"
+    sequel.write_text("그냥 본문만 있다.\n", encoding="utf-8")
+    plan = extend_novel.plan_extension(project, sequel)
+    assert any("extract and install the current source first" in e for e in plan["errors"])
+    assert any("no recognized production headings" in e for e in plan["errors"])
+    with pytest.raises(extend_novel.ExtendError):
+        extend_novel.apply_extension(project, plan)
+
+
+def test_extend_puts_everything_back_if_the_novel_would_change(tmp_path, monkeypatch):
+    project = installed_txt_novel(tmp_path, [1, 2])
+    config = project.config_file.read_bytes()
+    sequel = tmp_path / "sequel.txt"
+    sequel.write_text(chapters_text([3]), encoding="utf-8")
+    plan = extend_novel.plan_extension(project, sequel)
+    monkeypatch.setattr(extend_novel, "_extract", lambda project: ([], ()))
+    with pytest.raises(extend_novel.ExtendError, match="unchanged"):
+        extend_novel.apply_extension(project, plan)
+    assert project.config_file.read_bytes() == config
+    assert not project.source_overrides_file.exists() and not (project.source_dir / "novel_2.txt").exists()
+
+
+def test_extend_an_epub_novel_with_a_txt_sequel(tmp_path):
+    project = make_project(tmp_path, final_chapter=2, source_type="epub", numbering="global")
+    data = make_epub(project.source_epub, [1, 2])
+    extract_epub.install_extraction(project, extract_epub.extract_source_epub(project))
+    sequel = tmp_path / "sequel.txt"
+    sequel.write_text(chapters_text([3, 4]), encoding="utf-8")
+    plan = extend_novel.plan_extension(project, sequel)
+    assert plan["errors"] == [], plan["errors"]
+    extend_novel.apply_extension(project, plan)
+    assert json.loads(project.source_overrides_file.read_text(encoding="utf-8"))["source_sha256"] == digest(data)
+    project = load_novel_project("sequel_fixture", tmp_path)
+    result = extract_epub.extract_source_epub(project)
+    assert not result.validation_errors and len(result.chapters) == 4

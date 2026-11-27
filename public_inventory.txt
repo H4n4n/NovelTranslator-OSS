@@ -150,6 +150,7 @@ experimental_goat_budget.py
 experimental_goat_experiment.py
 experimental_goat_policy.py
 experimental_goat_runtime.py
+extend_novel.py
 extract_epub.py
 extract_txt.py
 final_editorial.py
